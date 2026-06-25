@@ -151,8 +151,19 @@ sed -i '/^127\.0\.1\.1\b/d' "$rootfs_dir/etc/hosts"
 printf '127.0.1.1 %s\n' "$HOSTNAME_NAME" >> "$rootfs_dir/etc/hosts"
 if [ -n "$RESOLV_CONF_CONTENT" ]; then
   printf '%s\n' "$RESOLV_CONF_CONTENT" > "$rootfs_dir/etc/resolv.conf"
+elif [ -f /run/systemd/resolve/resolv.conf ]; then
+  cp /run/systemd/resolve/resolv.conf "$rootfs_dir/etc/resolv.conf"
 else
   cp /etc/resolv.conf "$rootfs_dir/etc/resolv.conf"
+fi
+if ! awk '
+  /^[[:space:]]*nameserver[[:space:]]+/ {
+    ns=$2
+    if (ns !~ /^(127\.|::1$|0\.0\.0\.0$)/) good=1
+  }
+  END { exit good ? 0 : 1 }
+' "$rootfs_dir/etc/resolv.conf"; then
+  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$rootfs_dir/etc/resolv.conf"
 fi
 
 mount --bind /dev "$rootfs_dir/dev"
