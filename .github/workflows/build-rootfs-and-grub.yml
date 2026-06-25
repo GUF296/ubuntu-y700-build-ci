@@ -66,7 +66,9 @@ on:
         default: |
           KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
           BOOTAA64_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/BOOTAA64.EFI
-          GRUB_BUILD_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-grub-build-arm64-efi.tar.gz
+          QCOMRAMP_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/QCOMRAMP-CONFIGFILE.EFI
+          QCOMRAMP_CFG_NAME=qcomramp.cfg
+          GRUB_BUILD_ARCHIVE=
           DTB_NAME=sm8650-lenovo-tb321fu.dtb
 
 jobs:
@@ -114,15 +116,22 @@ jobs:
       - name: Prepare GRUB build input
         run: |
           set -euo pipefail
-          test -n "${GRUB_BUILD_ARCHIVE:-}"
-          mkdir -p "$RUNNER_TEMP/grub-build"
-          curl -fL --retry 3 -o "$RUNNER_TEMP/grub-build.tar" "$GRUB_BUILD_ARCHIVE"
-          if ! tar -C "$RUNNER_TEMP/grub-build" -xf "$RUNNER_TEMP/grub-build.tar"; then
-            tar -C "$RUNNER_TEMP/grub-build" -xzf "$RUNNER_TEMP/grub-build.tar"
+          if [ -n "${GRUB_BUILD_ARCHIVE:-}" ]; then
+            mkdir -p "$RUNNER_TEMP/grub-build"
+            curl -fL --retry 3 -o "$RUNNER_TEMP/grub-build.tar" "$GRUB_BUILD_ARCHIVE"
+            if ! tar -C "$RUNNER_TEMP/grub-build" -xf "$RUNNER_TEMP/grub-build.tar"; then
+              tar -C "$RUNNER_TEMP/grub-build" -xzf "$RUNNER_TEMP/grub-build.tar"
+            fi
+            found=$(find "$RUNNER_TEMP/grub-build" -type f -name grub-mkstandalone -perm -111 | head -n1)
+            test -n "$found"
+            echo "Y700_GRUB_BUILD_DIR=$(dirname "$found")" >> "$GITHUB_ENV"
+          elif [ -n "${QCOMRAMP_EFI_URL:-}" ]; then
+            echo 'Y700_GRUB_BUILD_DIR=' >> "$GITHUB_ENV"
+            echo 'Using prebuilt QCOMRAMP_EFI_URL; skipping grub-mkstandalone input.'
+          else
+            echo 'Either GRUB_BUILD_ARCHIVE or QCOMRAMP_EFI_URL must be set.' >&2
+            exit 1
           fi
-          found=$(find "$RUNNER_TEMP/grub-build" -type f -name grub-mkstandalone -perm -111 | head -n1)
-          test -n "$found"
-          echo "Y700_GRUB_BUILD_DIR=$(dirname "$found")" >> "$GITHUB_ENV"
 
       - name: Build rootfs image
         run: |
@@ -143,6 +152,8 @@ jobs:
             BOOT_CLUSTER_SECTORS="$BOOT_CLUSTER_SECTORS" \
             KERNEL_ARTIFACT_ARCHIVE="$KERNEL_ARTIFACT_ARCHIVE" \
             BOOTAA64_EFI_URL="$BOOTAA64_EFI_URL" \
+            QCOMRAMP_EFI_URL="$QCOMRAMP_EFI_URL" \
+            QCOMRAMP_CFG_NAME="$QCOMRAMP_CFG_NAME" \
             DTB_NAME="$DTB_NAME" \
             ROOT_SELECTOR="$ROOT_SELECTOR" \
             ROOT_PARTLABEL="$ROOT_PARTLABEL" \
