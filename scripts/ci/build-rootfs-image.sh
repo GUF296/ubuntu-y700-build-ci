@@ -42,6 +42,7 @@ Environment inputs:
   OVERLAY_DIR                optional directory copied into rootfs
   DEB_ARCHIVE                optional local path or URL containing .deb files
   DEB_DIR                    optional directory containing .deb files
+  APPLY_Y700_COMPAT_FIXES    apply verified Y700 compatibility fixes, default: 1
   CLEAN_APT_CACHE            default: 1
   COMPRESS                   none|zstd|xz|7z, default: 7z
   CHUNK_SIZE                 optional 7z volume size, example: 1500m
@@ -85,6 +86,7 @@ TZ_REGION=${TZ_REGION:-Asia/Shanghai}
 LANG_NAME=${LANG_NAME:-zh_CN.UTF-8}
 LOCALES=${LOCALES:-$'en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8'}
 CLEAN_APT_CACHE=${CLEAN_APT_CACHE:-1}
+APPLY_Y700_COMPAT_FIXES=${APPLY_Y700_COMPAT_FIXES:-1}
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-1500m}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
@@ -101,6 +103,137 @@ rootfs_dir="$work_dir/rootfs"
 rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
 manifest="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.manifest"
 mounted=0
+
+apply_y700_compat_fixes() {
+  local root=$1
+
+  ci_log "applying verified Y700 compatibility fixes"
+
+  install -d -m 0755 "$root/lib/firmware/qcom" "$root/lib/firmware/qcom/sm8650" "$root/lib/firmware/qcom/vpu"
+
+  copy_firmware_if_missing() {
+    local source_rel=$1
+    local dest_rel=$2
+    [ -f "$root/$source_rel" ] || return 1
+    if [ -e "$root/$dest_rel" ]; then
+      return 0
+    fi
+    install -d -m 0755 "$(dirname "$root/$dest_rel")"
+    install -m 0644 "$root/$source_rel" "$root/$dest_rel"
+  }
+
+  # The device overlay stores some firmware under /usr/lib/firmware or vendor-specific
+  # subdirectories, while the kernel requests the canonical /lib/firmware/qcom paths.
+  local src dst
+  for src in \
+    usr/lib/firmware/qcom/sm8650/lenovo/tb321fu/gen70900_zap.mbn \
+    lib/firmware/qcom/sm8650/lenovo/tb321fu/gen70900_zap.mbn; do
+    if copy_firmware_if_missing "$src" lib/firmware/qcom/gen70900_zap.mbn; then
+      break
+    fi
+  done
+  for src in \
+    usr/lib/firmware/qcom-tb321fu/Lenovo-Y700-TB321FU-tplg.bin \
+    lib/firmware/qcom-tb321fu/Lenovo-Y700-TB321FU-tplg.bin; do
+    if copy_firmware_if_missing "$src" lib/firmware/qcom/sm8650/Lenovo-Y700-TB321FU-tplg.bin; then
+      break
+    fi
+  done
+
+  for src in \
+    usr/lib/firmware/qcom/gen70900_aqe.fw \
+    usr/lib/firmware/qcom/gen70900_sqe.fw \
+    usr/lib/firmware/qcom/gmu_gen70900.bin \
+    usr/lib/firmware/qcom/vpu/vpu33_p4.mbn; do
+    dst=${src#usr/}
+    copy_firmware_if_missing "$src" "$dst" || true
+  done
+
+  install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
+  if [ -f "$root/etc/systemd/system/y700-sns-init.service" ]; then
+    ln -sfn /etc/systemd/system/y700-sns-init.service \
+      "$root/etc/systemd/system/multi-user.target.wants/y700-sns-init.service"
+  fi
+  if [ -f "$root/etc/systemd/system/y700-audio-card-guard.service" ]; then
+    ln -sfn ../y700-audio-card-guard.service \
+      "$root/etc/systemd/system/multi-user.target.wants/y700-audio-card-guard.service"
+  fi
+
+  install -d -m 0755 "$root/usr/local/bin" "$root/etc/xdg/autostart" "$root/etc/sddm.conf.d"
+  cat > "$root/usr/local/bin/y700-tablet-session-init" <<'Y700_TABLET_SESSION_INIT'
+#!/bin/sh
+set -eu
+
+scale=2
+dpi=192
+
+if command -v kwriteconfig6 >/dev/null 2>&1; then
+  kwriteconfig6 --file kdeglobals --group General --key BrowserApplication firefox.desktop || true
+  kwriteconfig6 --file kdeglobals --group General --key TerminalApplication org.kde.konsole.desktop || true
+  kwriteconfig6 --file kdeglobals --group General --key TerminalService org.kde.konsole.desktop || true
+  kwriteconfig6 --file kdeglobals --group General --key XftDPI "$dpi" || true
+  kwriteconfig6 --file kdeglobals --group Locale --key Country "cn" || true
+  kwriteconfig6 --file kdeglobals --group Locale --key Language "zh_CN" || true
+  kwriteconfig6 --file kdeglobals --group KScreen --key ScaleFactor "$scale" || true
+  kwriteconfig6 --file kwinrc --group Wayland --key InputMethod /usr/share/applications/org.kde.plasma.keyboard.desktop || true
+  kwriteconfig6 --file kwinrc --group Wayland --key VirtualKeyboardEnabled true || true
+  kwriteconfig6 --file kwinrc --group Xwayland --key Scale "$scale" || true
+  kwriteconfig6 --file kded6rc --group Module-kscreen --key autoload true || true
+  kwriteconfig6 --file kded6rc --group Module-powerdevil --key autoload true || true
+fi
+
+if command -v xdg-mime >/dev/null 2>&1; then
+  xdg-mime default firefox.desktop x-scheme-handler/http || true
+  xdg-mime default firefox.desktop x-scheme-handler/https || true
+  xdg-mime default org.kde.dolphin.desktop inode/directory || true
+  xdg-mime default org.kde.kate.desktop text/plain || true
+  xdg-mime default org.kde.ark.desktop application/zip || true
+fi
+Y700_TABLET_SESSION_INIT
+  chmod 0755 "$root/usr/local/bin/y700-tablet-session-init"
+
+  cat > "$root/etc/xdg/autostart/y700-tablet-session-init.desktop" <<'Y700_TABLET_SESSION_DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Y700 Tablet Session Defaults
+Exec=/usr/local/bin/y700-tablet-session-init
+OnlyShowIn=KDE;
+X-KDE-autostart-phase=1
+NoDisplay=true
+Y700_TABLET_SESSION_DESKTOP
+  chmod 0644 "$root/etc/xdg/autostart/y700-tablet-session-init.desktop"
+
+  cat > "$root/etc/sddm.conf.d/99-y700-autologin.conf" <<'Y700_SDDM_AUTOLOGIN'
+[Autologin]
+User=y700
+Session=plasma.desktop
+Relogin=false
+Y700_SDDM_AUTOLOGIN
+  chmod 0644 "$root/etc/sddm.conf.d/99-y700-autologin.conf"
+
+  local required=(
+    lib/firmware/qcom/gen70900_aqe.fw
+    lib/firmware/qcom/gen70900_sqe.fw
+    lib/firmware/qcom/gen70900_zap.mbn
+    lib/firmware/qcom/gmu_gen70900.bin
+    lib/firmware/qcom/sm8650/Lenovo-Y700-TB321FU-tplg.bin
+    lib/firmware/qcom/vpu/vpu33_p4.mbn
+    etc/systemd/system/y700-sns-init.service
+    etc/systemd/system/multi-user.target.wants/y700-sns-init.service
+    etc/systemd/system/y700-audio-card-guard.service
+    etc/systemd/system/multi-user.target.wants/y700-audio-card-guard.service
+    usr/local/sbin/y700-sns-init.sh
+    usr/local/libexec/y700-iio-sensor-proxy
+    usr/local/bin/y700-monitor-sensor
+    usr/local/bin/y700-tablet-session-init
+    etc/xdg/autostart/y700-tablet-session-init.desktop
+    etc/sddm.conf.d/99-y700-autologin.conf
+  )
+  local rel
+  for rel in "${required[@]}"; do
+    [ -e "$root/$rel" ] || [ -L "$root/$rel" ] || ci_die "missing Y700 required compatibility file: $rel"
+  done
+}
 
 cleanup() {
   set +e
@@ -265,6 +398,16 @@ if compgen -G "/var/tmp/ci-debs/*.deb" >/dev/null; then
   dpkg -i --force-overwrite /var/tmp/ci-debs/*.deb || apt-get -f install -y
 fi
 
+for ci_overlay in /var/tmp/ci-debs/*.tar /var/tmp/ci-debs/*.tar.gz /var/tmp/ci-debs/*.tgz /var/tmp/ci-debs/*.tar.xz /var/tmp/ci-debs/*.tar.zst; do
+  [ -e "$ci_overlay" ] || continue
+  case "$ci_overlay" in
+    *.tar) tar -C / -xf "$ci_overlay" ;;
+    *.tar.gz|*.tgz) tar -C / -xzf "$ci_overlay" ;;
+    *.tar.xz) tar -C / -xJf "$ci_overlay" ;;
+    *.tar.zst) tar -C / --zstd -xf "$ci_overlay" ;;
+  esac
+done
+
 if [ "$CLEAN_APT_CACHE" = 1 ]; then
   apt-get clean
   rm -rf /var/lib/apt/lists/*
@@ -332,6 +475,10 @@ if [ -n "${OVERLAY_DIR:-}" ]; then
   rsync -aH --numeric-ids "$OVERLAY_DIR"/ "$rootfs_dir"/
 fi
 
+if ci_bool "$APPLY_Y700_COMPAT_FIXES"; then
+  apply_y700_compat_fixes "$rootfs_dir"
+fi
+
 cat > "$rootfs_dir/BUILD-INFO.txt" <<INFO
 generated=$(date -u -Iseconds)
 distro=$DISTRO
@@ -349,6 +496,7 @@ overlay_archive=${OVERLAY_ARCHIVE:-}
 overlay_dir=${OVERLAY_DIR:-}
 deb_archive=${DEB_ARCHIVE:-}
 deb_dir=${DEB_DIR:-}
+apply_y700_compat_fixes=$APPLY_Y700_COMPAT_FIXES
 INFO
 
 ci_log "writing manifest"

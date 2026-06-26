@@ -36,7 +36,8 @@ on:
           PACKAGE_LIST=
           DESKTOP_ENV=kubuntu-desktop
           OVERLAY_ARCHIVE=
-          DEB_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-device-debs-20260624-201420.tar.gz
+          DEB_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-device-debs-20260624-201420-compat1.tar.gz
+          APPLY_Y700_COMPAT_FIXES=1
           CLEAN_APT_CACHE=1
           COMPRESS=7z
           CHUNK_SIZE=1500m
@@ -46,7 +47,8 @@ on:
         required: true
         type: string
         default: |
-          BOOT_IMAGE_SIZE=14G
+          BOOT_TEMPLATE_IMAGE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-verified-grub-template-userdata-20260624-201420.img
+          BOOT_IMAGE_SIZE=256M
           BOOT_FAT_BITS=32
           BOOT_FAT_LABEL=Y700GRUB
           BOOT_SECTOR_SIZE=512
@@ -66,8 +68,8 @@ on:
         type: string
         default: |
           KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
-          BOOTAA64_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/BOOTAA64.EFI
-          QCOMRAMP_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/QCOMRAMP-CONFIGFILE.EFI
+          BOOTAA64_EFI_URL=
+          QCOMRAMP_EFI_URL=
           QCOMRAMP_CFG_NAME=qcomramp.cfg
           GRUB_BUILD_ARCHIVE=
           DTB_NAME=sm8650-lenovo-tb321fu.dtb
@@ -129,15 +131,18 @@ jobs:
           elif [ -n "${QCOMRAMP_EFI_URL:-}" ]; then
             echo 'Y700_GRUB_BUILD_DIR=' >> "$GITHUB_ENV"
             echo 'Using prebuilt QCOMRAMP_EFI_URL; skipping grub-mkstandalone input.'
+          elif [ -n "${BOOT_TEMPLATE_IMAGE:-}" ] || [ -n "${BOOT_TEMPLATE_IMAGE_URL:-}" ]; then
+            echo 'Y700_GRUB_BUILD_DIR=' >> "$GITHUB_ENV"
+            echo 'Using BOOT_TEMPLATE_IMAGE; preserving verified GRUB/EFI template.'
           else
-            echo 'Either GRUB_BUILD_ARCHIVE or QCOMRAMP_EFI_URL must be set.' >&2
+            echo 'Either GRUB_BUILD_ARCHIVE, QCOMRAMP_EFI_URL, or BOOT_TEMPLATE_IMAGE must be set.' >&2
             exit 1
           fi
 
       - name: Build rootfs image
         run: |
           set -euo pipefail
-          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
+          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,APPLY_Y700_COMPAT_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
             env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" bash scripts/ci/build-rootfs-image.sh
           sudo chown -R "$USER:$USER" out
 
@@ -146,6 +151,8 @@ jobs:
           set -euo pipefail
           env OUTPUT_DIR="$OUTPUT_DIR_GRUB" \
             OUTPUT_PREFIX="$OUTPUT_PREFIX" \
+            BOOT_TEMPLATE_IMAGE="${BOOT_TEMPLATE_IMAGE:-}" \
+            BOOT_TEMPLATE_IMAGE_URL="${BOOT_TEMPLATE_IMAGE_URL:-}" \
             BOOT_IMAGE_SIZE="$BOOT_IMAGE_SIZE" \
             BOOT_FAT_BITS="$BOOT_FAT_BITS" \
             BOOT_FAT_LABEL="$BOOT_FAT_LABEL" \
