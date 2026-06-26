@@ -37,7 +37,13 @@ on:
           DESKTOP_ENV=kubuntu-desktop
           OVERLAY_ARCHIVE=
           DEB_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-device-debs-20260624-201420-compat1.tar.gz
+          BUILD_Y700_SENSOR_DEBS=1
+          SENSOR_SOURCE_ARCHIVE=
+          SENSOR_BASELINE_OVERLAY_ARCHIVE=
+          SENSOR_DEB_VERSION=20260626.1
+          SENSOR_STRIP=1
           APPLY_Y700_FIRMWARE_FIXES=1
+          APPLY_Y700_AUDIO_POLICY_FIXES=1
           CLEAN_APT_CACHE=1
           COMPRESS=7z
           CHUNK_SIZE=1500m
@@ -90,7 +96,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
-            gdisk qemu-utils sudo ca-certificates gnupg
+            gdisk qemu-utils sudo ca-certificates gnupg \
+            meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
+            libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64
 
       - name: Apply workflow configuration
         run: |
@@ -139,11 +147,40 @@ jobs:
             exit 1
           fi
 
+      - name: Build source sensor debs
+        run: |
+          set -euo pipefail
+          if [ "${BUILD_Y700_SENSOR_DEBS:-0}" != "1" ]; then
+            echo 'BUILD_Y700_SENSOR_DEBS is not 1; skipping.'
+            echo 'Y700_SENSOR_DEB_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${SENSOR_SOURCE_ARCHIVE:-}" ] && [ -z "${SENSOR_SOURCE_DIR:-}" ]; then
+            echo 'No SENSOR_SOURCE_ARCHIVE/SENSOR_SOURCE_DIR provided; skipping source sensor deb build.'
+            echo 'Y700_SENSOR_DEB_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${SENSOR_BASELINE_OVERLAY_ARCHIVE:-}" ] && [ -z "${SENSOR_BASELINE_OVERLAY_DIR:-}" ]; then
+            echo 'No SENSOR_BASELINE_OVERLAY_ARCHIVE/SENSOR_BASELINE_OVERLAY_DIR provided; skipping source sensor deb build.'
+            echo 'Y700_SENSOR_DEB_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          env OUTPUT_DIR="out/y700-sensor-debs" \
+            ARCH="${ARCH:-arm64}" \
+            SENSOR_DEB_VERSION="${SENSOR_DEB_VERSION:-20260626.1}" \
+            SENSOR_SOURCE_ARCHIVE="${SENSOR_SOURCE_ARCHIVE:-}" \
+            SENSOR_SOURCE_DIR="${SENSOR_SOURCE_DIR:-}" \
+            SENSOR_BASELINE_OVERLAY_ARCHIVE="${SENSOR_BASELINE_OVERLAY_ARCHIVE:-}" \
+            SENSOR_BASELINE_OVERLAY_DIR="${SENSOR_BASELINE_OVERLAY_DIR:-}" \
+            SENSOR_STRIP="${SENSOR_STRIP:-1}" \
+            bash scripts/ci/build-y700-sensor-debs.sh
+          echo 'Y700_SENSOR_DEB_DIR=out/y700-sensor-debs' >> "$GITHUB_ENV"
+
       - name: Build rootfs image
         run: |
           set -euo pipefail
-          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,APPLY_Y700_FIRMWARE_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
-            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" bash scripts/ci/build-rootfs-image.sh
+          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,DEB_DIR,SENSOR_DEB_DIR,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
+            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-}" bash scripts/ci/build-rootfs-image.sh
           sudo chown -R "$USER:$USER" out
 
       - name: Build GRUB boot image
@@ -179,7 +216,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out/ci-release
-          find "$OUTPUT_DIR_ROOTFS" "$OUTPUT_DIR_GRUB" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > out/ci-release/SHA256SUMS.txt
+          checksum_dirs=("$OUTPUT_DIR_ROOTFS" "$OUTPUT_DIR_GRUB")
+          if [ -d out/y700-sensor-debs ]; then
+            checksum_dirs+=(out/y700-sensor-debs)
+          fi
+          find "${checksum_dirs[@]}" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > out/ci-release/SHA256SUMS.txt
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -188,6 +229,7 @@ jobs:
           path: |
             out/ci-rootfs/*
             out/ci-grub/*
+            out/y700-sensor-debs/*
             out/ci-release/SHA256SUMS.txt
 
       - name: Upload release assets
@@ -198,4 +240,8 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --prerelease --title "$RELEASE_TAG"
-          gh release upload "$RELEASE_TAG" out/ci-rootfs/* out/ci-grub/* out/ci-release/SHA256SUMS.txt --clobber
+          release_assets=(out/ci-rootfs/* out/ci-grub/* out/ci-release/SHA256SUMS.txt)
+          if compgen -G 'out/y700-sensor-debs/*' >/dev/null; then
+            release_assets+=(out/y700-sensor-debs/*)
+          fi
+          gh release upload "$RELEASE_TAG" "${release_assets[@]}" --clobber

@@ -42,7 +42,10 @@ Environment inputs:
   OVERLAY_DIR                optional directory copied into rootfs
   DEB_ARCHIVE                optional local path or URL containing .deb files
   DEB_DIR                    optional directory containing .deb files
+  SENSOR_DEB_DIR             optional directory containing source-built sensor .deb files
   APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
+  APPLY_Y700_AUDIO_POLICY_FIXES
+                              install Y700 WirePlumber ALSA policy for headset mic, default: 1
   CLEAN_APT_CACHE            default: 1
   COMPRESS                   none|zstd|xz|7z, default: 7z
   CHUNK_SIZE                 optional 7z volume size, example: 1500m
@@ -87,6 +90,7 @@ LANG_NAME=${LANG_NAME:-zh_CN.UTF-8}
 LOCALES=${LOCALES:-$'en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8'}
 CLEAN_APT_CACHE=${CLEAN_APT_CACHE:-1}
 APPLY_Y700_FIRMWARE_FIXES=${APPLY_Y700_FIRMWARE_FIXES:-1}
+APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-1500m}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
@@ -161,6 +165,43 @@ apply_y700_firmware_fixes() {
   for rel in "${required[@]}"; do
     [ -e "$root/$rel" ] || [ -L "$root/$rel" ] || ci_die "missing Y700 required compatibility file: $rel"
   done
+}
+
+
+apply_y700_audio_policy_fixes() {
+  local root=$1
+  local conf_dir="$root/etc/wireplumber/wireplumber.conf.d"
+  local conf="$conf_dir/51-y700-alsa-auto.conf"
+
+  ci_log "installing Y700 WirePlumber ALSA policy fix"
+
+  install -d -m 0755 "$conf_dir"
+  cat > "$conf" <<'CONF'
+monitor.alsa.rules = [
+  {
+    matches = [
+      {
+        device.name = "alsa_card.platform-sound"
+      }
+    ]
+    actions = {
+      update-props = {
+        api.alsa.use-acp = true
+        api.alsa.use-ucm = true
+        api.acp.auto-profile = true
+        api.acp.auto-port = true
+        api.alsa.split-enable = false
+      }
+    }
+  }
+]
+CONF
+  chmod 0644 "$conf"
+  chown 0:0 "$conf" 2>/dev/null || true
+
+  grep -q 'api.acp.auto-profile = true' "$conf" || ci_die "Y700 ALSA policy missing auto-profile=true"
+  grep -q 'api.acp.auto-port = true' "$conf" || ci_die "Y700 ALSA policy missing auto-port=true"
+  grep -q 'api.alsa.split-enable = false' "$conf" || ci_die "Y700 ALSA policy missing split-enable=false"
 }
 
 cleanup() {
@@ -261,6 +302,55 @@ fi
 apt-get update
 apt-get install -y $PACKAGE_LIST
 
+install -d -m 0755 /etc/skel/.config
+cat > /etc/skel/.config/kwinoutputconfig.json <<'KWINOUTPUTCONFIG'
+[
+    {
+        "data": [
+            {
+                "allowDdcCi": true,
+                "allowSdrSoftwareBrightness": false,
+                "autoBrightnessCurve": [
+                    0,
+                    200,
+                    2500,
+                    12000,
+                    40000,
+                    100000
+                ],
+                "autoRotation": "InTabletMode",
+                "automaticBrightness": true,
+                "brightness": 0.35,
+                "colorPowerTradeoff": "PreferEfficiency",
+                "colorProfileSource": "sRGB",
+                "connectorName": "DSI-1",
+                "detectedDdcCi": false,
+                "edrPolicy": "always",
+                "highDynamicRange": false,
+                "iccProfilePath": "",
+                "maxBitsPerColor": 0,
+                "mode": {
+                    "height": 2560,
+                    "refreshRate": 120000,
+                    "width": 1600
+                },
+                "overscan": 0,
+                "rgbRange": "Automatic",
+                "scale": 2.3,
+                "sdrBrightness": 200,
+                "sdrGamutWideness": 0,
+                "sharpness": 0,
+                "transform": "Rotated180",
+                "vrrPolicy": "Never",
+                "wideColorGamut": false
+            }
+        ],
+        "name": "outputs"
+    }
+]
+KWINOUTPUTCONFIG
+chmod 0644 /etc/skel/.config/kwinoutputconfig.json
+
 systemctl enable NetworkManager || true
 systemctl enable ssh || true
 
@@ -359,6 +449,11 @@ if [ -n "${DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
   find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
 fi
+if [ -n "${SENSOR_DEB_DIR:-}" ]; then
+  mkdir -p "$rootfs_dir/var/tmp/ci-debs"
+  ci_log "including source-built sensor debs from: $SENSOR_DEB_DIR"
+  find "$SENSOR_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
+fi
 
 ci_log "provisioning rootfs"
 chroot "$rootfs_dir" env -i \
@@ -406,6 +501,9 @@ fi
 if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
   apply_y700_firmware_fixes "$rootfs_dir"
 fi
+if ci_bool "$APPLY_Y700_AUDIO_POLICY_FIXES"; then
+  apply_y700_audio_policy_fixes "$rootfs_dir"
+fi
 
 cat > "$rootfs_dir/BUILD-INFO.txt" <<INFO
 generated=$(date -u -Iseconds)
@@ -424,7 +522,9 @@ overlay_archive=${OVERLAY_ARCHIVE:-}
 overlay_dir=${OVERLAY_DIR:-}
 deb_archive=${DEB_ARCHIVE:-}
 deb_dir=${DEB_DIR:-}
+sensor_deb_dir=${SENSOR_DEB_DIR:-}
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
+apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO
 
 ci_log "writing manifest"
