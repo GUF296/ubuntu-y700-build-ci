@@ -218,6 +218,9 @@ write_systemd_maintainer_scripts() {
   cat > "$pkgdir/DEBIAN/postinst" <<'EOF_POSTINST'
 #!/bin/sh
 set -e
+rm -f /etc/systemd/system/iio-sensor-proxy.service.d/10-y700-ssc.conf
+rm -f /usr/local/libexec/y700-iio-sensor-proxy
+rm -rf /usr/local/lib/y700-sns
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
 fi
@@ -247,8 +250,14 @@ write_tb321fu_maintainer_scripts() {
 #!/bin/sh
 set -e
 if command -v systemctl >/dev/null 2>&1; then
+  systemctl stop y700-sns-init.service >/dev/null 2>&1 || true
   systemctl disable y700-sns-init.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/iio-sensor-proxy.service.d/10-y700-ssc.conf
+  rm -f /etc/systemd/system/y700-sns-init.service
+  rm -f /usr/local/libexec/y700-iio-sensor-proxy
+  rm -rf /usr/local/lib/y700-sns
   systemctl daemon-reload || true
+  systemctl enable qcom-sns-init.service >/dev/null 2>&1 || true
 fi
 if command -v udevadm >/dev/null 2>&1; then
   udevadm control --reload-rules || true
@@ -396,6 +405,15 @@ build_iio_sensor_proxy_package() {
     "$pkg/usr/lib/udev/rules.d/80-iio-sensor-proxy.rules" \
     "$pkg/usr/share/dbus-1/system.d/net.hadess.SensorProxy.conf" \
     "$pkg/usr/share/polkit-1/actions/net.hadess.SensorProxy.policy"
+  install -d -m 0755 "$pkg/usr/share/dbus-1/system-services"
+  cat > "$pkg/usr/share/dbus-1/system-services/net.hadess.SensorProxy.service" <<'EOF_DBUS'
+[D-BUS Service]
+Name=net.hadess.SensorProxy
+Exec=/usr/libexec/iio-sensor-proxy
+User=root
+SystemdService=iio-sensor-proxy.service
+EOF_DBUS
+  chmod 0644 "$pkg/usr/share/dbus-1/system-services/net.hadess.SensorProxy.service"
   strip_if_requested "$pkg/usr/bin/monitor-sensor" "$pkg/usr/libexec/iio-sensor-proxy"
   write_control "$pkg" qcom-sns-iio-sensor-proxy misc \
     'libc6, dbus, libglib2.0-0, libgudev-1.0-0, libpolkit-gobject-1-0, qcom-sns-libssc' \

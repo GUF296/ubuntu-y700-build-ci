@@ -203,7 +203,11 @@ if command -v depmod >/dev/null 2>&1; then
   depmod -a || true
 fi
 if command -v systemctl >/dev/null 2>&1; then
+  systemctl stop y700-aw86937-haptics.service >/dev/null 2>&1 || true
   systemctl disable y700-aw86937-haptics.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/y700-aw86937-haptics.service
+  rm -f /etc/udev/rules.d/90-y700-haptics.rules
+  rm -f /usr/local/sbin/y700-aw86937-bind
   systemctl daemon-reload || true
   systemctl enable tb321fu-haptics.service >/dev/null 2>&1 || true
 fi

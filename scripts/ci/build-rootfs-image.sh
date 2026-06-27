@@ -286,9 +286,10 @@ CONF
 apply_sddm_autologin() {
   local root=$1
   local conf_dir="$root/etc/sddm.conf.d"
-  local conf="$conf_dir/30-autologin.conf"
+  local conf="$conf_dir/zz-tb321fu-autologin.conf"
+  local session=${SDDM_AUTOLOGIN_SESSION%.desktop}
 
-  rm -f "$conf"
+  rm -f "$conf" "$conf_dir/30-autologin.conf" "$conf_dir/10-y700-autologin.conf"
 
   if ! ci_bool "$SDDM_AUTOLOGIN"; then
     ci_log "SDDM autologin disabled"
@@ -300,14 +301,59 @@ apply_sddm_autologin() {
   cat > "$conf" <<CONF
 [Autologin]
 User=$DEFAULT_USER_NAME
-Session=$SDDM_AUTOLOGIN_SESSION
+Session=$session
 Relogin=false
 CONF
   chmod 0644 "$conf"
   chown 0:0 "$conf" 2>/dev/null || true
 
   grep -q "^User=$DEFAULT_USER_NAME$" "$conf" || ci_die "SDDM autologin user was not written"
-  grep -q "^Session=$SDDM_AUTOLOGIN_SESSION$" "$conf" || ci_die "SDDM autologin session was not written"
+  grep -q "^Session=$session$" "$conf" || ci_die "SDDM autologin session was not written"
+}
+
+apply_tb321fu_legacy_cleanup() {
+  local root=$1
+
+  ci_log "removing legacy y700 sensor and haptics glue that conflicts with TB321FU packages"
+  rm -f \
+    "$root/etc/systemd/system/iio-sensor-proxy.service.d/10-y700-ssc.conf" \
+    "$root/etc/systemd/system/y700-sns-init.service" \
+    "$root/etc/systemd/system/y700-aw86937-haptics.service" \
+    "$root/etc/udev/rules.d/90-y700-haptics.rules" \
+    "$root/usr/local/libexec/y700-iio-sensor-proxy" \
+    "$root/usr/local/sbin/y700-aw86937-bind"
+  rm -rf \
+    "$root/usr/local/lib/y700-sns" \
+    "$root/usr/local/share/y700-sns"
+
+  if [ -d "$root/etc/systemd/system/multi-user.target.wants" ]; then
+    rm -f \
+      "$root/etc/systemd/system/multi-user.target.wants/y700-sns-init.service" \
+      "$root/etc/systemd/system/multi-user.target.wants/y700-aw86937-haptics.service"
+  fi
+
+  if [ -f "$root/usr/lib/systemd/system/qcom-sns-init.service" ]; then
+    install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
+    ln -sfn /usr/lib/systemd/system/qcom-sns-init.service \
+      "$root/etc/systemd/system/multi-user.target.wants/qcom-sns-init.service"
+  fi
+  if [ -f "$root/usr/lib/systemd/system/tb321fu-haptics.service" ]; then
+    install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
+    ln -sfn /usr/lib/systemd/system/tb321fu-haptics.service \
+      "$root/etc/systemd/system/multi-user.target.wants/tb321fu-haptics.service"
+  fi
+
+  if [ -x "$root/usr/libexec/iio-sensor-proxy" ]; then
+    install -d -m 0755 "$root/usr/share/dbus-1/system-services"
+    cat > "$root/usr/share/dbus-1/system-services/net.hadess.SensorProxy.service" <<'DBUS_SERVICE'
+[D-BUS Service]
+Name=net.hadess.SensorProxy
+Exec=/usr/libexec/iio-sensor-proxy
+User=root
+SystemdService=iio-sensor-proxy.service
+DBUS_SERVICE
+    chmod 0644 "$root/usr/share/dbus-1/system-services/net.hadess.SensorProxy.service"
+  fi
 }
 
 apply_tb321fu_gpu_sensor() {
@@ -801,6 +847,7 @@ if [ -n "${OVERLAY_DIR:-}" ]; then
 fi
 
 apply_sddm_autologin "$rootfs_dir"
+apply_tb321fu_legacy_cleanup "$rootfs_dir"
 
 if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
   apply_y700_firmware_fixes "$rootfs_dir"
