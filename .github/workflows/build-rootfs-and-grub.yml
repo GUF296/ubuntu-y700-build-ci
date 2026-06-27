@@ -4,34 +4,114 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Release tag to create/upload. Empty disables release upload.
+        description: 要创建或更新的 Release 标签；留空只生成 Actions artifact，不上传 Release。
         required: false
         type: string
       output_prefix:
-        description: Output artifact prefix
+        description: 输出文件名前缀；会用于 rootfs、grub 和 artifact 名称。
         required: true
         default: y700-kubuntu2604-arm64
         type: string
+      ubuntu_mirror:
+        description: Ubuntu 软件源地址；arm64 设备应使用 ports.ubuntu.com/ubuntu-ports。
+        required: true
+        default: http://ports.ubuntu.com/ubuntu-ports
+        type: choice
+        options:
+          - http://ports.ubuntu.com/ubuntu-ports
+      debootstrap_variant:
+        description: debootstrap 变体；default 表示不传 --variant，minbase 是更小基础系统，buildd 偏构建环境。
+        required: true
+        default: default
+        type: choice
+        options:
+          - default
+          - minbase
+          - buildd
+      rootfs_image_size:
+        description: rootfs ext4 镜像大小；默认 20G，过小可能导致桌面环境安装失败。
+        required: true
+        default: 20G
+        type: choice
+        options:
+          - 20G
+          - 24G
+          - 32G
+          - 40G
+      rootfs_label:
+        description: rootfs 文件系统卷标；只是 ext4 label，不决定刷入分区。
+        required: true
+        default: Ubuntu
+        type: string
+      rootfs_partlabel:
+        description: rootfs GPT 分区标签；当前 Y700 启动和刷机默认应保持 userdata。
+        required: true
+        default: userdata
+        type: choice
+        options:
+          - userdata
+          - rootfs
+          - ubuntu
+      hostname_name:
+        description: 系统主机名；安装后会写入 /etc/hostname。
+        required: true
+        default: y700
+        type: string
+      default_user_name:
+        description: 默认创建的普通用户名；也会被可选 SDDM 自动登录使用。
+        required: true
+        default: y700
+        type: string
+      default_user_password:
+        description: 默认用户密码；注意 GitHub workflow 输入本身不是保密字段。
+        required: true
+        default: "1234"
+        type: string
+      root_password_mode:
+        description: root 密码模式；locked=锁定 root，set=使用下方 ROOT_PASSWORD，empty=清空 root 密码。
+        required: true
+        default: locked
+        type: choice
+        options:
+          - locked
+          - set
+          - empty
+      root_password:
+        description: root 密码；只有 ROOT_PASSWORD_MODE=set 时使用，locked/empty 时留空即可。
+        required: false
+        default: ""
+        type: string
+      user_sudo_mode:
+        description: 默认用户 sudo 权限；password=需要密码，nopasswd=免密 sudo，none=不给 sudo。
+        required: true
+        default: password
+        type: choice
+        options:
+          - password
+          - nopasswd
+          - none
+      sddm_autologin:
+        description: 是否启用 SDDM 自动登录；关闭时启动到登录界面，可切换用户。
+        required: true
+        default: false
+        type: boolean
+      boot_image_size:
+        description: GRUB/FAT 启动镜像大小；使用现有 verified boot template 时默认 256M 足够。
+        required: true
+        default: 256M
+        type: choice
+        options:
+          - 256M
+          - 512M
+          - 1G
       rootfs_config:
-        description: Rootfs config as KEY=value lines
+        description: 高级 rootfs 配置，按 KEY=value 每行填写；常用选项已单独列出，并会覆盖这里的同名 KEY。
         required: true
         type: string
         default: |
           DISTRO=resolute
           ARCH=arm64
-          MIRROR=http://ports.ubuntu.com/ubuntu-ports
-          DEBOOTSTRAP_VARIANT=
-          ROOTFS_IMAGE_SIZE=20G
           ROOTFS_UUID=
-          ROOTFS_LABEL=Ubuntu
-          ROOTFS_PARTLABEL=userdata
-          HOSTNAME_NAME=y700
-          DEFAULT_USER_NAME=y700
-          DEFAULT_USER_PASSWORD=1234
-          ROOT_PASSWORD_MODE=locked
-          ROOT_PASSWORD=
-          USER_SUDO_MODE=password
-          SDDM_AUTOLOGIN=0
           SDDM_AUTOLOGIN_SESSION=plasma
           TZ_REGION=Asia/Shanghai
           LANG_NAME=zh_CN.UTF-8
@@ -69,18 +149,16 @@ on:
           CHUNK_SIZE=
           KEEP_RAW_IMAGE=0
       boot_config:
-        description: GRUB/FAT boot image config as KEY=value lines
+        description: 高级 GRUB/FAT 启动镜像配置，按 KEY=value 每行填写；常用选项已单独列出，并会覆盖这里的同名 KEY。
         required: true
         type: string
         default: |
           BOOT_TEMPLATE_IMAGE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-verified-grub-template-userdata-20260624-201420.img
-          BOOT_IMAGE_SIZE=256M
           BOOT_FAT_BITS=32
           BOOT_FAT_LABEL=Y700GRUB
           BOOT_SECTOR_SIZE=512
           BOOT_CLUSTER_SECTORS=
           ROOT_SELECTOR=partlabel
-          ROOT_PARTLABEL=userdata
           ROOT_UUID=
           ROOTARGS=
           ROOTARGS_EXTRA=
@@ -89,7 +167,7 @@ on:
           BOOT_CHUNK_SIZE=
           KEEP_BOOT_IMAGE=0
       source_config:
-        description: Input artifact URLs as KEY=value lines
+        description: 高级源码/启动组件输入，按 KEY=value 每行填写；通常无需修改。
         required: true
         type: string
         default: |
@@ -121,6 +199,20 @@ jobs:
             libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64
 
       - name: Apply workflow configuration
+        env:
+          INPUT_UBUNTU_MIRROR: ${{ inputs.ubuntu_mirror }}
+          INPUT_DEBOOTSTRAP_VARIANT: ${{ inputs.debootstrap_variant }}
+          INPUT_ROOTFS_IMAGE_SIZE: ${{ inputs.rootfs_image_size }}
+          INPUT_ROOTFS_LABEL: ${{ inputs.rootfs_label }}
+          INPUT_ROOTFS_PARTLABEL: ${{ inputs.rootfs_partlabel }}
+          INPUT_HOSTNAME_NAME: ${{ inputs.hostname_name }}
+          INPUT_DEFAULT_USER_NAME: ${{ inputs.default_user_name }}
+          INPUT_DEFAULT_USER_PASSWORD: ${{ inputs.default_user_password }}
+          INPUT_ROOT_PASSWORD_MODE: ${{ inputs.root_password_mode }}
+          INPUT_ROOT_PASSWORD: ${{ inputs.root_password }}
+          INPUT_USER_SUDO_MODE: ${{ inputs.user_sudo_mode }}
+          INPUT_SDDM_AUTOLOGIN: ${{ inputs.sddm_autologin }}
+          INPUT_BOOT_IMAGE_SIZE: ${{ inputs.boot_image_size }}
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/rootfs.env" <<'CONFIG_EOF'
@@ -133,6 +225,32 @@ jobs:
           ${{ inputs.source_config }}
           CONFIG_EOF
           sed -i 's/^          //' "$RUNNER_TEMP/rootfs.env" "$RUNNER_TEMP/boot.env" "$RUNNER_TEMP/source.env"
+          {
+            printf 'MIRROR=%s\n' "$INPUT_UBUNTU_MIRROR"
+            if [ "$INPUT_DEBOOTSTRAP_VARIANT" = default ]; then
+              printf 'DEBOOTSTRAP_VARIANT=\n'
+            else
+              printf 'DEBOOTSTRAP_VARIANT=%s\n' "$INPUT_DEBOOTSTRAP_VARIANT"
+            fi
+            printf 'ROOTFS_IMAGE_SIZE=%s\n' "$INPUT_ROOTFS_IMAGE_SIZE"
+            printf 'ROOTFS_LABEL=%s\n' "$INPUT_ROOTFS_LABEL"
+            printf 'ROOTFS_PARTLABEL=%s\n' "$INPUT_ROOTFS_PARTLABEL"
+            printf 'HOSTNAME_NAME=%s\n' "$INPUT_HOSTNAME_NAME"
+            printf 'DEFAULT_USER_NAME=%s\n' "$INPUT_DEFAULT_USER_NAME"
+            printf 'DEFAULT_USER_PASSWORD=%s\n' "$INPUT_DEFAULT_USER_PASSWORD"
+            printf 'ROOT_PASSWORD_MODE=%s\n' "$INPUT_ROOT_PASSWORD_MODE"
+            printf 'ROOT_PASSWORD=%s\n' "$INPUT_ROOT_PASSWORD"
+            printf 'USER_SUDO_MODE=%s\n' "$INPUT_USER_SUDO_MODE"
+            if [ "$INPUT_SDDM_AUTOLOGIN" = true ]; then
+              printf 'SDDM_AUTOLOGIN=1\n'
+            else
+              printf 'SDDM_AUTOLOGIN=0\n'
+            fi
+          } >> "$RUNNER_TEMP/rootfs.env"
+          {
+            printf 'BOOT_IMAGE_SIZE=%s\n' "$INPUT_BOOT_IMAGE_SIZE"
+            printf 'ROOT_PARTLABEL=%s\n' "$INPUT_ROOTFS_PARTLABEL"
+          } >> "$RUNNER_TEMP/boot.env"
           scripts/ci/apply-workflow-config.sh "$RUNNER_TEMP/rootfs.env"
           scripts/ci/apply-workflow-config.sh "$RUNNER_TEMP/boot.env"
           scripts/ci/apply-workflow-config.sh "$RUNNER_TEMP/source.env"
