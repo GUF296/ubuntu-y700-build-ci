@@ -49,6 +49,7 @@ Environment inputs:
   TB321FU_GPU_SENSOR_SOURCE_DIR
                               optional source directory for the plugin; defaults to repo source/
   INSTALL_GNOME_SNAPSHOT     install GNOME Snapshot camera app, default: 1
+  INSTALL_FIREFOX            install Firefox browser, default: 1
   APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
                               install Y700 WirePlumber ALSA policy for headset mic, default: 1
@@ -100,6 +101,7 @@ APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
 BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
 INSTALL_GNOME_SNAPSHOT=${INSTALL_GNOME_SNAPSHOT:-1}
+INSTALL_FIREFOX=${INSTALL_FIREFOX:-1}
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-1500m}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
@@ -111,6 +113,9 @@ if [ -n "${DESKTOP_ENV:-}" ]; then
 fi
 if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
   PACKAGE_LIST="$PACKAGE_LIST gnome-snapshot"
+fi
+if ci_bool "$INSTALL_FIREFOX"; then
+  PACKAGE_LIST="$PACKAGE_LIST firefox"
 fi
 
 mkdir -p "$OUTPUT_DIR"
@@ -693,6 +698,7 @@ camera_stack_deb_dir=${CAMERA_STACK_DEB_DIR:-}
 build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
+install_firefox=$INSTALL_FIREFOX
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO
