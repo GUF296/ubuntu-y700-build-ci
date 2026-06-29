@@ -693,7 +693,7 @@ FCITX5_PROFILE
   chmod 0644 /etc/skel/.config/fcitx5/profile
 fi
 
-install -d -m 0755 /etc/skel/.config
+install -d -m 0755 /etc/xdg /etc/skel/.config
 cat > /etc/skel/.config/plasmakeyboardrc <<'PLASMAKEYBOARDRC'
 [General]
 enabledLocales=en_US
@@ -702,6 +702,14 @@ vibrationEnabled=true
 vibrationMs=20
 PLASMAKEYBOARDRC
 chmod 0644 /etc/skel/.config/plasmakeyboardrc
+
+cat > /etc/xdg/kwinrc <<'KWINRC'
+[Wayland]
+InputMethod=/usr/share/applications/org.kde.plasma.keyboard.desktop
+VirtualKeyboardEnabled=true
+KWINRC
+chmod 0644 /etc/xdg/kwinrc
+cp -a /etc/xdg/kwinrc /etc/skel/.config/kwinrc
 
 cat > /etc/skel/.config/kwinoutputconfig.json <<'KWINOUTPUTCONFIG'
 [
@@ -759,8 +767,16 @@ if ! id -u "$DEFAULT_USER_NAME" >/dev/null 2>&1; then
 fi
 printf '%s:%s\n' "$DEFAULT_USER_NAME" "$DEFAULT_USER_PASSWORD" | chpasswd
 
+default_user_group=$(id -gn "$DEFAULT_USER_NAME")
+if [ -d "/home/$DEFAULT_USER_NAME" ]; then
+  install -d -m 0755 "/home/$DEFAULT_USER_NAME/.config"
+  for skel_config in kwinrc plasmakeyboardrc kwinoutputconfig.json; do
+    cp -a "/etc/skel/.config/$skel_config" "/home/$DEFAULT_USER_NAME/.config/$skel_config"
+    chown "$DEFAULT_USER_NAME:$default_user_group" "/home/$DEFAULT_USER_NAME/.config/$skel_config"
+  done
+fi
+
 if ci_bool_chroot "$INSTALL_FCITX5_CHINESE" && [ -d "/home/$DEFAULT_USER_NAME" ]; then
-  default_user_group=$(id -gn "$DEFAULT_USER_NAME")
   install -d -m 0755 \
     "/home/$DEFAULT_USER_NAME/.config" \
     "/home/$DEFAULT_USER_NAME/.config/environment.d" \

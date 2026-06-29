@@ -467,7 +467,7 @@ jobs:
           select_release_asset() {
             local source_dir=$1
             local source_prefix=$2
-            local release_kind=$3
+            local release_name=$3
             local compress=$4
             local chunk_size=$5
             local suffix src dest
@@ -478,22 +478,23 @@ jobs:
               xz) suffix=.img.xz; src="$source_dir/$source_prefix.xz" ;;
               7z)
                 if [ -n "$chunk_size" ]; then
-                  echo "Release upload expects a single $release_kind archive; clear CHUNK_SIZE/BOOT_CHUNK_SIZE instead of using 7z volumes." >&2
+                  echo "Release upload expects a single $release_name archive; clear CHUNK_SIZE/BOOT_CHUNK_SIZE instead of using 7z volumes." >&2
                   exit 1
                 fi
                 suffix=.img.7z
                 src="$source_dir/$source_prefix.7z"
                 ;;
-              *) echo "unsupported $release_kind compression: $compress" >&2; exit 1 ;;
+              *) echo "unsupported $release_name compression: $compress" >&2; exit 1 ;;
             esac
 
-            [ -f "$src" ] || { echo "missing release $release_kind asset: $src" >&2; exit 1; }
-            dest="$release_dir/${OUTPUT_PREFIX}-${release_kind}${suffix}"
+            [ -f "$src" ] || { echo "missing release $release_name asset: $src" >&2; exit 1; }
+            dest="$release_dir/${release_name}${suffix}"
             cp -a "$src" "$dest"
           }
 
           select_release_asset "$OUTPUT_DIR_ROOTFS" "${OUTPUT_PREFIX}-rootfs.img" rootfs "${COMPRESS:-7z}" "${CHUNK_SIZE:-}"
           select_release_asset "$OUTPUT_DIR_GRUB" "${OUTPUT_PREFIX}-grub-fat.img" grub "${BOOT_COMPRESS:-7z}" "${BOOT_CHUNK_SIZE:-}"
+          install -m 0644 source/boot-image/boot.img.7z "$release_dir/boot.img.7z"
 
           split_large_release_assets() {
             local max_bytes=1992294400
@@ -505,7 +506,7 @@ jobs:
                 continue
               fi
               echo "Splitting release asset larger than GitHub's 2GB limit: $asset ($size bytes)"
-              split -b 1900M -d -a 3 "$asset" "$asset.part-"
+              split -b 1900M -d -a 3 "$asset" "$asset."
               rm -f "$asset"
             done < <(find "$release_dir" -maxdepth 1 -type f -print0)
           }
@@ -529,7 +530,8 @@ jobs:
             echo "- Generated: \`$(date -u -Iseconds)\`"
             echo
             echo 'Password-like values are redacted in these release notes.'
-            echo 'Assets ending in `.part-NNN` are split only to satisfy the GitHub Release 2GB per-asset limit. Recombine them in lexical order before extraction, for example: `cat TB321FU-kubuntu2604-arm64-rootfs.img.7z.part-* > TB321FU-kubuntu2604-arm64-rootfs.img.7z`.'
+            echo 'The release asset names are intentionally short: `boot.img.7z`, `grub.img.7z`, and split rootfs parts such as `rootfs.img.7z.000` / `rootfs.img.7z.001`.'
+            echo 'Assets ending in `.NNN` are split only to satisfy the GitHub Release 2GB per-asset limit. Recombine them in lexical order before extraction, for example: `cat rootfs.img.7z.* > rootfs.img.7z`.'
             echo
             echo '## rootfs_config'
             echo '```text'
