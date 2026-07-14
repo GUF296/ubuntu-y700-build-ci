@@ -29,9 +29,9 @@ Environment inputs:
   ROOTFS_PARTLABEL           metadata only, default: userdata
   HOSTNAME_NAME              default: y700
   DEFAULT_USER_NAME          default: y700
-  DEFAULT_USER_PASSWORD      default: 1234
+  DEFAULT_USER_PASSWORD_HASH crypt(3) hash supplied via secret; default: locked
   ROOT_PASSWORD_MODE         locked|set|empty, default: locked
-  ROOT_PASSWORD              used when ROOT_PASSWORD_MODE=set
+  ROOT_PASSWORD_HASH         crypt(3) hash used when ROOT_PASSWORD_MODE=set
   USER_SUDO_MODE             password|nopasswd|none, default: password
   SDDM_AUTOLOGIN             enable SDDM autologin for DEFAULT_USER_NAME, default: 0
   SDDM_AUTOLOGIN_SESSION     SDDM session desktop name, default: plasma
@@ -76,7 +76,10 @@ ci_require_cmd debootstrap
 ci_require_cmd mkfs.ext4
 ci_require_cmd mount
 ci_require_cmd umount
+ci_require_cmd findmnt
+ci_require_cmd realpath
 ci_require_cmd chroot
+ci_require_cmd dpkg-deb
 ci_require_cmd e2fsck
 ci_require_cmd rsync
 ci_require_cmd sha256sum
@@ -89,15 +92,16 @@ RESOLV_CONF_CONTENT=${RESOLV_CONF_CONTENT:-}
 APT_HTTP_PROXY=${APT_HTTP_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}
 APT_HTTPS_PROXY=${APT_HTTPS_PROXY:-${https_proxy:-${HTTPS_PROXY:-${APT_HTTP_PROXY:-}}}}
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-${DISTRO}-${ARCH}}
+ci_validate_output_prefix "$OUTPUT_PREFIX"
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-rootfs}
 ROOTFS_IMAGE_SIZE=${ROOTFS_IMAGE_SIZE:-14G}
 ROOTFS_LABEL=${ROOTFS_LABEL:-Ubuntu}
 ROOTFS_PARTLABEL=${ROOTFS_PARTLABEL:-userdata}
 HOSTNAME_NAME=${HOSTNAME_NAME:-y700}
 DEFAULT_USER_NAME=${DEFAULT_USER_NAME:-y700}
-DEFAULT_USER_PASSWORD=${DEFAULT_USER_PASSWORD:-1234}
+DEFAULT_USER_PASSWORD_HASH=${DEFAULT_USER_PASSWORD_HASH:-!}
 ROOT_PASSWORD_MODE=${ROOT_PASSWORD_MODE:-locked}
-ROOT_PASSWORD=${ROOT_PASSWORD:-}
+ROOT_PASSWORD_HASH=${ROOT_PASSWORD_HASH:-}
 USER_SUDO_MODE=${USER_SUDO_MODE:-password}
 SDDM_AUTOLOGIN=${SDDM_AUTOLOGIN:-0}
 SDDM_AUTOLOGIN_SESSION=${SDDM_AUTOLOGIN_SESSION:-plasma}
@@ -117,6 +121,16 @@ DISABLE_SNAPD=${DISABLE_SNAPD:-1}
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
+MOZILLA_APT_KEY_FINGERPRINT=${MOZILLA_APT_KEY_FINGERPRINT:-35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3}
+DEB_ARCHIVE_SHA256=${DEB_ARCHIVE_SHA256:-}
+SENSOR_DEB_ARCHIVE_SHA256=${SENSOR_DEB_ARCHIVE_SHA256:-}
+HAPTICS_DEB_ARCHIVE_SHA256=${HAPTICS_DEB_ARCHIVE_SHA256:-}
+OVERLAY_ARCHIVE_SHA256=${OVERLAY_ARCHIVE_SHA256:-}
+SOURCE_DATE_EPOCH=$(ci_source_date_epoch)
+export SOURCE_DATE_EPOCH
+TB321FU_COMPAT_ARCHIVE_NAME=${TB321FU_COMPAT_ARCHIVE_NAME:-y700-compat1-extra-rootfs-overlay.tar.gz}
+TB321FU_COMPAT_ARCHIVE_SHA256=${TB321FU_COMPAT_ARCHIVE_SHA256:-a3f55ddee04aac465465c2ff8fcddebc1b65b7e7d3af82e5e5c8ce0a4766c414}
+TB321FU_COMPAT_PACKAGE_VERSION=${TB321FU_COMPAT_PACKAGE_VERSION:-20260624.1}
 
 default_packages="systemd systemd-sysv dbus sudo locales tzdata ca-certificates gnupg curl wget network-manager openssh-server nano vim rsync kmod initramfs-tools"
 PACKAGE_LIST=${PACKAGE_LIST:-$default_packages}
@@ -143,7 +157,8 @@ configure_mozilla_firefox_repo() {
 
   ci_log "configuring Mozilla APT repository for non-snap Firefox"
   install -d -m 0755 "$keyring_dir" "$source_dir" "$pref_dir"
-  ci_download "https://packages.mozilla.org/apt/repo-signing-key.gpg" "$key_tmp"
+  ci_download "https://packages.mozilla.org/apt/repo-signing-key.gpg" "$key_tmp" \
+    "openpgp-fpr:$MOZILLA_APT_KEY_FINGERPRINT"
   install -m 0644 "$key_tmp" "$keyring"
 
   cat > "$source_dir/mozilla.list" <<'MOZILLA_APT'
@@ -164,7 +179,7 @@ MOZILLA_PREF
 }
 
 include_deb_archive() {
-  local label=$1 src=$2
+  local label=$1 src=$2 expected_sha=$3
   local archive extract copied deb
 
   [ -n "$src" ] || return 0
@@ -175,7 +190,7 @@ include_deb_archive() {
   mkdir -p "$rootfs_dir/var/tmp/ci-debs" "$extract"
 
   ci_log "including $label deb archive: $src"
-  ci_download "$src" "$archive"
+  ci_download "$src" "$archive" "$expected_sha"
   ci_extract_archive "$archive" "$extract"
 
   copied=0
@@ -319,6 +334,81 @@ CONF
   grep -q "^Session=$session$" "$conf" || ci_die "SDDM autologin session was not written"
 }
 
+prepare_tb321fu_compat_firmware_deb() {
+  local payload_dir=$1
+  local archive archive_sha actual_files expected_files member mode leftover
+  local stage="$work_dir/tb321fu-compat-firmware-stage"
+  local package_root="$work_dir/tb321fu-compat-firmware-package"
+  local expected="$work_dir/tb321fu-compat-firmware.sha256"
+  local output="$payload_dir/tb321fu-compat-firmware_${TB321FU_COMPAT_PACKAGE_VERSION}_${ARCH}.deb"
+  local -a archives=()
+
+  [ -d "$payload_dir" ] || return 0
+  while IFS= read -r -d '' archive; do
+    archives+=("$archive")
+  done < <(find "$payload_dir" -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' -o -name '*.tar.zst' \) -print0 | sort -z)
+
+  [ "${#archives[@]}" -gt 0 ] || return 0
+  [ "${#archives[@]}" -eq 1 ] || ci_die "expected one TB321FU compat overlay, found ${#archives[@]}"
+  archive=${archives[0]}
+  [ "$(basename "$archive")" = "$TB321FU_COMPAT_ARCHIVE_NAME" ] || \
+    ci_die "unexpected nested device overlay: $(basename "$archive")"
+  archive_sha=$(sha256sum "$archive" | awk '{print $1}')
+  [ "$archive_sha" = "$TB321FU_COMPAT_ARCHIVE_SHA256" ] || \
+    ci_die "TB321FU compat overlay checksum mismatch: $archive_sha"
+
+  rm -rf -- "$stage" "$package_root"
+  ci_extract_archive "$archive" "$stage"
+  cat > "$expected" <<'COMPAT_SHA256'
+25237c161d727b8ea92b4beb837a31651b44ea78bfc34d95672af8f346a45825  ./usr/lib/firmware/qcom/gen70900_aqe.fw
+a739a1ef14e4418c5a1f1e1da444deb71aeeb4a31370ab41a4dddf378ab5683d  ./usr/lib/firmware/qcom/gen70900_sqe.fw
+9685f62c42543befcaee68d25355e16bf55cdb0d573bddcc9f6633f59eec3f72  ./usr/lib/firmware/qcom/gmu_gen70900.bin
+8166b1fde9725547bd07eba4add22f442dc938f17274fbf358dbdcfc88ec5f31  ./usr/lib/firmware/qcom/vpu/vpu33_p4.mbn
+COMPAT_SHA256
+
+  leftover=$(find "$stage" -mindepth 1 ! -type d ! -type f -print -quit)
+  [ -z "$leftover" ] || ci_die "unsupported special member in TB321FU compat overlay: $leftover"
+  actual_files=$(cd "$stage" && find . -type f -print | LC_ALL=C sort)
+  expected_files=$(awk '{print $2}' "$expected" | LC_ALL=C sort)
+  [ "$actual_files" = "$expected_files" ] || ci_die "TB321FU compat overlay member list mismatch"
+  (cd "$stage" && sha256sum -c "$expected") || ci_die "TB321FU compat firmware content mismatch"
+  while IFS= read -r member; do
+    mode=$(stat -c '%a' "$stage/${member#./}")
+    [ "$mode" = 644 ] || ci_die "unsafe TB321FU compat firmware mode $mode: $member"
+  done <<< "$expected_files"
+
+  install -d -m 0755 "$package_root/DEBIAN" \
+    "$package_root/usr/share/doc/tb321fu-compat-firmware"
+  cp -a "$stage/usr" "$package_root/"
+  cp -a "$expected" "$package_root/usr/share/doc/tb321fu-compat-firmware/files.sha256"
+  cat > "$package_root/usr/share/doc/tb321fu-compat-firmware/provenance" <<PROVENANCE
+source_archive=$TB321FU_COMPAT_ARCHIVE_NAME
+source_archive_sha256=$archive_sha
+release_lock=device-compat1-files.sha256
+PROVENANCE
+  cat > "$package_root/DEBIAN/control" <<CONTROL
+Package: tb321fu-compat-firmware
+Version: $TB321FU_COMPAT_PACKAGE_VERSION
+Section: misc
+Priority: optional
+Architecture: $ARCH
+Maintainer: TB321FU reconstruction <noreply@localhost>
+Description: Verified TB321FU compatibility firmware from the tested Ubuntu release
+CONTROL
+  chmod 0644 "$package_root/DEBIAN/control" \
+    "$package_root/usr/share/doc/tb321fu-compat-firmware/files.sha256" \
+    "$package_root/usr/share/doc/tb321fu-compat-firmware/provenance"
+  ci_normalize_package_tree "$package_root"
+  dpkg-deb --build --root-owner-group "$package_root" "$output" >/dev/null
+  rm -f -- "$archive"
+  rm -rf -- "$stage" "$package_root"
+  rm -f -- "$expected"
+
+  leftover=$(find "$payload_dir" -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' -o -name '*.tar.zst' \) -print -quit)
+  [ -z "$leftover" ] || ci_die "unconverted nested device overlay remains: $leftover"
+  ci_log "converted verified TB321FU compat overlay to managed package: $(basename "$output")"
+}
+
 apply_tb321fu_legacy_cleanup() {
   local root=$1
 
@@ -327,7 +417,12 @@ apply_tb321fu_legacy_cleanup() {
     "$root/etc/systemd/system/iio-sensor-proxy.service.d/10-y700-ssc.conf" \
     "$root/etc/systemd/system/y700-sns-init.service" \
     "$root/etc/systemd/system/y700-aw86937-haptics.service" \
+    "$root/etc/systemd/system/smartmontools.service" \
+    "$root/etc/systemd/system/sddm.service.d/10-y700-audio-card-guard.conf" \
+    "$root/etc/udev/rules.d/80-y700-iio-sensor-proxy.rules" \
     "$root/etc/udev/rules.d/90-y700-haptics.rules" \
+    "$root/usr/lib/udev/rules.d/80-y700-iio-sensor-proxy.rules" \
+    "$root/usr/local/sbin/y700-sns-init.sh" \
     "$root/usr/local/libexec/y700-iio-sensor-proxy" \
     "$root/usr/local/sbin/y700-aw86937-bind"
   rm -rf \
@@ -349,6 +444,13 @@ apply_tb321fu_legacy_cleanup() {
     install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
     ln -sfn /usr/lib/systemd/system/tb321fu-haptics.service \
       "$root/etc/systemd/system/multi-user.target.wants/tb321fu-haptics.service"
+  fi
+  if [ -f "$root/etc/systemd/system/y700-audio-card-guard.service" ]; then
+    grep -q '^Restart=on-failure$' "$root/etc/systemd/system/y700-audio-card-guard.service" || \
+      ci_die "audio card guard does not retry asynchronously"
+    install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
+    ln -sfn /etc/systemd/system/y700-audio-card-guard.service \
+      "$root/etc/systemd/system/multi-user.target.wants/y700-audio-card-guard.service"
   fi
 
   if [ -x "$root/usr/libexec/iio-sensor-proxy" ]; then
@@ -432,14 +534,17 @@ cmake --build "$build" -j"${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}"
 cmake --install "$build"
 
 test -f "$plugin"
-if [ -f "$stock" ]; then
+if ! dpkg-divert --list "$stock" | grep -Fq "$disabled"; then
   rm -f "$disabled"
-  mv "$stock" "$disabled"
+  dpkg-divert --local --rename --add --divert "$disabled" "$stock"
 fi
+rm -f "$stock"
 test ! -e "$stock"
 
 install -d -m 0755 /usr/share/tb321fu-ksystemstats-gpu
 sha256sum "$plugin" > /usr/share/tb321fu-ksystemstats-gpu/ksystemstats_plugin_tb321fu_gpu.so.sha256
+dpkg-divert --list "$stock" > /usr/share/tb321fu-ksystemstats-gpu/stock-plugin-diversion.txt
+grep -Fq "$disabled" /usr/share/tb321fu-ksystemstats-gpu/stock-plugin-diversion.txt
 
 rm -rf "$src" "$build"
 
@@ -501,17 +606,18 @@ GPU_SENSOR_BUILD
   [ -f "$root/$plugin_rel" ] || ci_die "TB321FU GPU sensor plugin missing after build: /$plugin_rel"
   [ ! -e "$root/$stock_plugin_rel" ] || ci_die "stock KSystemStats GPU plugin still enabled: /$stock_plugin_rel"
   [ -f "$root/$disabled_stock_plugin_rel" ] || ci_die "disabled stock KSystemStats GPU plugin missing: /$disabled_stock_plugin_rel"
+  [ -s "$root/usr/share/tb321fu-ksystemstats-gpu/stock-plugin-diversion.txt" ] || ci_die "stock GPU plugin dpkg diversion record missing"
 }
 
 cleanup() {
   set +e
   if [ "$mounted" = 1 ]; then
-    for p in dev/pts dev proc sys run; do
-      mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
-    done
-    mountpoint -q "$rootfs_dir" && umount "$rootfs_dir"
+    ci_unmount_tree "$rootfs_dir" ||
+      ci_log "cleanup preserved mounted work tree for manual recovery: $work_dir"
   fi
-  rm -rf "$work_dir"
+  if ! ci_safe_rmtree "$work_dir" "$OUTPUT_DIR" .rootfs-build.; then
+    ci_log "cleanup refused to remove work tree: $work_dir"
+  fi
 }
 trap cleanup EXIT
 
@@ -766,7 +872,11 @@ systemctl enable ssh || true
 if ! id -u "$DEFAULT_USER_NAME" >/dev/null 2>&1; then
   useradd -m -s /bin/bash "$DEFAULT_USER_NAME"
 fi
-printf '%s:%s\n' "$DEFAULT_USER_NAME" "$DEFAULT_USER_PASSWORD" | chpasswd
+if [ -n "$DEFAULT_USER_PASSWORD_HASH" ] && [ "$DEFAULT_USER_PASSWORD_HASH" != '!' ]; then
+  printf '%s:%s\n' "$DEFAULT_USER_NAME" "$DEFAULT_USER_PASSWORD_HASH" | chpasswd -e
+else
+  passwd -l "$DEFAULT_USER_NAME" || true
+fi
 
 default_user_group=$(id -gn "$DEFAULT_USER_NAME")
 if [ -d "/home/$DEFAULT_USER_NAME" ]; then
@@ -801,8 +911,8 @@ case "$ROOT_PASSWORD_MODE" in
     passwd -l root || true
     ;;
   set)
-    [ -n "$ROOT_PASSWORD" ] || { echo 'ROOT_PASSWORD_MODE=set requires ROOT_PASSWORD' >&2; exit 1; }
-    printf 'root:%s\n' "$ROOT_PASSWORD" | chpasswd
+    [ -n "$ROOT_PASSWORD_HASH" ] || { echo 'ROOT_PASSWORD_MODE=set requires ROOT_PASSWORD_HASH' >&2; exit 1; }
+    printf 'root:%s\n' "$ROOT_PASSWORD_HASH" | chpasswd -e
     ;;
   empty)
     passwd -d root || true
@@ -850,18 +960,13 @@ locale-gen || true
 update-locale LANG="$LANG_NAME" || true
 
 if compgen -G "/var/tmp/ci-debs/*.deb" >/dev/null; then
-  dpkg -i --force-overwrite /var/tmp/ci-debs/*.deb || apt-get -f install -y
+  apt-get install -y --no-install-recommends /var/tmp/ci-debs/*.deb
 fi
 
-for ci_overlay in /var/tmp/ci-debs/*.tar /var/tmp/ci-debs/*.tar.gz /var/tmp/ci-debs/*.tgz /var/tmp/ci-debs/*.tar.xz /var/tmp/ci-debs/*.tar.zst; do
-  [ -e "$ci_overlay" ] || continue
-  case "$ci_overlay" in
-    *.tar) tar -C / -xf "$ci_overlay" ;;
-    *.tar.gz|*.tgz) tar -C / -xzf "$ci_overlay" ;;
-    *.tar.xz) tar -C / -xJf "$ci_overlay" ;;
-    *.tar.zst) tar -C / --zstd -xf "$ci_overlay" ;;
-  esac
-done
+if compgen -G "/var/tmp/ci-debs/*.tar*" >/dev/null; then
+  echo 'unconverted nested device overlay reached the chroot' >&2
+  exit 1
+fi
 
 if ci_bool_chroot "$DISABLE_SNAPD"; then
   apt-get purge -y snapd plasma-discover-backend-snap || true
@@ -889,7 +994,7 @@ chmod +x "$rootfs_dir/root/ci-provision.sh"
 if [ -n "${DEB_ARCHIVE:-}" ]; then
   tmp_archive="$work_dir/debs.archive"
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
-  ci_download "$DEB_ARCHIVE" "$tmp_archive"
+  ci_download "$DEB_ARCHIVE" "$tmp_archive" "$DEB_ARCHIVE_SHA256"
   ci_extract_archive "$tmp_archive" "$rootfs_dir/var/tmp/ci-debs"
 fi
 if [ -n "${DEB_DIR:-}" ]; then
@@ -897,7 +1002,7 @@ if [ -n "${DEB_DIR:-}" ]; then
   find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
 fi
 if [ -n "${SENSOR_DEB_ARCHIVE:-}" ]; then
-  include_deb_archive sensor "$SENSOR_DEB_ARCHIVE"
+  include_deb_archive sensor "$SENSOR_DEB_ARCHIVE" "$SENSOR_DEB_ARCHIVE_SHA256"
 fi
 if [ -n "${SENSOR_DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
@@ -905,7 +1010,7 @@ if [ -n "${SENSOR_DEB_DIR:-}" ]; then
   find "$SENSOR_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
 fi
 if [ -n "${HAPTICS_DEB_ARCHIVE:-}" ]; then
-  include_deb_archive haptics "$HAPTICS_DEB_ARCHIVE"
+  include_deb_archive haptics "$HAPTICS_DEB_ARCHIVE" "$HAPTICS_DEB_ARCHIVE_SHA256"
 fi
 if [ -n "${HAPTICS_DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
@@ -917,6 +1022,8 @@ if [ -n "${CAMERA_STACK_DEB_DIR:-}" ]; then
   ci_log "including source-built camera stack debs from: $CAMERA_STACK_DEB_DIR"
   find "$CAMERA_STACK_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
 fi
+
+prepare_tb321fu_compat_firmware_deb "$rootfs_dir/var/tmp/ci-debs"
 
 if ci_bool "$INSTALL_FIREFOX"; then
   configure_mozilla_firefox_repo "$rootfs_dir"
@@ -930,9 +1037,9 @@ chroot "$rootfs_dir" env -i \
   PACKAGE_LIST="$PACKAGE_LIST" \
   INSTALL_FCITX5_CHINESE="$INSTALL_FCITX5_CHINESE" \
   DEFAULT_USER_NAME="$DEFAULT_USER_NAME" \
-  DEFAULT_USER_PASSWORD="$DEFAULT_USER_PASSWORD" \
+  DEFAULT_USER_PASSWORD_HASH="$DEFAULT_USER_PASSWORD_HASH" \
   ROOT_PASSWORD_MODE="$ROOT_PASSWORD_MODE" \
-  ROOT_PASSWORD="$ROOT_PASSWORD" \
+  ROOT_PASSWORD_HASH="$ROOT_PASSWORD_HASH" \
   USER_SUDO_MODE="$USER_SUDO_MODE" \
   INSTALL_FIREFOX="$INSTALL_FIREFOX" \
   DISABLE_SNAPD="$DISABLE_SNAPD" \
@@ -960,7 +1067,7 @@ fi
 if [ -n "${OVERLAY_ARCHIVE:-}" ]; then
   tmp_overlay="$work_dir/overlay.archive"
   ci_log "applying overlay archive: $OVERLAY_ARCHIVE"
-  ci_download "$OVERLAY_ARCHIVE" "$tmp_overlay"
+  ci_download "$OVERLAY_ARCHIVE" "$tmp_overlay" "$OVERLAY_ARCHIVE_SHA256"
   ci_extract_archive "$tmp_overlay" "$rootfs_dir"
 fi
 if [ -n "${OVERLAY_DIR:-}" ]; then
@@ -982,7 +1089,7 @@ if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
 fi
 
 cat > "$build_info" <<INFO
-generated=$(date -u -Iseconds)
+generated=$(ci_iso8601_timestamp)
 distro=$DISTRO
 arch=$ARCH
 debootstrap_variant=$DEBOOTSTRAP_VARIANT
@@ -1024,12 +1131,9 @@ rm -f \
 ci_log "writing manifest"
 (cd "$rootfs_dir" && find . -xdev -printf '%y\t%u\t%g\t%m\t%s\t%p\n' | sort) > "$manifest"
 
-for p in dev/pts dev proc sys run; do
-  mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
-done
-umount "$rootfs_dir"
+ci_unmount_tree "$rootfs_dir"
 mounted=0
-e2fsck -f -y "$rootfs_img"
+ci_e2fsck_repair "$rootfs_img"
 
 ci_log "checksumming rootfs image"
 raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
@@ -1057,10 +1161,10 @@ case "$COMPRESS" in
     sevenz_out="$rootfs_img.7z"
     rm -f "$sevenz_out" "$sevenz_out".*
     if [ -n "${CHUNK_SIZE:-}" ]; then
-      7z a "$sevenz_out" "$rootfs_img" -t7z -m0=lzma2 -mx=9 -mmt=on "-v$CHUNK_SIZE" >/dev/null
+      7z a "$sevenz_out" "$rootfs_img" -t7z -m0=lzma2 -mx=9 -mmt=on -mtm=off -mta=off -mtc=off "-v$CHUNK_SIZE" >/dev/null
       (cd "$OUTPUT_DIR" && sha256sum "$(basename "$sevenz_out")".* >> "$(basename "$checksum_file")")
     else
-      7z a "$sevenz_out" "$rootfs_img" -t7z -m0=lzma2 -mx=9 -mmt=on >/dev/null
+      7z a "$sevenz_out" "$rootfs_img" -t7z -m0=lzma2 -mx=9 -mmt=on -mtm=off -mta=off -mtc=off >/dev/null
       (cd "$OUTPUT_DIR" && sha256sum "$(basename "$sevenz_out")" >> "$(basename "$checksum_file")")
     fi
     ;;

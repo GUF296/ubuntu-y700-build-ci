@@ -36,15 +36,21 @@ ci_require_cmd sha256sum
 ci_require_cmd aarch64-linux-gnu-gcc
 ci_require_cmd aarch64-linux-gnu-strip
 ci_require_cmd modinfo
+ci_require_cmd cut
+ci_require_cmd sed
+ci_require_cmd tr
 
 OUTPUT_DIR=${OUTPUT_DIR:-out/tb321fu-haptics-debs}
 ARCH=${ARCH:-arm64}
 HAPTICS_DEB_VERSION=${HAPTICS_DEB_VERSION:-20260627.1}
 HAPTICS_SOURCE_ARCHIVE=${HAPTICS_SOURCE_ARCHIVE:-}
+HAPTICS_SOURCE_ARCHIVE_SHA256=${HAPTICS_SOURCE_ARCHIVE_SHA256:-}
 HAPTICS_SOURCE_DIR=${HAPTICS_SOURCE_DIR:-}
 KERNEL_SOURCE_ARCHIVE=${KERNEL_SOURCE_ARCHIVE:-}
+KERNEL_SOURCE_ARCHIVE_SHA256=${KERNEL_SOURCE_ARCHIVE_SHA256:-}
 KERNEL_SOURCE_DIR=${KERNEL_SOURCE_DIR:-}
 KERNEL_BUILD_ARCHIVE=${KERNEL_BUILD_ARCHIVE:-}
+KERNEL_BUILD_ARCHIVE_SHA256=${KERNEL_BUILD_ARCHIVE_SHA256:-}
 KERNEL_BUILD_DIR=${KERNEL_BUILD_DIR:-}
 HAPTICS_STRIP=${HAPTICS_STRIP:-0}
 
@@ -52,65 +58,82 @@ HAPTICS_STRIP=${HAPTICS_STRIP:-0}
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR=$(ci_abs_path "$OUTPUT_DIR")
+rm -f -- \
+  "$OUTPUT_DIR"/tb321fu-haptics_*.deb \
+  "$OUTPUT_DIR"/tb321fu-haptics-common_*.deb \
+  "$OUTPUT_DIR"/tb321fu-haptics-modules-*.deb \
+  "$OUTPUT_DIR"/SHA256SUMS-tb321fu-haptics-debs.txt
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/tb321fu-haptics-build.XXXXXX")
+SOURCE_DATE_EPOCH=$(ci_source_date_epoch)
+export SOURCE_DATE_EPOCH
+export KBUILD_BUILD_TIMESTAMP="@$SOURCE_DATE_EPOCH"
+export KBUILD_BUILD_USER=tb321fu
+export KBUILD_BUILD_HOST=reproducible
 
 cleanup() {
-  rm -rf "$work_dir"
+  ci_safe_rmtree "$work_dir" "${TMPDIR:-/tmp}" tb321fu-haptics-build.
 }
 trap cleanup EXIT
 
 find_haptics_source_root() {
-  local root=$1 found
+  local root=$1 marker found
+  local -a candidates=()
 
-  if [ -f "$root/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c" ] && \
-     [ -f "$root/haptics/rootfs-reference/usr/lib/firmware/haptic_ram.bin" ] && \
-     [ -f "$root/haptics/rootfs-reference/usr/lib/firmware/haptic_click.bin" ]; then
-    printf '%s\n' "$root"
-    return 0
-  fi
+  marker=/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c
+  while IFS= read -r -d '' found; do
+    found=${found%"$marker"}
+    [ -f "$found/haptics/rootfs-reference/usr/lib/firmware/haptic_ram.bin" ] || continue
+    [ -f "$found/haptics/rootfs-reference/usr/lib/firmware/haptic_click.bin" ] || continue
+    candidates+=("$found")
+  done < <(find -H "$root" -type f -path "*$marker" -print0)
 
-  found=$(find "$root" -type f -path '*/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c' -print -quit)
-  [ -n "$found" ] || return 1
-  found=${found%/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c}
-  [ -f "$found/haptics/rootfs-reference/usr/lib/firmware/haptic_ram.bin" ] || return 1
-  [ -f "$found/haptics/rootfs-reference/usr/lib/firmware/haptic_click.bin" ] || return 1
-  printf '%s\n' "$found"
+  [ "${#candidates[@]}" -eq 1 ] || {
+    printf 'expected exactly one haptics source root below %s, found %s\n' \
+      "$root" "${#candidates[@]}" >&2
+    return 1
+  }
+  printf '%s\n' "${candidates[0]}"
 }
 
 find_kernel_source_root() {
-  local root=$1 found
+  local root=$1 marker found
+  local -a candidates=()
 
-  if [ -f "$root/Makefile" ] && [ -d "$root/scripts" ] && [ -d "$root/drivers" ]; then
-    printf '%s\n' "$root"
-    return 0
-  fi
+  marker=/scripts/Makefile.build
+  while IFS= read -r -d '' found; do
+    found=${found%"$marker"}
+    [ -f "$found/Makefile" ] || continue
+    [ -d "$found/drivers" ] || continue
+    candidates+=("$found")
+  done < <(find -H "$root" -type f -path "*$marker" -print0)
 
-  found=$(find "$root" -type f -path '*/scripts/Makefile.build' -print -quit)
-  [ -n "$found" ] || return 1
-  found=${found%/scripts/Makefile.build}
-  [ -f "$found/Makefile" ] || return 1
-  [ -d "$found/drivers" ] || return 1
-  printf '%s\n' "$found"
+  [ "${#candidates[@]}" -eq 1 ] || {
+    printf 'expected exactly one kernel source root below %s, found %s\n' \
+      "$root" "${#candidates[@]}" >&2
+    return 1
+  }
+  printf '%s\n' "${candidates[0]}"
 }
 
 find_kernel_build_root() {
-  local root=$1 found
+  local root=$1 marker found
+  local -a candidates=()
 
-  if [ -f "$root/.config" ] && \
-     [ -f "$root/Module.symvers" ] && \
-     [ -f "$root/include/generated/autoconf.h" ] && \
-     [ -f "$root/include/config/kernel.release" ]; then
-    printf '%s\n' "$root"
-    return 0
-  fi
+  marker=/include/config/kernel.release
+  while IFS= read -r -d '' found; do
+    found=${found%"$marker"}
+    [ -f "$found/.config" ] || continue
+    [ -f "$found/Module.symvers" ] || continue
+    [ -f "$found/include/generated/autoconf.h" ] || continue
+    candidates+=("$found")
+  done < <(find -H "$root" -type f -path "*$marker" -print0)
 
-  found=$(find "$root" -type f -path '*/include/config/kernel.release' -print -quit)
-  [ -n "$found" ] || return 1
-  found=${found%/include/config/kernel.release}
-  [ -f "$found/.config" ] || return 1
-  [ -f "$found/Module.symvers" ] || return 1
-  [ -f "$found/include/generated/autoconf.h" ] || return 1
-  printf '%s\n' "$found"
+  [ "${#candidates[@]}" -eq 1 ] || {
+    printf 'expected exactly one kernel build root below %s, found %s\n' \
+      "$root" "${#candidates[@]}" >&2
+    return 1
+  }
+  printf '%s\n' "${candidates[0]}"
 }
 
 prepare_inputs() {
@@ -122,7 +145,7 @@ prepare_inputs() {
     [ -n "$HAPTICS_SOURCE_ARCHIVE" ] || ci_die "set HAPTICS_SOURCE_ARCHIVE or HAPTICS_SOURCE_DIR"
     archive="$work_dir/haptics-source.archive"
     extract="$work_dir/haptics-source"
-    ci_download "$HAPTICS_SOURCE_ARCHIVE" "$archive"
+    ci_download "$HAPTICS_SOURCE_ARCHIVE" "$archive" "$HAPTICS_SOURCE_ARCHIVE_SHA256"
     ci_extract_archive "$archive" "$extract"
     haptics_root=$(find_haptics_source_root "$extract") || ci_die "HAPTICS_SOURCE_ARCHIVE does not contain haptics source freeze"
   fi
@@ -133,7 +156,7 @@ prepare_inputs() {
     [ -n "$KERNEL_SOURCE_ARCHIVE" ] || ci_die "set KERNEL_SOURCE_ARCHIVE or KERNEL_SOURCE_DIR"
     archive="$work_dir/kernel-source.archive"
     extract="$work_dir/kernel-source"
-    ci_download "$KERNEL_SOURCE_ARCHIVE" "$archive"
+    ci_download "$KERNEL_SOURCE_ARCHIVE" "$archive" "$KERNEL_SOURCE_ARCHIVE_SHA256"
     ci_extract_archive "$archive" "$extract"
     kernel_source_root=$(find_kernel_source_root "$extract") || ci_die "KERNEL_SOURCE_ARCHIVE does not contain kernel source"
   fi
@@ -144,7 +167,7 @@ prepare_inputs() {
     [ -n "$KERNEL_BUILD_ARCHIVE" ] || ci_die "set KERNEL_BUILD_ARCHIVE or KERNEL_BUILD_DIR"
     archive="$work_dir/kernel-build.archive"
     extract="$work_dir/kernel-build"
-    ci_download "$KERNEL_BUILD_ARCHIVE" "$archive"
+    ci_download "$KERNEL_BUILD_ARCHIVE" "$archive" "$KERNEL_BUILD_ARCHIVE_SHA256"
     ci_extract_archive "$archive" "$extract"
     kernel_build_root=$(find_kernel_build_root "$extract") || ci_die "KERNEL_BUILD_ARCHIVE does not contain kernel build output"
   fi
@@ -172,36 +195,34 @@ patch_source_for_standard_module_name() {
   grep -q '"aw86937_haptics"' "$src" || ci_die "failed to add standard i2c id"
 }
 
-write_control() {
+write_common_control() {
   local pkgdir=$1
 
   mkdir -p "$pkgdir/DEBIAN"
   cat > "$pkgdir/DEBIAN/control" <<EOF_CONTROL
-Package: tb321fu-haptics
+Package: tb321fu-haptics-common
 Version: $HAPTICS_DEB_VERSION
 Section: misc
 Priority: optional
 Architecture: $ARCH
 Maintainer: GUF296 <guf296@users.noreply.github.com>
-Depends: kmod, systemd, udev, coreutils, findutils, feedbackd, feedbackd-device-themes
-Conflicts: y700-haptics
-Replaces: y700-haptics
-Description: AW86937 haptics support for Lenovo Legion Y700 TB321FU
- Source-built AW86937 force-feedback haptics module, firmware, feedbackd udev
- integration and TB321FU boot-time binding glue.
+Depends: systemd, udev, coreutils, findutils, feedbackd, feedbackd-device-themes
+Provides: tb321fu-haptics
+Conflicts: tb321fu-haptics, y700-haptics
+Replaces: tb321fu-haptics, y700-haptics
+Description: Shared AW86937 haptics support for Lenovo Legion Y700 TB321FU
+ Firmware, feedbackd udev integration and standardized TB321FU boot-time
+ binding glue shared by release-specific kernel module packages.
 EOF_CONTROL
 }
 
-write_maintainer_scripts() {
+write_common_maintainer_scripts() {
   local pkgdir=$1
 
   cat > "$pkgdir/DEBIAN/postinst" <<'EOF_POSTINST'
 #!/bin/sh
 set -e
 
-if command -v depmod >/dev/null 2>&1; then
-  depmod -a || true
-fi
 if command -v systemctl >/dev/null 2>&1; then
   systemctl stop y700-aw86937-haptics.service >/dev/null 2>&1 || true
   systemctl disable y700-aw86937-haptics.service >/dev/null 2>&1 || true
@@ -221,9 +242,6 @@ EOF_POSTINST
 #!/bin/sh
 set -e
 
-if command -v depmod >/dev/null 2>&1; then
-  depmod -a || true
-fi
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
 fi
@@ -233,6 +251,43 @@ fi
 exit 0
 EOF_POSTRM
 
+  chmod 0755 "$pkgdir/DEBIAN/postinst" "$pkgdir/DEBIAN/postrm"
+}
+
+write_module_control() {
+  local pkgdir=$1 package_name=$2
+
+  mkdir -p "$pkgdir/DEBIAN"
+  cat > "$pkgdir/DEBIAN/control" <<EOF_CONTROL
+Package: $package_name
+Version: $HAPTICS_DEB_VERSION
+Section: kernel
+Priority: optional
+Architecture: $ARCH
+Maintainer: GUF296 <guf296@users.noreply.github.com>
+Depends: kmod, tb321fu-haptics-common (= $HAPTICS_DEB_VERSION)
+Provides: tb321fu-haptics-modules
+Description: AW86937 haptics module for Linux $kernel_release
+ Source-built TB321FU AW86937 force-feedback module tied to the exact target
+ kernel release. Other kernel-release module packages remain co-installable.
+EOF_CONTROL
+}
+
+write_module_maintainer_scripts() {
+  local pkgdir=$1
+
+  cat > "$pkgdir/DEBIAN/postinst" <<EOF_POSTINST
+#!/bin/sh
+set -e
+depmod "$kernel_release"
+exit 0
+EOF_POSTINST
+  cat > "$pkgdir/DEBIAN/postrm" <<EOF_POSTRM
+#!/bin/sh
+set -e
+depmod "$kernel_release" || true
+exit 0
+EOF_POSTRM
   chmod 0755 "$pkgdir/DEBIAN/postinst" "$pkgdir/DEBIAN/postrm"
 }
 
@@ -257,18 +312,15 @@ find_haptic_adapter()
 
 load_driver()
 {
-	if lsmod | awk '{print $1}' | grep -Eq '^(aw86937_haptics|aw86937_y700)$'; then
+	if lsmod | awk '{print $1}' | grep -Fxq aw86937_haptics; then
 		return 0
 	fi
 	modprobe aw86937_haptics 2>/dev/null && return 0
-	modprobe aw86937_y700 2>/dev/null && return 0
 
 	krel=$(uname -r)
 	for module_path in \
 		"/lib/modules/$krel/extra/aw86937-haptics.ko" \
-		"/lib/modules/$krel/extra/aw86937-y700.ko" \
-		"/usr/lib/modules/$krel/extra/aw86937-haptics.ko" \
-		"/usr/lib/modules/$krel/extra/aw86937-y700.ko"; do
+		"/usr/lib/modules/$krel/extra/aw86937-haptics.ko"; do
 		[ -f "$module_path" ] || continue
 		insmod "$module_path" && return 0
 	done
@@ -289,12 +341,8 @@ is_known_haptic_name()
 
 find_driver_dir()
 {
-	for driver in aw86937-haptics aw86937-y700; do
-		[ -d "/sys/bus/i2c/drivers/$driver" ] || continue
-		printf '%s\n' "/sys/bus/i2c/drivers/$driver"
-		return 0
-	done
-	return 1
+	[ -d /sys/bus/i2c/drivers/aw86937-haptics ] || return 1
+	printf '%s\n' /sys/bus/i2c/drivers/aw86937-haptics
 }
 
 bind_existing_client()
@@ -311,9 +359,7 @@ bind_existing_client()
 
 	if [ -e "$dev/driver" ]; then
 		driver=$(basename "$(readlink -f "$dev/driver")")
-		case "$driver" in
-			aw86937-haptics|aw86937-y700) return 0 ;;
-		esac
+		[ "$driver" = aw86937-haptics ] && return 0
 		echo "$dev is already bound to unexpected driver $driver" >&2
 		exit 1
 	fi
@@ -323,9 +369,7 @@ bind_existing_client()
 	for _ in $(seq 1 20); do
 		if [ -e "$dev/driver" ]; then
 			driver=$(basename "$(readlink -f "$dev/driver")")
-			case "$driver" in
-				aw86937-haptics|aw86937-y700) return 0 ;;
-			esac
+			[ "$driver" = aw86937-haptics ] && return 0
 		fi
 		sleep 0.1
 	done
@@ -357,8 +401,7 @@ for spec in "0x5a:right" "0x5b:left"; do
 		bind_existing_client "$dev" "$name" "$driver_dir"
 		continue
 	fi
-	printf 'aw86937_haptics %s\n' "$addr" > "/sys/bus/i2c/devices/i2c-$adapter/new_device" 2>/dev/null || \
-		printf 'aw86937_y700 %s\n' "$addr" > "/sys/bus/i2c/devices/i2c-$adapter/new_device"
+	printf 'aw86937_haptics %s\n' "$addr" > "/sys/bus/i2c/devices/i2c-$adapter/new_device"
 done
 EOF_BIND
   chmod 0755 "$dest"
@@ -392,8 +435,8 @@ write_udev_rules() {
   cat > "$dest" <<'EOF_UDEV'
 # TB321FU AW86937 haptics expose standard Linux input force-feedback devices.
 ACTION=="remove", GOTO="tb321fu_haptics_end"
-SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="aw86937-haptics-left", GROUP="input", MODE="0666", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra", SYMLINK+="input/tb321fu-haptics-left"
-SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="aw86937-haptics-right", GROUP="input", MODE="0666", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra", SYMLINK+="input/tb321fu-haptics-right"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="aw86937-haptics-left", GROUP="input", MODE="0660", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra", SYMLINK+="input/tb321fu-haptics-left"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="aw86937-haptics-right", GROUP="input", MODE="0660", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra", SYMLINK+="input/tb321fu-haptics-right"
 LABEL="tb321fu_haptics_end"
 EOF_UDEV
   chmod 0644 "$dest"
@@ -419,9 +462,11 @@ strip_if_requested() {
 
 build_haptics_package() {
   local src="$work_dir/module-src"
-  local pkg="$work_dir/pkg/tb321fu-haptics"
+  local common_pkg="$work_dir/pkg/tb321fu-haptics-common"
+  local module_pkg="$work_dir/pkg/tb321fu-haptics-modules"
   local module="$src/aw86937-haptics.ko"
   local helper_src="$haptics_root/haptics/baseline-20260614-daily-clean/testing-tools/y700-haptic-test.c"
+  local release_id release_hash module_package common_deb module_deb
 
   ci_log "building aw86937-haptics external module"
   mkdir -p "$src"
@@ -438,42 +483,58 @@ EOF_MAKE
   grep -q '^alias:[[:space:]]*i2c:aw86937_haptics$' "$work_dir/aw86937-haptics.modinfo" || ci_die "missing standard i2c alias"
   grep -q "^vermagic:[[:space:]]*$kernel_release " "$work_dir/aw86937-haptics.modinfo" || ci_die "module vermagic does not match $kernel_release"
 
-  install -d -m 0755 \
-    "$pkg/usr/lib/modules/$kernel_release/extra" \
-    "$pkg/usr/lib/firmware" \
-    "$pkg/usr/libexec/tb321fu-haptics" \
-    "$pkg/usr/lib/systemd/system" \
-    "$pkg/usr/lib/udev/rules.d" \
-    "$pkg/etc/skel/.config" \
-    "$pkg/usr/bin"
+  release_id=$(printf '%s' "$kernel_release" | tr '[:upper:]_' '[:lower:]-' | \
+    sed -E 's/[^a-z0-9.+-]+/-/g; s/^-+//; s/-+$//')
+  case "$release_id" in
+    ''|[!a-z0-9]*|*[!a-z0-9.+-]*) ci_die "kernel release cannot form a package suffix: $kernel_release" ;;
+  esac
+  release_hash=$(printf '%s' "$kernel_release" | sha256sum | cut -c1-12)
+  module_package="tb321fu-haptics-modules-$release_id-$release_hash"
 
-  install -m 0644 "$module" "$pkg/usr/lib/modules/$kernel_release/extra/aw86937-haptics.ko"
-  install -m 0644 "$haptics_root/haptics/rootfs-reference/usr/lib/firmware/haptic_ram.bin" "$pkg/usr/lib/firmware/haptic_ram.bin"
-  install -m 0644 "$haptics_root/haptics/rootfs-reference/usr/lib/firmware/haptic_click.bin" "$pkg/usr/lib/firmware/haptic_click.bin"
-  write_bind_script "$pkg/usr/libexec/tb321fu-haptics/bind-aw86937"
-  write_systemd_unit "$pkg/usr/lib/systemd/system/tb321fu-haptics.service"
-  write_udev_rules "$pkg/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
-  write_plasma_keyboard_default "$pkg/etc/skel/.config/plasmakeyboardrc"
+  install -d -m 0755 \
+    "$module_pkg/usr/lib/modules/$kernel_release/extra" \
+    "$common_pkg/usr/lib/firmware" \
+    "$common_pkg/usr/libexec/tb321fu-haptics" \
+    "$common_pkg/usr/lib/systemd/system" \
+    "$common_pkg/usr/lib/udev/rules.d" \
+    "$common_pkg/etc/skel/.config" \
+    "$common_pkg/usr/bin"
+
+  install -m 0644 "$module" "$module_pkg/usr/lib/modules/$kernel_release/extra/aw86937-haptics.ko"
+  install -m 0644 "$haptics_root/haptics/rootfs-reference/usr/lib/firmware/haptic_ram.bin" "$common_pkg/usr/lib/firmware/haptic_ram.bin"
+  install -m 0644 "$haptics_root/haptics/rootfs-reference/usr/lib/firmware/haptic_click.bin" "$common_pkg/usr/lib/firmware/haptic_click.bin"
+  write_bind_script "$common_pkg/usr/libexec/tb321fu-haptics/bind-aw86937"
+  write_systemd_unit "$common_pkg/usr/lib/systemd/system/tb321fu-haptics.service"
+  write_udev_rules "$common_pkg/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
+  write_plasma_keyboard_default "$common_pkg/etc/skel/.config/plasmakeyboardrc"
 
   if [ -f "$helper_src" ]; then
-    aarch64-linux-gnu-gcc -O2 -Wall -Wextra -o "$pkg/usr/bin/tb321fu-haptic-test" "$helper_src"
-    chmod 0755 "$pkg/usr/bin/tb321fu-haptic-test"
-    strip_if_requested "$pkg/usr/bin/tb321fu-haptic-test"
+    aarch64-linux-gnu-gcc -O2 -Wall -Wextra -o "$common_pkg/usr/bin/tb321fu-haptic-test" "$helper_src"
+    chmod 0755 "$common_pkg/usr/bin/tb321fu-haptic-test"
+    strip_if_requested "$common_pkg/usr/bin/tb321fu-haptic-test"
   fi
 
-  strip_if_requested "$pkg/usr/lib/modules/$kernel_release/extra/aw86937-haptics.ko"
-  write_control "$pkg"
-  write_maintainer_scripts "$pkg"
+  strip_if_requested "$module_pkg/usr/lib/modules/$kernel_release/extra/aw86937-haptics.ko"
+  write_common_control "$common_pkg"
+  write_common_maintainer_scripts "$common_pkg"
+  write_module_control "$module_pkg" "$module_package"
+  write_module_maintainer_scripts "$module_pkg"
 
-  find "$pkg" -type d -exec chmod 0755 {} +
-  deb="$OUTPUT_DIR/tb321fu-haptics_${HAPTICS_DEB_VERSION}_${ARCH}.deb"
-  dpkg-deb --build --root-owner-group "$pkg" "$deb" >/dev/null
-  sha256sum "$deb"
+  find "$common_pkg" "$module_pkg" -type d -exec chmod 0755 {} +
+  ci_normalize_package_tree "$common_pkg"
+  ci_normalize_package_tree "$module_pkg"
+  common_deb="$OUTPUT_DIR/tb321fu-haptics-common_${HAPTICS_DEB_VERSION}_${ARCH}.deb"
+  module_deb="$OUTPUT_DIR/${module_package}_${HAPTICS_DEB_VERSION}_${ARCH}.deb"
+  dpkg-deb --build --root-owner-group "$common_pkg" "$common_deb" >/dev/null
+  dpkg-deb --build --root-owner-group "$module_pkg" "$module_deb" >/dev/null
+  sha256sum "$common_deb" "$module_deb"
 }
 
 prepare_inputs
 build_haptics_package
 
 ci_log "writing haptics package checksums"
-(cd "$OUTPUT_DIR" && sha256sum ./*.deb > SHA256SUMS-tb321fu-haptics-debs.txt)
+(cd "$OUTPUT_DIR" && \
+  sha256sum ./tb321fu-haptics-common_*.deb ./tb321fu-haptics-modules-*.deb > \
+    SHA256SUMS-tb321fu-haptics-debs.txt)
 ci_log "haptics package build complete: $OUTPUT_DIR"

@@ -36,6 +36,7 @@ OUTPUT_DIR=${OUTPUT_DIR:-out/tb321fu-camera-stack-debs}
 ARCH=${ARCH:-arm64}
 CAMERA_STACK_DEB_VERSION=${CAMERA_STACK_DEB_VERSION:-20260627.4}
 CAMERA_STACK_ARCHIVE=${CAMERA_STACK_ARCHIVE:-}
+CAMERA_STACK_ARCHIVE_SHA256=${CAMERA_STACK_ARCHIVE_SHA256:-}
 CAMERA_STACK_DIR=${CAMERA_STACK_DIR:-}
 
 [ "$ARCH" = arm64 ] || ci_die "unsupported ARCH=$ARCH; only arm64 is supported"
@@ -45,24 +46,18 @@ OUTPUT_DIR=$(ci_abs_path "$OUTPUT_DIR")
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/tb321fu-camera-stack-build.XXXXXX")
 
 cleanup() {
-  rm -rf "$work_dir"
+  ci_safe_rmtree "$work_dir" "${TMPDIR:-/tmp}" tb321fu-camera-stack-build.
 }
 trap cleanup EXIT
 
 find_camera_source_root() {
-  local root=$1 found
+  local root=$1 found candidate
+  local -a markers=() candidates=()
+  local -A seen=()
 
   if [ -d "$root/rootfs-overlay/opt/libcamera-y700" ] && \
      [ -f "$root/rootfs-overlay/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so" ]; then
     printf '%s\n' "$root"
-    return 0
-  fi
-
-  found=$(find "$root" -type f -path '*/rootfs-overlay/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so' -print -quit)
-  if [ -n "$found" ]; then
-    found=${found%/rootfs-overlay/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so}
-    [ -d "$found/rootfs-overlay/opt/libcamera-y700" ] || return 1
-    printf '%s\n' "$found"
     return 0
   fi
 
@@ -72,7 +67,33 @@ find_camera_source_root() {
     return 0
   fi
 
-  return 1
+  mapfile -d '' -t markers < <(find "$root" -type f \
+    -path '*/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so' -print0 | sort -z)
+  for found in "${markers[@]}"; do
+    case "$found" in
+      */rootfs-overlay/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so)
+        candidate=${found%/rootfs-overlay/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so}
+        [ -d "$candidate/rootfs-overlay/opt/libcamera-y700" ] || continue
+        ;;
+      *)
+        candidate=${found%/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so}
+        [ -d "$candidate/opt/libcamera-y700" ] || continue
+        ;;
+    esac
+    if [ -z "${seen[$candidate]+set}" ]; then
+      seen[$candidate]=1
+      candidates+=("$candidate")
+    fi
+  done
+  case ${#candidates[@]} in
+    0) return 1 ;;
+    1) printf '%s\n' "${candidates[0]}" ;;
+    *)
+      printf 'ambiguous camera source roots:\n' >&2
+      printf '  %s\n' "${candidates[@]}" >&2
+      return 2
+      ;;
+  esac
 }
 
 prepare_inputs() {
@@ -84,7 +105,7 @@ prepare_inputs() {
   elif [ -n "$CAMERA_STACK_ARCHIVE" ]; then
     archive="$work_dir/camera-stack.archive"
     extract="$work_dir/camera-stack"
-    ci_download "$CAMERA_STACK_ARCHIVE" "$archive"
+    ci_download "$CAMERA_STACK_ARCHIVE" "$archive" "$CAMERA_STACK_ARCHIVE_SHA256"
     ci_extract_archive "$archive" "$extract"
     camera_source_root=$(find_camera_source_root "$extract") || ci_die "CAMERA_STACK_ARCHIVE does not contain the verified camera overlay"
   else
@@ -238,6 +259,7 @@ build_camera_package() {
   validate_camera_payload "$pkg" ""
 
   find "$pkg" -type d -exec chmod 0755 {} +
+  ci_normalize_package_tree "$pkg"
   dpkg-deb --build --root-owner-group "$pkg" "$deb" >/dev/null
 
   {

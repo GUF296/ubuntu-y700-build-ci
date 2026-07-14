@@ -81,23 +81,15 @@ public:
         m_frequency = new KSysGuard::SensorProperty(QStringLiteral("frequency"), i18nc("@title", "Frequency"), this);
         m_frequency->setPrefix(name());
         m_frequency->setShortName(i18nc("@title, Short for GPU frequency", "GPU Frequency"));
-        m_frequency->setDescription(i18nc("@info", "Current Adreno GPU devfreq frequency"));
+        m_frequency->setDescription(i18nc("@info", "Current Adreno GPU devfreq frequency; zero while the sysfs value is unavailable"));
         m_frequency->setVariantType(QVariant::Double);
         m_frequency->setUnit(KSysGuard::UnitMegaHertz);
-
-        const auto [minMhz, maxMhz] = readGpuFrequencyRangeMhz();
-        if (minMhz > 0.0) {
-            m_frequency->setMin(minMhz);
-        }
-        if (maxMhz > 0.0) {
-            m_frequency->setMax(maxMhz);
-        }
-        m_maxFrequencyMhz = maxMhz;
+        m_frequency->setMin(0.0);
 
         m_frequencyPercent = new KSysGuard::SensorProperty(QStringLiteral("usage"), i18nc("@title", "Frequency Usage"), this);
         m_frequencyPercent->setPrefix(name());
-        m_frequencyPercent->setShortName(i18nc("@title, Short for GPU frequency usage", "GPU Usage"));
-        m_frequencyPercent->setDescription(i18nc("@info", "Current Adreno GPU frequency as a percentage of the maximum devfreq frequency"));
+        m_frequencyPercent->setShortName(i18nc("@title, Short for GPU frequency percentage", "GPU Frequency %"));
+        m_frequencyPercent->setDescription(i18nc("@info", "Current Adreno GPU clock as a percentage of the maximum devfreq frequency; this is not GPU busy utilization"));
         m_frequencyPercent->setVariantType(QVariant::Double);
         m_frequencyPercent->setUnit(KSysGuard::UnitPercent);
         m_frequencyPercent->setMin(0.0);
@@ -110,15 +102,34 @@ public:
     {
         bool ok = false;
         const double mhz = readGpuFrequencyMhz(ok);
-        if (ok) {
-            m_frequency->setValue(mhz);
-            if (m_maxFrequencyMhz > 0.0) {
-                m_frequencyPercent->setValue(std::clamp((mhz / m_maxFrequencyMhz) * 100.0, 0.0, 100.0));
-            }
+        if (!ok) {
+            m_frequency->setValue(0.0);
+            m_frequencyPercent->setValue(0.0);
+            return;
+        }
+
+        refreshFrequencyRange(mhz);
+        m_frequency->setValue(mhz);
+        if (m_maxFrequencyMhz > 0.0) {
+            m_frequencyPercent->setValue(std::clamp((mhz / m_maxFrequencyMhz) * 100.0, 0.0, 100.0));
+        } else {
+            m_frequencyPercent->setValue(0.0);
         }
     }
 
 private:
+    void refreshFrequencyRange(double observedMhz)
+    {
+        const auto range = readGpuFrequencyRangeMhz();
+        if (range.second > 0.0) {
+            m_maxFrequencyMhz = range.second;
+        }
+        m_maxFrequencyMhz = std::max(m_maxFrequencyMhz, observedMhz);
+        if (m_maxFrequencyMhz > 0.0) {
+            m_frequency->setMax(m_maxFrequencyMhz);
+        }
+    }
+
     KSysGuard::SensorProperty *m_name = nullptr;
     KSysGuard::SensorProperty *m_frequency = nullptr;
     KSysGuard::SensorProperty *m_frequencyPercent = nullptr;
@@ -135,9 +146,8 @@ public:
     {
         m_container = new KSysGuard::SensorContainer(QStringLiteral("gpu"), i18nc("@title", "GPU"), this);
 
-        if (QFile::exists(QString::fromLatin1(gpuFreqPath))) {
-            m_gpu = new Tb321fuGpuObject(m_container);
-        }
+        // Register the sensors even when devfreq probes after KSystemStats starts.
+        m_gpu = new Tb321fuGpuObject(m_container);
     }
 
     void update() override

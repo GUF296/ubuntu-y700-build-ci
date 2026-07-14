@@ -43,8 +43,10 @@ OUTPUT_DIR=${OUTPUT_DIR:-out/y700-sensor-debs}
 ARCH=${ARCH:-arm64}
 SENSOR_DEB_VERSION=${SENSOR_DEB_VERSION:-20260626.1}
 SENSOR_SOURCE_ARCHIVE=${SENSOR_SOURCE_ARCHIVE:-}
+SENSOR_SOURCE_ARCHIVE_SHA256=${SENSOR_SOURCE_ARCHIVE_SHA256:-}
 SENSOR_SOURCE_DIR=${SENSOR_SOURCE_DIR:-}
 SENSOR_BASELINE_OVERLAY_ARCHIVE=${SENSOR_BASELINE_OVERLAY_ARCHIVE:-}
+SENSOR_BASELINE_OVERLAY_ARCHIVE_SHA256=${SENSOR_BASELINE_OVERLAY_ARCHIVE_SHA256:-}
 SENSOR_BASELINE_OVERLAY_DIR=${SENSOR_BASELINE_OVERLAY_DIR:-}
 SENSOR_STRIP=${SENSOR_STRIP:-0}
 
@@ -52,10 +54,21 @@ SENSOR_STRIP=${SENSOR_STRIP:-0}
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR=$(ci_abs_path "$OUTPUT_DIR")
+rm -f -- \
+  "$OUTPUT_DIR"/qcom-sns-*.deb \
+  "$OUTPUT_DIR"/tb321fu-sensors_*.deb \
+  "$OUTPUT_DIR"/SHA256SUMS-y700-sensor-debs.txt
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/y700-sensor-build.XXXXXX")
+SOURCE_DATE_EPOCH=$(ci_source_date_epoch)
+export SOURCE_DATE_EPOCH
+mapfile -t reproducible_prefix_flags < <(
+  ci_reproducible_prefix_flags "$work_dir" /build/tb321fu-sensors
+)
+export CFLAGS="${CFLAGS:+$CFLAGS }${reproducible_prefix_flags[*]}"
+export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }${reproducible_prefix_flags[*]}"
 
 cleanup() {
-  rm -rf "$work_dir"
+  ci_safe_rmtree "$work_dir" "${TMPDIR:-/tmp}" y700-sensor-build.
 }
 trap cleanup EXIT
 
@@ -73,41 +86,42 @@ copy_source() {
 }
 
 find_sensor_source_root() {
-  local root=$1
-  local found
+  local root=$1 marker found
+  local -a candidates=()
 
-  if [ -d "$root/sensor/daily-current/libssc" ] && \
-     [ -d "$root/sensor/daily-current/iio-sensor-proxy" ] && \
-     [ -d "$root/sensor/daily-current/hexagonrpc" ]; then
-    printf '%s\n' "$root"
-    return 0
-  fi
+  marker=/sensor/daily-current/libssc
+  while IFS= read -r -d '' found; do
+    found=${found%"$marker"}
+    [ -d "$found/sensor/daily-current/iio-sensor-proxy" ] || continue
+    [ -d "$found/sensor/daily-current/hexagonrpc" ] || continue
+    candidates+=("$found")
+  done < <(find -H "$root" -type d -path "*$marker" -print0)
 
-  found=$(find "$root" -type d -path '*/sensor/daily-current/libssc' -print -quit)
-  [ -n "$found" ] || return 1
-  found=${found%/sensor/daily-current/libssc}
-
-  [ -d "$found/sensor/daily-current/iio-sensor-proxy" ] || return 1
-  [ -d "$found/sensor/daily-current/hexagonrpc" ] || return 1
-  printf '%s\n' "$found"
+  [ "${#candidates[@]}" -eq 1 ] || {
+    printf 'expected exactly one sensor source root below %s, found %s\n' \
+      "$root" "${#candidates[@]}" >&2
+    return 1
+  }
+  printf '%s\n' "${candidates[0]}"
 }
 
 find_baseline_overlay_root() {
-  local root=$1
-  local found
+  local root=$1 marker found
+  local -a candidates=()
 
-  if [ -d "$root/usr/local/share/y700-sns/hexagonfs/sensors/registry" ] && \
-     [ -d "$root/usr/local/share/y700-sns/hexagonfs/sensors/config" ]; then
-    printf '%s\n' "$root"
-    return 0
-  fi
+  marker=/usr/local/share/y700-sns/hexagonfs/sensors/registry
+  while IFS= read -r -d '' found; do
+    found=${found%"$marker"}
+    [ -d "$found/usr/local/share/y700-sns/hexagonfs/sensors/config" ] || continue
+    candidates+=("$found")
+  done < <(find -H "$root" -type d -path "*$marker" -print0)
 
-  found=$(find "$root" -type d -path '*/rootfs-overlay/usr/local/share/y700-sns/hexagonfs/sensors/registry' -print -quit)
-  [ -n "$found" ] || return 1
-  found=${found%/usr/local/share/y700-sns/hexagonfs/sensors/registry}
-
-  [ -d "$found/usr/local/share/y700-sns/hexagonfs/sensors/config" ] || return 1
-  printf '%s\n' "$found"
+  [ "${#candidates[@]}" -eq 1 ] || {
+    printf 'expected exactly one sensor baseline root below %s, found %s\n' \
+      "$root" "${#candidates[@]}" >&2
+    return 1
+  }
+  printf '%s\n' "${candidates[0]}"
 }
 
 prepare_inputs() {
@@ -119,7 +133,7 @@ prepare_inputs() {
     [ -n "$SENSOR_SOURCE_ARCHIVE" ] || ci_die "set SENSOR_SOURCE_ARCHIVE or SENSOR_SOURCE_DIR"
     src_archive="$work_dir/sensor-source.archive"
     src_extract="$work_dir/sensor-source"
-    ci_download "$SENSOR_SOURCE_ARCHIVE" "$src_archive"
+    ci_download "$SENSOR_SOURCE_ARCHIVE" "$src_archive" "$SENSOR_SOURCE_ARCHIVE_SHA256"
     ci_extract_archive "$src_archive" "$src_extract"
     source_root=$(find_sensor_source_root "$src_extract") || ci_die "SENSOR_SOURCE_ARCHIVE does not contain sensor/daily-current sources"
   fi
@@ -130,7 +144,7 @@ prepare_inputs() {
     [ -n "$SENSOR_BASELINE_OVERLAY_ARCHIVE" ] || ci_die "set SENSOR_BASELINE_OVERLAY_ARCHIVE or SENSOR_BASELINE_OVERLAY_DIR"
     baseline_archive="$work_dir/sensor-baseline-overlay.archive"
     baseline_extract="$work_dir/sensor-baseline-overlay"
-    ci_download "$SENSOR_BASELINE_OVERLAY_ARCHIVE" "$baseline_archive"
+    ci_download "$SENSOR_BASELINE_OVERLAY_ARCHIVE" "$baseline_archive" "$SENSOR_BASELINE_OVERLAY_ARCHIVE_SHA256"
     ci_extract_archive "$baseline_archive" "$baseline_extract"
     baseline_root=$(find_baseline_overlay_root "$baseline_extract") || ci_die "SENSOR_BASELINE_OVERLAY_ARCHIVE does not contain verified sensor overlay"
   fi
@@ -284,6 +298,7 @@ build_deb() {
   local deb="$OUTPUT_DIR/${name}_${SENSOR_DEB_VERSION}_${ARCH}.deb"
 
   find "$pkgdir" -type d -exec chmod 0755 {} +
+  ci_normalize_package_tree "$pkgdir"
   dpkg-deb --build --root-owner-group "$pkgdir" "$deb" >/dev/null
   sha256sum "$deb"
 }
@@ -460,6 +475,12 @@ REGISTRY="$PERSIST/sensors/registry/registry"
 LOGDIR=/var/log/qcom-sns
 LOG="$LOGDIR/hexagonrpcd-init.log"
 
+for path in "$PERSIST" "$PERSIST/sensors" "$PERSIST/sensors/registry" "$LOGDIR"; do
+  if [ -L "$path" ]; then
+    echo "refusing symlinked state path $path" >&2
+    exit 1
+  fi
+done
 mkdir -p "$REGISTRY" "$LOGDIR"
 
 pre_count=$(find "$REGISTRY" -type f 2>/dev/null | wc -l)
@@ -490,8 +511,8 @@ if [ ! -d "$ROOT/sensors/registry" ] || [ ! -d "$ROOT/sensors/config" ]; then
   exit 1
 fi
 
-tmp_log="$LOG.tmp"
-rm -f "$tmp_log"
+tmp_log=$(mktemp "$LOGDIR/.hexagonrpcd-init.XXXXXX")
+trap 'rm -f "$tmp_log"' 0 1 2 15
 
 rc=0
 timeout 45 "$HEXAGONRPCD" \
@@ -506,11 +527,9 @@ count=$(find "$REGISTRY" -type f 2>/dev/null | wc -l)
 if [ "$count" -lt 200 ]; then
   cat "$tmp_log" >>"$LOG"
   echo "registry_files=$count hexagonrpcd_rc=$rc" >>"$LOG"
-  rm -f "$tmp_log"
   exit 1
 fi
 
-rm -f "$tmp_log"
 exit 0
 EOF_INIT
   chmod 0755 "$pkg/usr/libexec/qcom-sns/qcom-sns-init"
@@ -520,13 +539,18 @@ EOF_INIT
 [Unit]
 Description=Initialize Qualcomm SNS registry for Lenovo TB321FU
 After=qrtr-ns.service dbus.service
+Wants=qrtr-ns.service
 Before=iio-sensor-proxy.service
 Conflicts=y700-sns-init.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/qcom-sns/qcom-sns-init
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=120s
 
 [Install]
 WantedBy=multi-user.target
@@ -539,12 +563,15 @@ After=
 After=qcom-sns-init.service
 Requires=
 Requires=qcom-sns-init.service
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=
 ExecStart=/usr/libexec/iio-sensor-proxy
 Environment=
 RestrictAddressFamilies=AF_UNIX AF_LOCAL AF_NETLINK AF_QIPCRTR
+Restart=on-failure
+RestartSec=5s
 EOF_DROPIN
 
   install -d -m 0755 "$pkg/usr/lib/udev/rules.d"

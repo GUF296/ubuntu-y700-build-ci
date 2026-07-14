@@ -24,6 +24,7 @@ Environment inputs:
   BOOT_IMAGE_SIZE            default: 14G
   BOOT_FAT_BITS              12|16|32, default: 32
   BOOT_FAT_LABEL             default: Y700GRUB
+  BOOT_FAT_VOLUME_ID         fresh-image 8-hex volume id, default: 00000000
   BOOT_SECTOR_SIZE           default: 512
   BOOT_CLUSTER_SECTORS       optional mkfs.vfat -s value
   KERNEL_IMAGE               required unless KERNEL_ARTIFACT_ARCHIVE supplies Image
@@ -57,16 +58,18 @@ fi
 
 ci_require_cmd mkfs.vfat
 ci_require_cmd mcopy
-ci_require_cmd mmd
 ci_require_cmd mdir
 ci_require_cmd sha256sum
 
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-grub}
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-y700}
+ci_validate_output_prefix "$OUTPUT_PREFIX"
 BOOT_TEMPLATE_IMAGE=${BOOT_TEMPLATE_IMAGE:-${BOOT_TEMPLATE_IMAGE_URL:-}}
+BOOT_TEMPLATE_IMAGE_SHA256=${BOOT_TEMPLATE_IMAGE_SHA256:-}
 BOOT_IMAGE_SIZE=${BOOT_IMAGE_SIZE:-14G}
 BOOT_FAT_BITS=${BOOT_FAT_BITS:-32}
 BOOT_FAT_LABEL=${BOOT_FAT_LABEL:-Y700GRUB}
+BOOT_FAT_VOLUME_ID=${BOOT_FAT_VOLUME_ID:-00000000}
 BOOT_SECTOR_SIZE=${BOOT_SECTOR_SIZE:-512}
 GRUB_TIMEOUT=${GRUB_TIMEOUT:-3}
 ROOT_PARTLABEL=${ROOT_PARTLABEL:-userdata}
@@ -76,50 +79,86 @@ QCOMRAMP_CFG_NAME=${QCOMRAMP_CFG_NAME:-qcomramp.cfg}
 BOOT_COMPRESS=${BOOT_COMPRESS:-7z}
 BOOT_CHUNK_SIZE=${BOOT_CHUNK_SIZE:-}
 KEEP_BOOT_IMAGE=${KEEP_BOOT_IMAGE:-0}
+KERNEL_ARTIFACT_ARCHIVE_SHA256=${KERNEL_ARTIFACT_ARCHIVE_SHA256:-}
+BOOTAA64_EFI_SHA256=${BOOTAA64_EFI_SHA256:-}
+QCOMRAMP_EFI_SHA256=${QCOMRAMP_EFI_SHA256:-}
+[[ $BOOT_FAT_VOLUME_ID =~ ^[A-Fa-f0-9]{8}$ ]] || ci_die "invalid BOOT_FAT_VOLUME_ID=$BOOT_FAT_VOLUME_ID"
+SOURCE_DATE_EPOCH=$(ci_source_date_epoch)
+export SOURCE_DATE_EPOCH
+generated_timestamp=$(ci_iso8601_timestamp)
 
 mkdir -p "$OUTPUT_DIR"
 work_dir=$(mktemp -d "$OUTPUT_DIR/.grub-build.XXXXXX")
 payload_dir="$work_dir/payload"
 mkdir -p "$payload_dir/EFI/BOOT" "$payload_dir/dtb"
-trap 'rm -rf "$work_dir"' EXIT
+cleanup() {
+  ci_safe_rmtree "$work_dir" "$OUTPUT_DIR" .grub-build.
+}
+trap cleanup EXIT
+
+find_unique_artifact() {
+  local -n result=$1
+  local root=$2 pattern=$3 label=$4
+  local -a matches=()
+  mapfile -d '' -t matches < <(find "$root" -type f -name "$pattern" -print0 | sort -z)
+  case ${#matches[@]} in
+    0) result= ;;
+    1) result=${matches[0]} ;;
+    *)
+      printf 'ambiguous %s candidates in artifact archive:\n' "$label" >&2
+      printf '  %s\n' "${matches[@]}" >&2
+      ci_die "artifact archive must contain at most one $label"
+      ;;
+  esac
+}
 
 download_template_if_needed() {
   local src=$1
-  local dst=$2
+  local dst=$2 verifier=$3
   [ -n "$src" ] || return 1
-  ci_download "$src" "$dst"
+  ci_download "$src" "$dst" "$verifier"
 }
 
 if [ -n "${KERNEL_ARTIFACT_ARCHIVE:-}" ]; then
   archive="$work_dir/kernel-artifacts.archive"
-  ci_download "$KERNEL_ARTIFACT_ARCHIVE" "$archive"
+  ci_download "$KERNEL_ARTIFACT_ARCHIVE" "$archive" "$KERNEL_ARTIFACT_ARCHIVE_SHA256"
   ci_extract_archive "$archive" "$work_dir/kernel-artifacts"
-  KERNEL_IMAGE=${KERNEL_IMAGE:-$(find "$work_dir/kernel-artifacts" -type f -name Image | head -n1 || true)}
   DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
-  DTB_FILE=${DTB_FILE:-$(find "$work_dir/kernel-artifacts" -type f -name "$DTB_NAME" | head -n1 || true)}
-  KERNEL_CONFIG=${KERNEL_CONFIG:-$(find "$work_dir/kernel-artifacts" -type f -name kernel.config | head -n1 || true)}
+  if [ -z "${KERNEL_IMAGE:-}" ]; then
+    find_unique_artifact KERNEL_IMAGE "$work_dir/kernel-artifacts" Image 'kernel Image'
+  fi
+  if [ -z "${DTB_FILE:-}" ]; then
+    find_unique_artifact DTB_FILE "$work_dir/kernel-artifacts" "$DTB_NAME" 'device tree'
+  fi
+  if [ -z "${KERNEL_CONFIG:-}" ]; then
+    find_unique_artifact KERNEL_CONFIG "$work_dir/kernel-artifacts" kernel.config 'kernel config'
+  fi
 fi
 
 if [ -n "${BOOTAA64_EFI_URL:-}" ]; then
   BOOTAA64_EFI="$work_dir/BOOTAA64.EFI"
-  ci_download "$BOOTAA64_EFI_URL" "$BOOTAA64_EFI"
+  ci_download "$BOOTAA64_EFI_URL" "$BOOTAA64_EFI" "$BOOTAA64_EFI_SHA256"
 fi
 if [ -n "${QCOMRAMP_EFI_URL:-}" ]; then
   QCOMRAMP_EFI="$work_dir/QCOMRAMP.EFI"
-  ci_download "$QCOMRAMP_EFI_URL" "$QCOMRAMP_EFI"
+  ci_download "$QCOMRAMP_EFI_URL" "$QCOMRAMP_EFI" "$QCOMRAMP_EFI_SHA256"
 fi
 
 [ -n "${KERNEL_IMAGE:-}" ] && [ -f "$KERNEL_IMAGE" ] || ci_die "KERNEL_IMAGE is required"
 [ -n "${DTB_FILE:-}" ] && [ -f "$DTB_FILE" ] || ci_die "DTB_FILE is required"
 [ -n "$BOOT_TEMPLATE_IMAGE" ] || { [ -n "${BOOTAA64_EFI:-}" ] && [ -f "$BOOTAA64_EFI" ]; } || ci_die "BOOTAA64_EFI or BOOTAA64_EFI_URL is required without BOOT_TEMPLATE_IMAGE"
 DTB_NAME=${DTB_NAME:-$(basename "$DTB_FILE")}
+y700_validate_dtb_name "$DTB_NAME"
+y700_validate_timeout "$GRUB_TIMEOUT"
 
 case "$ROOT_SELECTOR" in
   partlabel)
+    [[ $ROOT_PARTLABEL =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$ ]] || ci_die "unsafe ROOT_PARTLABEL=$ROOT_PARTLABEL"
     generated_rootargs="root=PARTLABEL=$ROOT_PARTLABEL rw rootwait"
     ;;
   uuid)
     [ -n "${ROOT_UUID:-}" ] || ci_die "ROOT_SELECTOR=uuid requires ROOT_UUID"
+    [[ $ROOT_UUID =~ ^[0-9A-Fa-f-]{4,64}$ ]] || ci_die "unsafe ROOT_UUID=$ROOT_UUID"
     generated_rootargs="root=UUID=$ROOT_UUID rw rootwait"
     ;;
   raw)
@@ -134,6 +173,8 @@ fi
 if [ -n "${ROOTARGS_EXTRA:-}" ]; then
   generated_rootargs="$generated_rootargs $ROOTARGS_EXTRA"
 fi
+y700_validate_kernel_args rootargs "$generated_rootargs"
+y700_validate_kernel_args stableargs "$STABLEARGS"
 
 if [ -n "${BOOTAA64_EFI:-}" ] && [ -f "$BOOTAA64_EFI" ]; then
   cp -a "$BOOTAA64_EFI" "$payload_dir/EFI/BOOT/BOOTAA64.EFI"
@@ -146,6 +187,8 @@ fi
 
 if [ -n "${QCOMRAMP_EFI:-}" ]; then
   [ -f "$QCOMRAMP_EFI" ] || ci_die "QCOMRAMP_EFI does not exist: $QCOMRAMP_EFI"
+  y700_validate_cfg_name "$QCOMRAMP_CFG_NAME"
+  y700_validate_efi_name "$Y700_DIRECT_BOOT_EFI_NAME"
   cp -a "$QCOMRAMP_EFI" "$payload_dir/EFI/BOOT/$Y700_DIRECT_BOOT_EFI_NAME"
   y700_write_direct_grub_cfg "$payload_dir/EFI/BOOT/$QCOMRAMP_CFG_NAME" "$DTB_NAME" "$generated_rootargs" "$STABLEARGS"
   y700_write_outer_grub_cfg "$payload_dir/EFI/BOOT/grub.cfg" "$GRUB_TIMEOUT" "$Y700_DIRECT_BOOT_EFI_NAME"
@@ -154,7 +197,7 @@ elif [ -z "$BOOT_TEMPLATE_IMAGE" ]; then
 fi
 
 cat > "$payload_dir/BOOT-INFO.txt" <<INFO
-generated=$(date -u -Iseconds)
+generated=$generated_timestamp
 boot_template_image=${BOOT_TEMPLATE_IMAGE:-}
 boot_image_size=$BOOT_IMAGE_SIZE
 boot_fat_bits=$BOOT_FAT_BITS
@@ -172,26 +215,29 @@ qcomramp_source=${QCOMRAMP_EFI:-from-template}
 qcomramp_cfg_name=$QCOMRAMP_CFG_NAME
 INFO
 (cd "$payload_dir" && find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum) > "$payload_dir/SHA256SUMS.txt"
+ci_normalize_fat_tree "$payload_dir"
 
 boot_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-grub-fat.img"
 rm -f "$boot_img"
 if [ -n "$BOOT_TEMPLATE_IMAGE" ]; then
   template_img="$work_dir/boot-template.img"
   ci_log "using verified boot template image: $BOOT_TEMPLATE_IMAGE"
-  download_template_if_needed "$BOOT_TEMPLATE_IMAGE" "$template_img"
+  download_template_if_needed "$BOOT_TEMPLATE_IMAGE" "$template_img" "$BOOT_TEMPLATE_IMAGE_SHA256"
   cp -a "$template_img" "$boot_img"
 
   mdir -i "$boot_img" ::/EFI/BOOT >/dev/null
   mdir -i "$boot_img" ::/dtb >/dev/null
   mdir -i "$boot_img" ::/boot/grub/arm64-efi >/dev/null
-  mcopy -o -i "$boot_img" "$payload_dir/Image" ::/Image
-  mcopy -o -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" "::/dtb/$DTB_NAME"
-  mcopy -o -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" ::/dtb/platform.dtb
+  mcopy -o -m -i "$boot_img" "$payload_dir/Image" ::/Image
+  mcopy -o -m -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" "::/dtb/$DTB_NAME"
+  mcopy -o -m -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" ::/dtb/platform.dtb
   if [ -f "$payload_dir/EFI/BOOT/BOOTAA64.EFI" ]; then
-    mcopy -o -i "$boot_img" "$payload_dir/EFI/BOOT/BOOTAA64.EFI" ::/EFI/BOOT/BOOTAA64.EFI
+    mcopy -o -m -i "$boot_img" "$payload_dir/EFI/BOOT/BOOTAA64.EFI" ::/EFI/BOOT/BOOTAA64.EFI
   fi
   if [ -n "${QCOMRAMP_EFI:-}" ] && [ -f "$QCOMRAMP_EFI" ]; then
-    mcopy -o -i "$boot_img" "$QCOMRAMP_EFI" ::/EFI/BOOT/$Y700_DIRECT_BOOT_EFI_NAME
+    mcopy -o -m -i "$boot_img" "$QCOMRAMP_EFI" ::/EFI/BOOT/$Y700_DIRECT_BOOT_EFI_NAME
+    mcopy -o -m -i "$boot_img" "$payload_dir/EFI/BOOT/$QCOMRAMP_CFG_NAME" "::/EFI/BOOT/$QCOMRAMP_CFG_NAME"
+    mcopy -o -m -i "$boot_img" "$payload_dir/EFI/BOOT/grub.cfg" ::/EFI/BOOT/grub.cfg
   fi
   mkdir -p "$payload_dir/boot/grub/arm64-efi"
   cat > "$payload_dir/boot/grub/arm64-efi/grub.cfg" <<EOF
@@ -217,27 +263,27 @@ menuentry "Y700 no-DRM SSH rescue" {
 }
 EOF
   (cd "$payload_dir" && find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum) > "$payload_dir/SHA256SUMS.txt"
-  mcopy -o -i "$boot_img" "$payload_dir/boot/grub/arm64-efi/grub.cfg" ::/boot/grub/arm64-efi/grub.cfg
+  ci_normalize_fat_tree "$payload_dir"
+  mcopy -o -m -i "$boot_img" "$payload_dir/boot/grub/arm64-efi/grub.cfg" ::/boot/grub/arm64-efi/grub.cfg
   if [ -f "$payload_dir/kernel.config" ]; then
-    mcopy -o -i "$boot_img" "$payload_dir/kernel.config" ::/kernel.config
+    mcopy -o -m -i "$boot_img" "$payload_dir/kernel.config" ::/kernel.config
   fi
-  mcopy -o -i "$boot_img" "$payload_dir/BOOT-INFO.txt" "$payload_dir/SHA256SUMS.txt" ::/
+  mcopy -o -m -i "$boot_img" "$payload_dir/BOOT-INFO.txt" "$payload_dir/SHA256SUMS.txt" ::/
 else
   truncate -s "$BOOT_IMAGE_SIZE" "$boot_img"
-  mkfs_args=(-F "$BOOT_FAT_BITS" -S "$BOOT_SECTOR_SIZE" -n "$BOOT_FAT_LABEL")
+  mkfs_args=(--invariant -F "$BOOT_FAT_BITS" -S "$BOOT_SECTOR_SIZE" -n "$BOOT_FAT_LABEL" -i "$BOOT_FAT_VOLUME_ID")
   if [ -n "${BOOT_CLUSTER_SECTORS:-}" ]; then
     mkfs_args+=(-s "$BOOT_CLUSTER_SECTORS")
   fi
   mkfs.vfat "${mkfs_args[@]}" "$boot_img"
 
   ci_log "copying boot payload into FAT image"
-  mmd -i "$boot_img" ::/EFI ::/EFI/BOOT ::/dtb
-  mcopy -i "$boot_img" "$payload_dir/Image" "$payload_dir/BOOT-INFO.txt" "$payload_dir/SHA256SUMS.txt" ::/
+  mcopy -m -i "$boot_img" "$payload_dir/Image" "$payload_dir/BOOT-INFO.txt" "$payload_dir/SHA256SUMS.txt" ::/
   if [ -f "$payload_dir/kernel.config" ]; then
-    mcopy -i "$boot_img" "$payload_dir/kernel.config" ::/
+    mcopy -m -i "$boot_img" "$payload_dir/kernel.config" ::/
   fi
-  mcopy -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" ::/dtb/
-  mcopy -i "$boot_img" "$payload_dir/EFI/BOOT/"* ::/EFI/BOOT/
+  mcopy -s -m -i "$boot_img" "$payload_dir/dtb" ::/
+  mcopy -s -m -i "$boot_img" "$payload_dir/EFI" ::/
 fi
 
 raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-grub-fat.raw.sha256"
@@ -264,10 +310,10 @@ case "$BOOT_COMPRESS" in
     sevenz_out="$boot_img.7z"
     rm -f "$sevenz_out" "$sevenz_out".*
     if [ -n "${BOOT_CHUNK_SIZE:-}" ]; then
-      7z a "$sevenz_out" "$boot_img" -t7z -m0=lzma2 -mx=9 -mmt=on "-v$BOOT_CHUNK_SIZE" >/dev/null
+      7z a "$sevenz_out" "$boot_img" -t7z -m0=lzma2 -mx=9 -mmt=on -mtm=off -mta=off -mtc=off "-v$BOOT_CHUNK_SIZE" >/dev/null
       (cd "$OUTPUT_DIR" && sha256sum "$(basename "$sevenz_out")".* >> "$(basename "$checksum_file")")
     else
-      7z a "$sevenz_out" "$boot_img" -t7z -m0=lzma2 -mx=9 -mmt=on >/dev/null
+      7z a "$sevenz_out" "$boot_img" -t7z -m0=lzma2 -mx=9 -mmt=on -mtm=off -mta=off -mtc=off >/dev/null
       (cd "$OUTPUT_DIR" && sha256sum "$(basename "$sevenz_out")" >> "$(basename "$checksum_file")")
     fi
     ;;
