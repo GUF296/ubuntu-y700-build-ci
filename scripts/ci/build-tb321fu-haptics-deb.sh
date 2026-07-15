@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/common.sh"
+. "$SCRIPT_DIR/system-payload-policy.sh"
 
 usage() {
   cat <<USAGE
@@ -36,6 +37,7 @@ ci_require_cmd sha256sum
 ci_require_cmd aarch64-linux-gnu-gcc
 ci_require_cmd aarch64-linux-gnu-strip
 ci_require_cmd modinfo
+ci_require_cmd patch
 ci_require_cmd cut
 ci_require_cmd sed
 ci_require_cmd tr
@@ -62,6 +64,7 @@ rm -f -- \
   "$OUTPUT_DIR"/tb321fu-haptics_*.deb \
   "$OUTPUT_DIR"/tb321fu-haptics-common_*.deb \
   "$OUTPUT_DIR"/tb321fu-haptics-modules-*.deb \
+  "$OUTPUT_DIR"/HAPTICS-SOURCE-LOCK.tsv \
   "$OUTPUT_DIR"/SHA256SUMS-tb321fu-haptics-debs.txt
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/tb321fu-haptics-build.XXXXXX")
 SOURCE_DATE_EPOCH=$(ci_source_date_epoch)
@@ -230,7 +233,8 @@ if command -v systemctl >/dev/null 2>&1; then
   rm -f /etc/udev/rules.d/90-y700-haptics.rules
   rm -f /usr/local/sbin/y700-aw86937-bind
   systemctl daemon-reload || true
-  systemctl enable tb321fu-haptics.service >/dev/null 2>&1 || true
+  systemctl enable tb321fu-haptics.service >/dev/null
+  systemctl is-enabled --quiet tb321fu-haptics.service
 fi
 if command -v udevadm >/dev/null 2>&1; then
   udevadm control --reload-rules || true
@@ -466,12 +470,37 @@ build_haptics_package() {
   local module_pkg="$work_dir/pkg/tb321fu-haptics-modules"
   local module="$src/aw86937-haptics.ko"
   local helper_src="$haptics_root/haptics/baseline-20260614-daily-clean/testing-tools/y700-haptic-test.c"
+  local driver_patch="$SCRIPT_DIR/patches/aw86937-cancellable-playback.patch"
   local release_id release_hash module_package common_deb module_deb
+  local source_sha256 build_source_sha256
 
   ci_log "building aw86937-haptics external module"
   mkdir -p "$src"
   cp -a "$haptics_root/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c" "$src/aw86937-haptics.c"
+  source_sha256=$(sha256sum "$src/aw86937-haptics.c" | awk '{print $1}')
+  case "$source_sha256" in
+    c03dcc47b4006e74b441b803b44162f7e715971ea6f7cf8d7c0c92e9f4ead5d4)
+      [ -f "$driver_patch" ] || ci_die "missing AW86937 cancellation patch: $driver_patch"
+      patch --batch --forward --fuzz=0 -d "$src" -p1 < "$driver_patch"
+      ;;
+    2e0cb7b739496ff6cf4011244ec9c0b2a2367896de65784041018b9d62186e48)
+      ;;
+    *)
+      ci_die "AW86937 driver source is neither the tested freeze nor the canonical corrected source: $source_sha256"
+      ;;
+  esac
+  source_sha256=$(sha256sum "$src/aw86937-haptics.c" | awk '{print $1}')
+  [ "$source_sha256" = 2e0cb7b739496ff6cf4011244ec9c0b2a2367896de65784041018b9d62186e48 ] ||
+    ci_die "AW86937 corrected driver source identity mismatch: $source_sha256"
+  grep -q 'wait_event_timeout(haptics->play_wait' "$src/aw86937-haptics.c" ||
+    ci_die "AW86937 driver patch did not install cancellable playback"
+  grep -q 'pm_sleep_ptr(&aw86937_y700_pm_ops)' "$src/aw86937-haptics.c" ||
+    ci_die "AW86937 driver patch did not install PM callbacks"
+  if grep -Eq 'msleep\((duration_ms|play_ms)\)' "$src/aw86937-haptics.c"; then
+    ci_die "AW86937 driver still contains an uninterruptible effect wait"
+  fi
   patch_source_for_standard_module_name "$src/aw86937-haptics.c"
+  build_source_sha256=$(sha256sum "$src/aw86937-haptics.c" | awk '{print $1}')
   cat > "$src/Makefile" <<'EOF_MAKE'
 obj-m := aw86937-haptics.o
 EOF_MAKE
@@ -520,13 +549,23 @@ EOF_MAKE
   write_module_control "$module_pkg" "$module_package"
   write_module_maintainer_scripts "$module_pkg"
 
-  find "$common_pkg" "$module_pkg" -type d -exec chmod 0755 {} +
+  ci_normalize_system_payload_modes "$common_pkg"
+  ci_normalize_system_payload_modes "$module_pkg"
+  ci_assert_normalized_system_payload_modes "$common_pkg"
+  ci_assert_normalized_system_payload_modes "$module_pkg"
+  ci_assert_privileged_payload_security "$common_pkg" \
+    usr/libexec/tb321fu-haptics/bind-aw86937
   ci_normalize_package_tree "$common_pkg"
   ci_normalize_package_tree "$module_pkg"
   common_deb="$OUTPUT_DIR/tb321fu-haptics-common_${HAPTICS_DEB_VERSION}_${ARCH}.deb"
   module_deb="$OUTPUT_DIR/${module_package}_${HAPTICS_DEB_VERSION}_${ARCH}.deb"
   dpkg-deb --build --root-owner-group "$common_pkg" "$common_deb" >/dev/null
   dpkg-deb --build --root-owner-group "$module_pkg" "$module_deb" >/dev/null
+  {
+    printf 'aw86937-driver-sha256\t%s\n' "$source_sha256"
+    printf 'aw86937-build-source-sha256\t%s\n' "$build_source_sha256"
+    printf 'kernel-release\t%s\n' "$kernel_release"
+  } > "$OUTPUT_DIR/HAPTICS-SOURCE-LOCK.tsv"
   sha256sum "$common_deb" "$module_deb"
 }
 
@@ -535,6 +574,7 @@ build_haptics_package
 
 ci_log "writing haptics package checksums"
 (cd "$OUTPUT_DIR" && \
-  sha256sum ./tb321fu-haptics-common_*.deb ./tb321fu-haptics-modules-*.deb > \
+  sha256sum ./tb321fu-haptics-common_*.deb ./tb321fu-haptics-modules-*.deb \
+    ./HAPTICS-SOURCE-LOCK.tsv > \
     SHA256SUMS-tb321fu-haptics-debs.txt)
 ci_log "haptics package build complete: $OUTPUT_DIR"

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+[ "${1:-}" = post ] || exit 0
+[ -e /dev/fastrpc-adsp ] || exit 0
+
+systemctl --no-block restart qcom-sns-init.service iio-sensor-proxy.service

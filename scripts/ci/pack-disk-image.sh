@@ -36,6 +36,10 @@ ci_require_cmd sha256sum
 
 [ -f "$BOOT_IMAGE" ] || ci_die "missing boot image: $BOOT_IMAGE"
 [ -f "$ROOTFS_IMAGE" ] || ci_die "missing rootfs image: $ROOTFS_IMAGE"
+ci_require_distinct_paths \
+  BOOT_IMAGE "$BOOT_IMAGE" \
+  ROOTFS_IMAGE "$ROOTFS_IMAGE" \
+  OUTPUT_IMAGE "$OUTPUT_IMAGE"
 rootfs_input_sha256=$(sha256sum "$ROOTFS_IMAGE" | awk '{print $1}')
 
 ceil_div() { echo $(( ($1 + $2 - 1) / $2 )); }

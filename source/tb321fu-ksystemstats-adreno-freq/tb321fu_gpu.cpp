@@ -7,8 +7,11 @@
 #include <KLocalizedString>
 #include <KPluginFactory>
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QStringList>
+#include <QVariant>
 #include <QVariantList>
 
 #include <systemstats/SensorContainer.h>
@@ -20,32 +23,63 @@
 
 namespace
 {
-constexpr auto gpuFreqPath = "/sys/devices/platform/soc@0/3d00000.gpu/devfreq/3d00000.gpu/cur_freq";
-constexpr auto gpuAvailableFreqPath = "/sys/devices/platform/soc@0/3d00000.gpu/devfreq/3d00000.gpu/available_frequencies";
 constexpr double hzPerMhz = 1000000.0;
 
-double readGpuFrequencyMhz(bool &ok)
+QString readTrimmedFile(const QString &path)
 {
-    ok = false;
-
-    QFile file(QString::fromLatin1(gpuFreqPath));
+    QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        return 0.0;
+        return {};
     }
-
-    bool parsed = false;
-    const qulonglong hz = QString::fromLatin1(file.readAll()).trimmed().toULongLong(&parsed);
-    if (!parsed) {
-        return 0.0;
-    }
-
-    ok = true;
-    return static_cast<double>(hz) / hzPerMhz;
+    return QString::fromLatin1(file.readAll()).trimmed();
 }
 
-QPair<double, double> readGpuFrequencyRangeMhz()
+QString discoverGpuDevfreqDirectory()
 {
-    QFile file(QString::fromLatin1(gpuAvailableFreqPath));
+    const QDir devfreqClass(QStringLiteral("/sys/class/devfreq"));
+    const QFileInfoList devices = devfreqClass.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable, QDir::Name);
+    for (const QFileInfo &device : devices) {
+        const QString directory = device.absoluteFilePath();
+        if (!QFileInfo::exists(directory + QStringLiteral("/cur_freq"))) {
+            continue;
+        }
+
+        const QString identity = device.fileName() + QLatin1Char(' ') + device.canonicalFilePath() + QLatin1Char(' ')
+            + readTrimmedFile(directory + QStringLiteral("/name"));
+        if (identity.contains(QStringLiteral("gpu"), Qt::CaseInsensitive)
+            || identity.contains(QStringLiteral("adreno"), Qt::CaseInsensitive)
+            || identity.contains(QStringLiteral("kgsl"), Qt::CaseInsensitive)) {
+            return directory;
+        }
+    }
+    return {};
+}
+
+double readGpuFrequencyMhz(QString &deviceDirectory, bool &ok)
+{
+    ok = false;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (deviceDirectory.isEmpty()) {
+            deviceDirectory = discoverGpuDevfreqDirectory();
+        }
+        if (deviceDirectory.isEmpty()) {
+            return 0.0;
+        }
+
+        bool parsed = false;
+        const qulonglong hz = readTrimmedFile(deviceDirectory + QStringLiteral("/cur_freq")).toULongLong(&parsed);
+        if (parsed) {
+            ok = true;
+            return static_cast<double>(hz) / hzPerMhz;
+        }
+        deviceDirectory.clear();
+    }
+    return 0.0;
+}
+
+QPair<double, double> readGpuFrequencyRangeMhz(const QString &deviceDirectory)
+{
+    QFile file(deviceDirectory + QStringLiteral("/available_frequencies"));
     if (!file.open(QIODevice::ReadOnly)) {
         return {0.0, 0.0};
     }
@@ -78,10 +112,13 @@ public:
         m_name = new KSysGuard::SensorProperty(QStringLiteral("name"), i18nc("@title", "Name"), name(), this);
         m_name->setVariantType(QVariant::String);
 
+        m_device = new KSysGuard::SensorProperty(QStringLiteral("device"), i18nc("@title", "Device"), this);
+        m_device->setVariantType(QVariant::String);
+
         m_frequency = new KSysGuard::SensorProperty(QStringLiteral("frequency"), i18nc("@title", "Frequency"), this);
         m_frequency->setPrefix(name());
         m_frequency->setShortName(i18nc("@title, Short for GPU frequency", "GPU Frequency"));
-        m_frequency->setDescription(i18nc("@info", "Current Adreno GPU devfreq frequency; zero while the sysfs value is unavailable"));
+        m_frequency->setDescription(i18nc("@info", "Current Adreno GPU devfreq frequency; unavailable while the GPU devfreq device is absent"));
         m_frequency->setVariantType(QVariant::Double);
         m_frequency->setUnit(KSysGuard::UnitMegaHertz);
         m_frequency->setMin(0.0);
@@ -101,26 +138,33 @@ public:
     void update()
     {
         bool ok = false;
-        const double mhz = readGpuFrequencyMhz(ok);
+        const QString previousDeviceDirectory = m_deviceDirectory;
+        const double mhz = readGpuFrequencyMhz(m_deviceDirectory, ok);
         if (!ok) {
-            m_frequency->setValue(0.0);
-            m_frequencyPercent->setValue(0.0);
+            m_maxFrequencyMhz = 0.0;
+            m_device->setValue(QVariant());
+            m_frequency->setValue(QVariant());
+            m_frequencyPercent->setValue(QVariant());
             return;
         }
 
+        if (m_deviceDirectory != previousDeviceDirectory) {
+            m_maxFrequencyMhz = 0.0;
+        }
+        m_device->setValue(QFileInfo(m_deviceDirectory).fileName());
         refreshFrequencyRange(mhz);
         m_frequency->setValue(mhz);
         if (m_maxFrequencyMhz > 0.0) {
             m_frequencyPercent->setValue(std::clamp((mhz / m_maxFrequencyMhz) * 100.0, 0.0, 100.0));
         } else {
-            m_frequencyPercent->setValue(0.0);
+            m_frequencyPercent->setValue(QVariant());
         }
     }
 
 private:
     void refreshFrequencyRange(double observedMhz)
     {
-        const auto range = readGpuFrequencyRangeMhz();
+        const auto range = readGpuFrequencyRangeMhz(m_deviceDirectory);
         if (range.second > 0.0) {
             m_maxFrequencyMhz = range.second;
         }
@@ -131,8 +175,10 @@ private:
     }
 
     KSysGuard::SensorProperty *m_name = nullptr;
+    KSysGuard::SensorProperty *m_device = nullptr;
     KSysGuard::SensorProperty *m_frequency = nullptr;
     KSysGuard::SensorProperty *m_frequencyPercent = nullptr;
+    QString m_deviceDirectory;
     double m_maxFrequencyMhz = 0.0;
 };
 

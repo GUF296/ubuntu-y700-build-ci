@@ -15,12 +15,13 @@ The workflow exposes common dispatch inputs directly in the GitHub Actions UI, i
 It also keeps three optional advanced override inputs:
 
 - `release_tag`: optional release tag to upload artifacts to.
+- `prerelease`: must be enabled for remediation releases.
 - `output_prefix`: output filename prefix.
 - `rootfs_config`: optional rootfs overrides as `KEY=value` lines.
 - `boot_config`: optional GRUB/FAT boot overrides as `KEY=value` lines.
 - `source_config`: optional input artifact URL overrides as `KEY=value` lines.
 
-Leave the advanced override inputs empty for the built-in verified defaults. If an advanced override input is filled, its `KEY=value` lines are appended after the built-in defaults and before the common UI fields are applied.
+The built-in archive values document the last tested release baseline. They predate the remediation bundle contract and are intentionally rejected by the new verifier. A remediation build must use the complete URL/SHA override set documented below. If an advanced override input is filled, its `KEY=value` lines are appended after the built-in defaults and before the common UI fields are applied.
 
 ## Rootfs Config
 
@@ -51,8 +52,11 @@ INSTALL_FCITX5_CHINESE=1
 DISABLE_SNAPD=1
 OVERLAY_ARCHIVE=
 DEB_ARCHIVE=
-SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260626.1/tb321fu-sensor-debs_20260626.1_arm64.tar.gz
-HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20260627.1/tb321fu-haptics-debs_20260627.1_arm64.tar.gz
+DEB_ARCHIVE_SHA256=
+SENSOR_DEB_ARCHIVE=
+SENSOR_DEB_ARCHIVE_SHA256=
+HAPTICS_DEB_ARCHIVE=
+HAPTICS_DEB_ARCHIVE_SHA256=
 CLEAN_APT_CACHE=1
 COMPRESS=7z
 CHUNK_SIZE=
@@ -85,9 +89,10 @@ KEEP_BOOT_IMAGE=0
 Optional override example:
 
 ```text
-KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
-BOOTAA64_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/BOOTAA64.EFI
-QCOMRAMP_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/QCOMRAMP-CONFIGFILE.EFI
+KERNEL_ARTIFACT_ARCHIVE=
+KERNEL_ARTIFACT_ARCHIVE_SHA256=
+BOOTAA64_EFI_URL=
+QCOMRAMP_EFI_URL=
 QCOMRAMP_CFG_NAME=qcomramp.cfg
 GRUB_BUILD_ARCHIVE=
 DTB_NAME=sm8650-lenovo-tb321fu.dtb
@@ -100,23 +105,29 @@ DTB_NAME=sm8650-lenovo-tb321fu.dtb
 - `scripts/ci/build-tb321fu-camera-stack-deb.sh`: builds the live-verified TB321FU camera stack deb from `source/tb321fu-camera-rootfs-overlay` or an explicit camera overlay archive.
 - `scripts/ci/pack-disk-image.sh`: optional GPT disk image packer for a FAT boot image plus ext4 rootfs image.
 - `scripts/ci/apply-workflow-config.sh`: validates dispatch config blocks and exports allowed keys into the workflow environment.
+- `scripts/ci/package-kernel-bootstrap.sh`: cleanly rebuilds and packages one commit/config-bound Image, DTB and modules pair while preserving the tested rootfs/compat payload bytes.
+- `scripts/ci/verify-kernel-bundle.sh`: verifies and stages the kernel/device/sensor/haptics handoff before rootfs or GRUB construction.
+- `scripts/ci/verify-kernel-bundle.py`: canonical parser for the ordered `KERNEL-BUNDLE.tsv` identity contract.
 
 ## Policy Boundary
 
-The rootfs builder does not hardcode one historical verified Y700 state. Use `OVERLAY_ARCHIVE`, `DEB_ARCHIVE`, and the source artifact inputs to select the device payload for each build. Separate verification profiles can be added as independent workflow steps without making the rootfs construction script depend on one fixed baseline.
+The rootfs builder does not hardcode one historical verified Y700 state. Use `OVERLAY_ARCHIVE`, `DEB_ARCHIVE`, and the source artifact inputs to select the device payload for each build. The workflow verifies the complete kernel/device/sensor/haptics handoff first and replaces those four inputs with SHA-verified local staged copies, so downstream rootfs and GRUB steps cannot independently select mismatched archives.
 
 ## Release Assets
 
-When `release_tag` is set, the release intentionally uploads only the user-facing boot/rootfs artifacts:
+When `release_tag` is set, the release uploads the user-facing boot/rootfs artifacts plus the small audit metadata that binds their kernel inputs:
 
 - `boot.img.7z`
 - `grub.img.7z`
 - `rootfs.img.7z` or split parts such as `rootfs.img.7z.000` and `rootfs.img.7z.001`
 - `SHA256SUMS.txt`
+- `KERNEL-BUNDLE.tsv`
+- `VERIFIED-BUNDLE.tsv`
+- `VERIFIED-INPUTS.tsv`
 
 The release notes include the rootfs, boot and source config used for that build. Password-like values are redacted from the notes. Release uploads require single-file archives; leave `CHUNK_SIZE` and `BOOT_CHUNK_SIZE` empty when creating a release. The UEFI `boot.img.7z` asset is committed under `source/boot-image/` so release builds do not depend on a previous release to supply it.
 
-New releases created by the workflow are normal GitHub Releases, not prereleases.
+When `release_tag` is non-empty on the remediation branch, `prerelease=true` is mandatory. The tested 2026-06-29 release and its assets are never replaced.
 
 ## Chinese Input
 
@@ -133,8 +144,8 @@ Set `INSTALL_FCITX5_CHINESE=0` in `rootfs_config` to opt out.
 
 The rootfs workflow can consume prebuilt device deb archives instead of rebuilding every device package inline:
 
-- `SENSOR_DEB_ARCHIVE`: tar/zip archive containing the verified `qcom-sns-*` and `tb321fu-sensors` debs. Current default: `https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260626.1/tb321fu-sensor-debs_20260626.1_arm64.tar.gz`.
-- `HAPTICS_DEB_ARCHIVE`: tar/zip archive containing the verified `tb321fu-haptics` deb. Current default: `https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20260627.1/tb321fu-haptics-debs_20260627.1_arm64.tar.gz`.
+- `SENSOR_DEB_ARCHIVE` plus `SENSOR_DEB_ARCHIVE_SHA256`: archive containing exactly the clean-producer `qcom-sns-libssc`, `qcom-sns-hexagonrpc`, `qcom-sns-iio-sensor-proxy`, and `tb321fu-sensors` packages and their source/checksum locks.
+- `HAPTICS_DEB_ARCHIVE` plus `HAPTICS_DEB_ARCHIVE_SHA256`: archive containing the verified `tb321fu-haptics` package and `HAPTICS-SOURCE-LOCK.tsv` bound to the selected kernel bundle.
 
 When `BUILD_Y700_SENSOR_DEBS=1` or `BUILD_TB321FU_HAPTICS_DEB=1`, the workflow now requires either a prebuilt deb archive/directory or all source inputs needed to build that component. It intentionally fails on missing inputs rather than producing a successful rootfs with missing sensor or haptics support.
 
@@ -143,4 +154,32 @@ Recommended split:
 - `tb321fu-sensor-debs`: build from the upstream-derived `libssc`, `iio-sensor-proxy`, and `hexagonrpc` sources plus TB321FU patches/registry data, then release a sensor deb archive.
 - `tb321fu-haptics-debs`: build the AW86937 external module from the matching Linux source/build artifacts plus TB321FU haptics glue, then release a haptics deb archive.
 
-The rootfs workflow references those release assets through `SENSOR_DEB_ARCHIVE` and `HAPTICS_DEB_ARCHIVE` by default.
+The historical defaults remain visible for baseline provenance only. They do not contain the complete remediation identity and are not accepted for a new remediation build.
+
+## Remediation Bootstrap Handoff
+
+The release is intentionally a two-stage handoff. First commit the final kernel changes, approve the post-`olddefconfig` configuration digest, and run `package-kernel-bootstrap.sh` from the clean commit-bound source/build. It emits a kernel archive and replacement device-DEB archive with byte-identical `KERNEL-BUNDLE.tsv` and `SOURCE-LOCK.tsv` files. It does not emit or duplicate a kernel SDK.
+
+Build haptics from the same clean kernel source/build and pass that small `KERNEL-BUNDLE.tsv` to the haptics producer. Build sensors from the clean sensor producer. Publish only these bounded bootstrap archives as prerelease inputs, then dispatch this workflow from the exact remediation branch with `prerelease=true`.
+
+Replace every placeholder below with one immutable HTTPS release URL and its lowercase SHA-256. Put the first six lines in `rootfs_config`:
+
+```text
+DEB_ARCHIVE=<device-deb-archive-url>
+DEB_ARCHIVE_SHA256=<64-hex-sha256>
+SENSOR_DEB_ARCHIVE=<sensor-deb-archive-url>
+SENSOR_DEB_ARCHIVE_SHA256=<64-hex-sha256>
+HAPTICS_DEB_ARCHIVE=<haptics-deb-archive-url>
+HAPTICS_DEB_ARCHIVE_SHA256=<64-hex-sha256>
+```
+
+Put these two lines in `source_config`:
+
+```text
+KERNEL_ARTIFACT_ARCHIVE=<kernel-artifact-archive-url>
+KERNEL_ARTIFACT_ARCHIVE_SHA256=<64-hex-sha256>
+```
+
+Leave `boot_config` empty. This preserves the tested template, EFI payload, `PARTLABEL=userdata`, and `drm_client_lib.active=none` handoff. Before any rootfs/GRUB work, the verifier recomputes the bundle ID, requires identical kernel/device metadata, verifies Image/DTB/config/modules, checks every kernel and haptics module vermagic, validates all four haptics identity fields, and separately validates the exact sensor archive. `VERIFIED-INPUTS.tsv` records one authoritative value for each URL/SHA pair even though the raw advanced config notes retain historical defaults followed by overrides.
+
+Passing these gates proves build and package consistency, not tablet behavior. Camera, audio, sensor SSR/resume, haptics cancellation/suspend, display, touch and boot still require the prerelease hardware checklist on TB321FU.

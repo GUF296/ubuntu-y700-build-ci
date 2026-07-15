@@ -1,0 +1,453 @@
+--- a/hexagonrpcd/apps_std.c
++++ b/hexagonrpcd/apps_std.c
+@@ -24,6 +24,7 @@
+ #include <limits.h>
+ #include <stdbool.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <stdint.h>
+ #include <string.h>
+ #include <sys/stat.h>
+@@ -41,6 +42,8 @@
+ 	int adsp_library_dirfd;
+ 	int host_fds[HEXAGONFS_MAX_FD];
+ 	struct hexagonfs_fd *fds[HEXAGONFS_MAX_FD];
++	char qcom_sns_registry_root[PATH_MAX];
++	bool qcom_sns_registry_access_observed;
+ };
+ 
+ static const int apps_std_whence_table[] = {
+@@ -49,9 +52,30 @@
+ 	SEEK_END,
+ };
+ 
+-#define Y700_REGISTRY_ROOT "/var/lib/y700-sns/persist/sensors/registry"
++#define QCOM_SNS_DEFAULT_REGISTRY_ROOT \
++	"/var/lib/qcom-sns/persist/sensors/registry"
++#define QCOM_SNS_REGISTRY_PREFIX "/var/lib/qcom-sns/"
+ 
+-static bool y700_map_registry_path(const char *path, char *out, size_t out_len)
++static bool qcom_sns_registry_root_valid(const char *path)
++{
++	size_t len;
++
++	if (path == NULL || strncmp(path, QCOM_SNS_REGISTRY_PREFIX,
++				    strlen(QCOM_SNS_REGISTRY_PREFIX)))
++		return false;
++
++	len = strlen(path);
++	if (len == 0 || len >= PATH_MAX || path[len - 1] == '/' ||
++	    strstr(path, "/../") || strstr(path, "/./") || strstr(path, "//") ||
++	    (len >= 3 && !strcmp(path + len - 3, "/..")) ||
++	    (len >= 2 && !strcmp(path + len - 2, "/.")))
++		return false;
++
++	return true;
++}
++
++static bool qcom_sns_map_registry_path(struct apps_std_ctx *ctx,
++				       const char *path, char *out, size_t out_len)
+ {
+ 	const char *prefixes[] = {
+ 		"/mnt/vendor/persist/sensors/registry/",
+@@ -64,14 +88,24 @@
+ 		if (!strncmp(path, prefixes[i], strlen(prefixes[i]))) {
+ 			suffix = path + strlen(prefixes[i]);
+ 			return snprintf(out, out_len, "%s/%s",
+-					Y700_REGISTRY_ROOT, suffix) < (int)out_len;
++					ctx->qcom_sns_registry_root, suffix) < (int)out_len;
+ 		}
+ 	}
+ 
+ 	return false;
+ }
+ 
+-static int y700_mkdir_p(const char *path)
++static void qcom_sns_note_registry_access(struct apps_std_ctx *ctx)
++{
++	if (ctx->qcom_sns_registry_access_observed)
++		return;
++
++	ctx->qcom_sns_registry_access_observed = true;
++	fprintf(stderr, "QCOM_SNS_REGISTRY_ACCESS\n");
++	fflush(stderr);
++}
++
++static int qcom_sns_mkdir_p(const char *path)
+ {
+ 	char tmp[PATH_MAX];
+ 	char *p;
+@@ -98,7 +132,7 @@
+ 	return 0;
+ }
+ 
+-static int y700_mkdir_parent(const char *path)
++static int qcom_sns_mkdir_parent(const char *path)
+ {
+ 	char tmp[PATH_MAX];
+ 	char *slash;
+@@ -111,7 +145,7 @@
+ 		return 0;
+ 
+ 	*slash = '\0';
+-	return y700_mkdir_p(tmp);
++	return qcom_sns_mkdir_p(tmp);
+ }
+ 
+ static int apps_std_alloc_host_fd(struct apps_std_ctx *ctx, int host_fd)
+@@ -320,8 +354,9 @@
+ 
+ 	rw_mode = ((const char *) inbufs[4].p)[0];
+ 	if (rw_mode == 'w' || rw_mode == 'a') {
+-		if (y700_map_registry_path(inbufs[3].p, host_path, sizeof(host_path))) {
+-			if (y700_mkdir_parent(host_path)) {
++		if (qcom_sns_map_registry_path(ctx, inbufs[3].p,
++					       host_path, sizeof(host_path))) {
++			if (qcom_sns_mkdir_parent(host_path)) {
+ 				fprintf(stderr, "Could not create parent for %s\n", host_path);
+ 				return AEE_EFAILED;
+ 			}
+@@ -344,6 +379,7 @@
+ 				return AEE_EFAILED;
+ 			}
+ 
++			qcom_sns_note_registry_access(ctx);
+ #ifdef HEXAGONRPC_VERBOSE
+ 			fprintf(stderr, "write-open %s -> %s fd=%d\n",
+ 				(const char *)inbufs[3].p, host_path, fd);
+@@ -372,7 +408,8 @@
+ 		return 0;
+ 	}
+ 
+-	if (y700_map_registry_path(inbufs[3].p, host_path, sizeof(host_path))) {
++	if (qcom_sns_map_registry_path(ctx, inbufs[3].p,
++					   host_path, sizeof(host_path))) {
+ 		host_fd = open(host_path, O_RDONLY);
+ 		if (host_fd >= 0) {
+ 			fd = apps_std_alloc_host_fd(ctx, host_fd);
+@@ -383,6 +420,7 @@
+ 				return AEE_EFAILED;
+ 			}
+ 
++			qcom_sns_note_registry_access(ctx);
+ #ifdef HEXAGONRPC_VERBOSE
+ 			fprintf(stderr, "read-open %s -> %s fd=%d\n",
+ 				(const char *)inbufs[3].p, host_path, fd);
+@@ -534,7 +572,9 @@
+ 	if (((const char *) inbufs[1].p)[inbufs[1].s - 1] != 0)
+ 		return AEE_EBADPARM;
+ 
+-	if (y700_map_registry_path(pathname, host_path, sizeof(host_path))) {
++	if (qcom_sns_map_registry_path(ctx, pathname,
++					   host_path, sizeof(host_path))) {
++		qcom_sns_note_registry_access(ctx);
+ 		ret = stat(host_path, &stats);
+ 		if (ret) {
+ 			fprintf(stderr, "Could not stat %s: %s\n",
+@@ -587,6 +627,7 @@
+				       const struct fastrpc_io_buffer *inbufs,
+				       struct fastrpc_io_buffer *outbufs)
+ {
++	struct apps_std_ctx *ctx = data;
+	const uint32_t *first_in = inbufs[0].p;
+	const char *path = inbufs[1].p;
+	const char *aux_path = inbufs[2].p;
+@@ -594,12 +635,12 @@
+ 	char host_path[PATH_MAX];
+ 	char host_aux_path[PATH_MAX];
+ 	uint32_t submethod = first_in[0];
++	int ret;
++#ifdef HEXAGONRPC_VERBOSE
+ 	size_t path_len = path ? strnlen(path, inbufs[1].s) : 0;
+ 	size_t aux_len = aux_path ? strnlen(aux_path, inbufs[2].s) : 0;
+-	int ret;
+ 
+-#ifdef HEXAGONRPC_VERBOSE
+ 	fprintf(stderr, "apps_std slim method 31 submethod=%u path=%.*s aux=%.*s\n",
+ 		submethod, (int)path_len, path ? path : "",
+ 		(int)aux_len, aux_path ? aux_path : "");
+ #endif
+@@ -608,19 +649,25 @@
+ 
+ 	switch (submethod) {
+ 	case 24: /* fremove */
+-		if (y700_map_registry_path(path, host_path, sizeof(host_path))) {
++		if (qcom_sns_map_registry_path(ctx, path,
++					       host_path, sizeof(host_path))) {
++			qcom_sns_note_registry_access(ctx);
+ 			unlink(host_path);
+ 			return 0;
+ 		}
+ 		return 0;
+ 	case 29: /* mkdir */
+-		if (y700_map_registry_path(path, host_path, sizeof(host_path))) {
+-			ret = y700_mkdir_p(host_path);
++		if (qcom_sns_map_registry_path(ctx, path,
++					       host_path, sizeof(host_path))) {
++			qcom_sns_note_registry_access(ctx);
++			ret = qcom_sns_mkdir_p(host_path);
+ 			return ret ? AEE_EFAILED : 0;
+ 		}
+ 		return 0;
+ 	case 30: /* rmdir */
+-		if (y700_map_registry_path(path, host_path, sizeof(host_path))) {
++		if (qcom_sns_map_registry_path(ctx, path,
++					       host_path, sizeof(host_path))) {
++			qcom_sns_note_registry_access(ctx);
+ 			rmdir(host_path);
+ 			return 0;
+ 		}
+@@ -628,15 +675,20 @@
+ 	case 31: /* stat */
+ 		return 0;
+ 	case 32: /* ftrunc */
+-		if (y700_map_registry_path(path, host_path, sizeof(host_path))) {
++		if (qcom_sns_map_registry_path(ctx, path,
++					       host_path, sizeof(host_path))) {
++			qcom_sns_note_registry_access(ctx);
+ 			ret = truncate(host_path, 0);
+ 			return ret ? AEE_EFAILED : 0;
+ 		}
+ 		return 0;
+ 	case 33: /* frename */
+-		if (y700_map_registry_path(path, host_path, sizeof(host_path)) &&
+-		    y700_map_registry_path(aux_path, host_aux_path, sizeof(host_aux_path))) {
+-			ret = y700_mkdir_parent(host_aux_path);
++		if (qcom_sns_map_registry_path(ctx, path,
++					       host_path, sizeof(host_path)) &&
++		    qcom_sns_map_registry_path(ctx, aux_path,
++					       host_aux_path, sizeof(host_aux_path))) {
++			qcom_sns_note_registry_access(ctx);
++			ret = qcom_sns_mkdir_parent(host_aux_path);
+ 			if (ret)
+ 				return AEE_EFAILED;
+ 			ret = rename(host_path, host_aux_path);
+@@ -667,6 +719,7 @@
+ {
+ 	struct fastrpc_interface *iface;
+ 	struct apps_std_ctx *ctx;
++	const char *registry_root;
+ 	size_t i;
+ 
+ 	iface = malloc(sizeof(struct fastrpc_interface));
+@@ -680,6 +733,18 @@
+ 	for (i = 0; i < HEXAGONFS_MAX_FD; i++)
+ 		ctx->host_fds[i] = -1;
+ 
++	registry_root = getenv("QCOM_SNS_REGISTRY_ROOT");
++	if (registry_root == NULL)
++		registry_root = QCOM_SNS_DEFAULT_REGISTRY_ROOT;
++	if (!qcom_sns_registry_root_valid(registry_root)) {
++		fprintf(stderr, "Invalid QCOM_SNS_REGISTRY_ROOT\n");
++		goto err_free_ctx;
++	}
++	if (snprintf(ctx->qcom_sns_registry_root,
++		     sizeof(ctx->qcom_sns_registry_root), "%s", registry_root) >=
++	    (int)sizeof(ctx->qcom_sns_registry_root))
++		goto err_free_ctx;
++
+ 	memcpy(iface, &apps_std_interface, sizeof(struct fastrpc_interface));
+ 
+	ctx->rootfd = hexagonfs_open_root(ctx->fds, root);
+--- a/hexagonrpcd/rpcd.c
++++ b/hexagonrpcd/rpcd.c
+@@ -27,6 +27,7 @@
+ #include <unistd.h>
+ #include <signal.h>
+ #include <stdbool.h>
++#include <stdint.h>
+ #include <stdio.h>
+ #include <string.h>
+ #include <sys/ioctl.h>
+@@ -147,6 +148,8 @@
+ {
+ 	char *buf;
+ 	int shellfd, ret;
++	size_t bytes_read = 0;
++	ssize_t n_bytes;
+ 	struct stat stats;
+ 	struct fastrpc_alloc_dma_buf dmabuf;
+ 	long page_size;
+@@ -165,9 +168,22 @@
+ 	ret = fstat(shellfd, &stats);
+ 	if (ret == -1)
+ 		goto err_close_fd;
++	if (!S_ISREG(stats.st_mode) || stats.st_size <= 0 ||
++	    (uintmax_t)stats.st_size > UINT32_MAX) {
++		fprintf(stderr, "Invalid FastRPC shell size for %s: %jd\n",
++			create_shell, (intmax_t)stats.st_size);
++		errno = EINVAL;
++		ret = -1;
++		goto err_close_fd;
++	}
+ 
+ 	page_size = sysconf(_SC_PAGE_SIZE);
+-	dmabuf.size = (stats.st_size + page_size - 1) & ~(page_size - 1);
++	if (page_size <= 0) {
++		ret = -1;
++		goto err_close_fd;
++	}
++	dmabuf.size = ((uint64_t)stats.st_size + (uint64_t)page_size - 1) &
++		       ~((uint64_t)page_size - 1);
+ 	dmabuf.flags = 0;
+ 
+ 	ret = ioctl(fd, FASTRPC_IOCTL_ALLOC_DMA_BUFF, &dmabuf);
+@@ -180,7 +196,22 @@
+ 		goto err_close_dmabuf;
+ 	}
+ 
+-	read(shellfd, buf, stats.st_size);
++	while (bytes_read < (size_t)stats.st_size) {
++		n_bytes = read(shellfd, buf + bytes_read,
++			       (size_t)stats.st_size - bytes_read);
++		if (n_bytes > 0) {
++			bytes_read += (size_t)n_bytes;
++			continue;
++		}
++		if (n_bytes < 0 && errno == EINTR)
++			continue;
++		if (n_bytes == 0)
++			errno = EIO;
++		fprintf(stderr, "Could not read FastRPC shell %s: %s\n",
++			create_shell, strerror(errno));
++		ret = -1;
++		goto err_unmap;
++	}
+ 
+ 	init.file = (__u64) buf;
+ 	init.filefd = dmabuf.fd;
+@@ -188,6 +219,7 @@
+ 
+ 	ret = ioctl(fd, FASTRPC_IOCTL_INIT_CREATE, &init);
+ 
++err_unmap:
+ 	munmap(buf, dmabuf.size);
+ err_close_dmabuf:
+ 	close(dmabuf.fd);
+@@ -295,7 +327,9 @@
+ static char *read_sysfs_file(const char *path, struct stat *file_stat)
+ {
+ 	char *contents = NULL;
+-	int fd, res, n_bytes;
++	int fd, res;
++	size_t bytes_read = 0;
++	ssize_t n_bytes;
+ 
+ 	fd = open(path, O_RDONLY);
+ 	if (fd == -1)
+@@ -304,16 +338,30 @@
+ 	res = fstat(fd, file_stat);
+ 	if (res)
+ 		goto close_fd;
++	if (file_stat->st_size < 0 ||
++	    (uintmax_t)file_stat->st_size > SIZE_MAX - 1) {
++		errno = EOVERFLOW;
++		goto close_fd;
++	}
+ 
+-	contents = malloc(file_stat->st_size);
++	contents = malloc((size_t)file_stat->st_size + 1);
+ 	if (contents == NULL)
+ 		goto close_fd;
+ 
+-	n_bytes = read(fd, contents, file_stat->st_size);
+-	if (n_bytes != file_stat->st_size) {
++	while (bytes_read < (size_t)file_stat->st_size) {
++		n_bytes = read(fd, contents + bytes_read,
++			       (size_t)file_stat->st_size - bytes_read);
++		if (n_bytes > 0) {
++			bytes_read += (size_t)n_bytes;
++			continue;
++		}
++		if (n_bytes < 0 && errno == EINTR)
++			continue;
+ 		free(contents);
+ 		contents = NULL;
++		goto close_fd;
+ 	}
++	contents[bytes_read] = '\0';
+ 
+ close_fd:
+ 	close(fd);
+@@ -341,10 +389,11 @@
+ static char *guess_device_directory_from_compatible(void)
+ {
+ 	char *compatible_ptr, *device_name, *model_ptr, *orig_compatible_ptr,
+-		*end_of_vendor_name, *vendor_name;
++		*compatible_end, *end_of_vendor_name, *vendor_name = NULL;
+ 	char *chipset_name = NULL;
+ 	char *ret = NULL;
+ 	struct stat compatible_stat, model_stat;
++	size_t entry_len, remaining;
+ 
+ 	compatible_ptr = read_sysfs_file("/proc/device-tree/compatible",
+ 					 &compatible_stat);
+@@ -356,33 +405,43 @@
+ 	if (model_ptr == NULL)
+ 		goto free_compatible;
+ 
+-	end_of_vendor_name = strchr(model_ptr, ' ');
++	end_of_vendor_name = memchr(model_ptr, ' ', (size_t)model_stat.st_size);
+ 	if (end_of_vendor_name == NULL)
+-		end_of_vendor_name = model_ptr + model_stat.st_size - 1;
++		end_of_vendor_name = model_ptr + strnlen(model_ptr,
++						 (size_t)model_stat.st_size);
++	if (end_of_vendor_name == model_ptr)
++		goto free_model;
+ 	vendor_name = strndup(model_ptr, end_of_vendor_name - model_ptr);
+ 	if (vendor_name == NULL)
+ 		goto free_model;
+ 
+-	while (compatible_ptr < orig_compatible_ptr + compatible_stat.st_size) {
+-		if (strncmp("qcom,", compatible_ptr, sizeof("qcom,") - 1) == 0) {
++	compatible_end = orig_compatible_ptr + compatible_stat.st_size;
++	while (compatible_ptr < compatible_end) {
++		remaining = (size_t)(compatible_end - compatible_ptr);
++		entry_len = strnlen(compatible_ptr, remaining);
++		if (entry_len > sizeof("qcom,") - 1 &&
++		    !memcmp("qcom,", compatible_ptr, sizeof("qcom,") - 1)) {
+ 			chipset_name = compatible_ptr + sizeof("qcom,") - 1;
+ 			break;
+ 		}
+ 
+-		compatible_ptr += strlen(compatible_ptr) + 1;
++		compatible_ptr = entry_len == remaining ? compatible_end :
++				 compatible_ptr + entry_len + 1;
+ 	}
+ 
+ 	if (chipset_name == NULL)
+ 		goto free_model;
+ 
+ 	compatible_ptr = orig_compatible_ptr;
+-	while (compatible_ptr < orig_compatible_ptr + compatible_stat.st_size) {
++	while (compatible_ptr < compatible_end) {
+ 		char *try_path = NULL;
+ 
+-		device_name = strchr(compatible_ptr, ',');
+-		if (device_name == NULL)
+-			continue;
+-		device_name += 1;
++		remaining = (size_t)(compatible_end - compatible_ptr);
++		entry_len = strnlen(compatible_ptr, remaining);
++		device_name = memchr(compatible_ptr, ',', entry_len);
++		if (device_name == NULL || device_name + 1 == compatible_ptr + entry_len)
++			goto next_compatible;
++		device_name++;
+ 
+ 		if (asprintf(&try_path, "/usr/share/qcom/%s/%s/%s",
+ 			     chipset_name, vendor_name, device_name) < 0)
+@@ -395,10 +454,13 @@
+ 
+ 		free(try_path);
+ 
+-		compatible_ptr += strlen(compatible_ptr) + 1;
++	next_compatible:
++		compatible_ptr = entry_len == remaining ? compatible_end :
++				 compatible_ptr + entry_len + 1;
+ 	}
+ 
+ free_model:
++	free(vendor_name);
+ 	free(model_ptr);
+ free_compatible:
+ 	free(orig_compatible_ptr);

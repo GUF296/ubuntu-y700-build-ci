@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/common.sh"
+. "$SCRIPT_DIR/system-payload-policy.sh"
 
 usage() {
   cat <<USAGE
@@ -13,7 +14,7 @@ Build source-based Qualcomm SNS sensor Debian packages for Lenovo TB321FU.
 Environment inputs:
   OUTPUT_DIR                       default: out/y700-sensor-debs
   ARCH                             default: arm64
-  SENSOR_DEB_VERSION               default: 20260626.1
+  SENSOR_DEB_VERSION               default: 20260715.1
   SENSOR_SOURCE_ARCHIVE            source freeze archive containing sensor/daily-current
   SENSOR_SOURCE_DIR                source freeze directory containing sensor/daily-current
   SENSOR_BASELINE_OVERLAY_ARCHIVE  rootfs overlay archive extracted from the verified userdata image
@@ -33,15 +34,18 @@ ci_require_cmd rsync
 ci_require_cmd dpkg-deb
 ci_require_cmd sha256sum
 ci_require_cmd pkg-config
+ci_require_cmd patch
+ci_require_cmd flock
 ci_require_cmd protoc
 ci_require_cmd protoc-gen-c
 ci_require_cmd aarch64-linux-gnu-gcc
 ci_require_cmd aarch64-linux-gnu-ar
+ci_require_cmd aarch64-linux-gnu-readelf
 ci_require_cmd aarch64-linux-gnu-strip
 
 OUTPUT_DIR=${OUTPUT_DIR:-out/y700-sensor-debs}
 ARCH=${ARCH:-arm64}
-SENSOR_DEB_VERSION=${SENSOR_DEB_VERSION:-20260626.1}
+SENSOR_DEB_VERSION=${SENSOR_DEB_VERSION:-20260715.1}
 SENSOR_SOURCE_ARCHIVE=${SENSOR_SOURCE_ARCHIVE:-}
 SENSOR_SOURCE_ARCHIVE_SHA256=${SENSOR_SOURCE_ARCHIVE_SHA256:-}
 SENSOR_SOURCE_DIR=${SENSOR_SOURCE_DIR:-}
@@ -59,6 +63,31 @@ rm -f -- \
   "$OUTPUT_DIR"/tb321fu-sensors_*.deb \
   "$OUTPUT_DIR"/SHA256SUMS-y700-sensor-debs.txt
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/y700-sensor-build.XXXXXX")
+stable_libssc_prefix=/tmp/tb321fu-sensor-libssc-prefix
+stable_libssc_lock=/tmp/tb321fu-sensor-libssc-prefix.lock
+cleanup() {
+  if [ -L "$stable_libssc_prefix" ] && \
+     [ "$(readlink -- "$stable_libssc_prefix")" = "${libssc_pkg_prefix:-}" ]; then
+    rm -f -- "$stable_libssc_prefix"
+  fi
+  ci_safe_rmtree "$work_dir" "${TMPDIR:-/tmp}" y700-sensor-build.
+}
+trap cleanup EXIT
+exec 9>"$stable_libssc_lock"
+flock -x 9
+if [ -e "$stable_libssc_prefix" ] || [ -L "$stable_libssc_prefix" ]; then
+  if [ -L "$stable_libssc_prefix" ]; then
+    stale_target=$(readlink -- "$stable_libssc_prefix")
+    case "$stale_target" in
+      "${TMPDIR:-/tmp}"/y700-sensor-build.??????/libssc-prefix)
+        rm -f -- "$stable_libssc_prefix"
+        ;;
+      *) ci_die "refusing unexpected stable libssc symlink: $stable_libssc_prefix -> $stale_target" ;;
+    esac
+  else
+    ci_die "stable libssc path is not a symlink: $stable_libssc_prefix"
+  fi
+fi
 SOURCE_DATE_EPOCH=$(ci_source_date_epoch)
 export SOURCE_DATE_EPOCH
 mapfile -t reproducible_prefix_flags < <(
@@ -66,11 +95,6 @@ mapfile -t reproducible_prefix_flags < <(
 )
 export CFLAGS="${CFLAGS:+$CFLAGS }${reproducible_prefix_flags[*]}"
 export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }${reproducible_prefix_flags[*]}"
-
-cleanup() {
-  ci_safe_rmtree "$work_dir" "${TMPDIR:-/tmp}" y700-sensor-build.
-}
-trap cleanup EXIT
 
 copy_source() {
   local src=$1
@@ -271,13 +295,28 @@ if command -v systemctl >/dev/null 2>&1; then
   rm -f /usr/local/libexec/y700-iio-sensor-proxy
   rm -rf /usr/local/lib/y700-sns
   systemctl daemon-reload || true
-  systemctl enable qcom-sns-init.service >/dev/null 2>&1 || true
+  systemctl enable qcom-sns-init.service >/dev/null
+  systemctl is-enabled --quiet qcom-sns-init.service
 fi
 if command -v udevadm >/dev/null 2>&1; then
   udevadm control --reload-rules || true
 fi
 exit 0
 EOF_POSTINST
+  cat > "$pkgdir/DEBIAN/prerm" <<'EOF_PRERM'
+#!/bin/sh
+set -e
+case "${1:-}" in
+  remove|deconfigure)
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl stop qcom-sns-init.service >/dev/null 2>&1 || true
+      systemctl disable qcom-sns-init.service >/dev/null 2>&1 || true
+    fi
+    rm -f /etc/systemd/system/multi-user.target.wants/qcom-sns-init.service
+    ;;
+esac
+exit 0
+EOF_PRERM
   cat > "$pkgdir/DEBIAN/postrm" <<'EOF_POSTRM'
 #!/bin/sh
 set -e
@@ -289,7 +328,10 @@ if command -v udevadm >/dev/null 2>&1; then
 fi
 exit 0
 EOF_POSTRM
-  chmod 0755 "$pkgdir/DEBIAN/postinst" "$pkgdir/DEBIAN/postrm"
+  chmod 0755 \
+    "$pkgdir/DEBIAN/postinst" \
+    "$pkgdir/DEBIAN/prerm" \
+    "$pkgdir/DEBIAN/postrm"
 }
 
 build_deb() {
@@ -297,7 +339,9 @@ build_deb() {
   local name=$2
   local deb="$OUTPUT_DIR/${name}_${SENSOR_DEB_VERSION}_${ARCH}.deb"
 
-  find "$pkgdir" -type d -exec chmod 0755 {} +
+  ci_normalize_system_payload_modes "$pkgdir"
+  ci_assert_normalized_system_payload_modes "$pkgdir"
+  ci_assert_privileged_payload_security "$pkgdir"
   ci_normalize_package_tree "$pkgdir"
   dpkg-deb --build --root-owner-group "$pkgdir" "$deb" >/dev/null
   sha256sum "$deb"
@@ -309,14 +353,19 @@ strip_if_requested() {
 }
 
 patch_hexagonrpc_for_qcom_sns() {
-  local src=$1/hexagonrpcd/apps_std.c
+  local source_dir=$1
+  local src=$source_dir/hexagonrpcd/apps_std.c
+  local patch_file="$SCRIPT_DIR/patches/hexagonrpc-qcom-sns-generation.patch"
 
-  grep -q 'Y700_REGISTRY_ROOT' "$src" || ci_die "hexagonrpc apps_std.c no longer contains expected registry root marker"
-  sed -i \
-    -e 's#Y700_REGISTRY_ROOT#QCOM_SNS_REGISTRY_ROOT#g' \
-    -e 's#/var/lib/y700-sns/persist/sensors/registry#/var/lib/qcom-sns/persist/sensors/registry#g' \
-    "$src"
-  grep -q 'QCOM_SNS_REGISTRY_ROOT "/var/lib/qcom-sns/persist/sensors/registry"' "$src" || ci_die "failed to patch qcom-sns registry root"
+  [ -f "$patch_file" ] || ci_die "missing HexagonRPC qcom-sns generation patch"
+  grep -q 'Y700_REGISTRY_ROOT' "$src" || \
+    ci_die "hexagonrpc apps_std.c no longer contains expected registry root marker"
+  (cd "$source_dir" && patch --batch --forward --fuzz=0 -p1 <"$patch_file") || \
+    ci_die "failed to apply HexagonRPC qcom-sns generation patch"
+  grep -q 'QCOM_SNS_REGISTRY_ROOT' "$src" || \
+    ci_die "patched HexagonRPC lacks generation root support"
+  grep -q 'QCOM_SNS_REGISTRY_ACCESS' "$src" || \
+    ci_die "patched HexagonRPC lacks current-run access evidence"
 }
 
 build_libssc_package() {
@@ -396,10 +445,15 @@ build_iio_sensor_proxy_package() {
 
   ci_log "building qcom-sns-iio-sensor-proxy"
   copy_source "$source_root/sensor/daily-current/iio-sensor-proxy" "$src"
-  make_iio_cross_file "$cross" "$libssc_pkg_prefix"
-  PKG_CONFIG_LIBDIR="$libssc_pkg_prefix/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  [ ! -e "$stable_libssc_prefix" ] && [ ! -L "$stable_libssc_prefix" ] || \
+    ci_die "stable libssc prefix unexpectedly exists before iio build"
+  ln -s -- "$libssc_pkg_prefix" "$stable_libssc_prefix"
+  sed -i "s#^prefix=.*#prefix=$stable_libssc_prefix#" \
+    "$libssc_pkg_prefix/lib/aarch64-linux-gnu/pkgconfig/libssc.pc"
+  make_iio_cross_file "$cross" "$stable_libssc_prefix"
+  PKG_CONFIG_LIBDIR="$stable_libssc_prefix/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
     pkg-config --modversion gudev-1.0 udev polkit-gobject-1 gio-2.0 libssc >/dev/null
-  export PKG_CONFIG_LIBDIR="$libssc_pkg_prefix/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+  export PKG_CONFIG_LIBDIR="$stable_libssc_prefix/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
   (cd "$src" && meson setup "$build" \
     --cross-file "$cross" \
     --prefix=/usr \
@@ -430,11 +484,19 @@ SystemdService=iio-sensor-proxy.service
 EOF_DBUS
   chmod 0644 "$pkg/usr/share/dbus-1/system-services/net.hadess.SensorProxy.service"
   strip_if_requested "$pkg/usr/bin/monitor-sensor" "$pkg/usr/libexec/iio-sensor-proxy"
+  if grep -aFq -- "$work_dir" "$pkg/usr/libexec/iio-sensor-proxy"; then
+    ci_die "iio-sensor-proxy retained its random build workspace"
+  fi
+  if aarch64-linux-gnu-readelf -d "$pkg/usr/libexec/iio-sensor-proxy" | \
+     grep -Eq '\((RPATH|RUNPATH)\)'; then
+    ci_die "iio-sensor-proxy retained a build-time runtime search path"
+  fi
   write_control "$pkg" qcom-sns-iio-sensor-proxy misc \
     'libc6, dbus, libglib2.0-0, libgudev-1.0-0, libpolkit-gobject-1-0, qcom-sns-libssc' \
     'IIO Sensor Proxy with Qualcomm SSC support' \
     'Source-built iio-sensor-proxy with Qualcomm SSC drivers enabled.' \
     'Provides: iio-sensor-proxy' \
+    'Conflicts: iio-sensor-proxy' \
     'Replaces: iio-sensor-proxy'
   write_systemd_maintainer_scripts "$pkg"
   build_deb "$pkg" qcom-sns-iio-sensor-proxy
@@ -444,6 +506,7 @@ build_tb321fu_sensors_package() {
   local pkg="$work_dir/pkg/tb321fu-sensors"
   local qcom_root="$pkg/usr/share/qcom/sm8650/Lenovo/tb321fu"
   local source_hexagonfs="$baseline_root/usr/local/share/y700-sns/hexagonfs"
+  local payload_dir="$SCRIPT_DIR/payloads"
 
   ci_log "building tb321fu-sensors"
   [ -d "$source_hexagonfs/sensors/registry" ] || ci_die "missing baseline sensors registry data"
@@ -455,6 +518,21 @@ build_tb321fu_sensors_package() {
   rsync -a "$source_hexagonfs/socinfo" "$qcom_root/"
   find "$qcom_root" -type d -exec chmod 0755 {} +
   find "$qcom_root" -type f -exec chmod 0644 {} +
+  install -d -m 0755 "$qcom_root/.tb321fu-manifests"
+  (cd "$qcom_root" &&
+    LC_ALL=C find sensors/registry -type f -print0 |
+      LC_ALL=C sort -z |
+      xargs -0 -r sha256sum -- >.tb321fu-manifests/registry.sha256)
+  (cd "$qcom_root" &&
+    LC_ALL=C find sensors/config -type f -print0 |
+      LC_ALL=C sort -z |
+      xargs -0 -r sha256sum -- >.tb321fu-manifests/config.sha256)
+  [ -s "$qcom_root/.tb321fu-manifests/registry.sha256" ] || ci_die "empty registry manifest"
+  [ -s "$qcom_root/.tb321fu-manifests/config.sha256" ] || ci_die "empty config manifest"
+  (cd "$qcom_root" && sha256sum -c \
+    .tb321fu-manifests/registry.sha256 \
+    .tb321fu-manifests/config.sha256 >/dev/null) || \
+    ci_die "sensor source manifest self-check failed"
 
   install -d -m 0755 "$pkg/usr/share/qcom/conf.d"
   cat > "$pkg/usr/share/qcom/conf.d/tb321fu.yaml" <<'EOF_YAML'
@@ -464,129 +542,33 @@ machines:
 EOF_YAML
 
   install -d -m 0755 "$pkg/usr/libexec/qcom-sns"
-  cat > "$pkg/usr/libexec/qcom-sns/qcom-sns-init" <<'EOF_INIT'
-#!/bin/sh
-set -eu
+  install -m 0755 "$payload_dir/qcom-sns-init" \
+    "$pkg/usr/libexec/qcom-sns/qcom-sns-init"
 
-HEXAGONRPCD=/usr/bin/hexagonrpcd
-ROOT=/usr/share/qcom/sm8650/Lenovo/tb321fu
-PERSIST=/var/lib/qcom-sns/persist
-REGISTRY="$PERSIST/sensors/registry/registry"
-LOGDIR=/var/log/qcom-sns
-LOG="$LOGDIR/hexagonrpcd-init.log"
-
-for path in "$PERSIST" "$PERSIST/sensors" "$PERSIST/sensors/registry" "$LOGDIR"; do
-  if [ -L "$path" ]; then
-    echo "refusing symlinked state path $path" >&2
-    exit 1
-  fi
-done
-mkdir -p "$REGISTRY" "$LOGDIR"
-
-pre_count=$(find "$REGISTRY" -type f 2>/dev/null | wc -l)
-if [ "$pre_count" -gt 0 ] && [ "$pre_count" -lt 200 ]; then
-  echo "clearing partial registry_files=$pre_count before init" >>"$LOG"
-  rm -rf "$PERSIST/sensors/registry"
-  mkdir -p "$REGISTRY"
-fi
-
-waited=0
-while [ ! -e /dev/fastrpc-adsp ] && [ "$waited" -lt 60 ]; do
-  sleep 1
-  waited=$((waited + 1))
-done
-
-if [ ! -e /dev/fastrpc-adsp ]; then
-  echo "missing /dev/fastrpc-adsp after ${waited}s" >>"$LOG"
-  exit 1
-fi
-
-if [ ! -x "$HEXAGONRPCD" ]; then
-  echo "missing executable $HEXAGONRPCD" >>"$LOG"
-  exit 1
-fi
-
-if [ ! -d "$ROOT/sensors/registry" ] || [ ! -d "$ROOT/sensors/config" ]; then
-  echo "missing TB321FU sensor data under $ROOT" >>"$LOG"
-  exit 1
-fi
-
-tmp_log=$(mktemp "$LOGDIR/.hexagonrpcd-init.XXXXXX")
-trap 'rm -f "$tmp_log"' 0 1 2 15
-
-rc=0
-timeout 45 "$HEXAGONRPCD" \
-  -f /dev/fastrpc-adsp \
-  -d adsp \
-  -s \
-  -R "$ROOT" \
-  >"$tmp_log" 2>&1 || rc=$?
-
-count=$(find "$REGISTRY" -type f 2>/dev/null | wc -l)
-
-if [ "$count" -lt 200 ]; then
-  cat "$tmp_log" >>"$LOG"
-  echo "registry_files=$count hexagonrpcd_rc=$rc" >>"$LOG"
-  exit 1
-fi
-
-exit 0
-EOF_INIT
-  chmod 0755 "$pkg/usr/libexec/qcom-sns/qcom-sns-init"
-
-  install -d -m 0755 "$pkg/usr/lib/systemd/system"
-  cat > "$pkg/usr/lib/systemd/system/qcom-sns-init.service" <<'EOF_SERVICE'
-[Unit]
-Description=Initialize Qualcomm SNS registry for Lenovo TB321FU
-After=qrtr-ns.service dbus.service
-Wants=qrtr-ns.service
-Before=iio-sensor-proxy.service
-Conflicts=y700-sns-init.service
-StartLimitIntervalSec=0
-
-[Service]
-Type=oneshot
-ExecStart=/usr/libexec/qcom-sns/qcom-sns-init
-RemainAfterExit=yes
-Restart=on-failure
-RestartSec=10s
-TimeoutStartSec=120s
-
-[Install]
-WantedBy=multi-user.target
-EOF_SERVICE
-
-  install -d -m 0755 "$pkg/etc/systemd/system/iio-sensor-proxy.service.d"
-  cat > "$pkg/etc/systemd/system/iio-sensor-proxy.service.d/99-qcom-sns.conf" <<'EOF_DROPIN'
-[Unit]
-After=
-After=qcom-sns-init.service
-Requires=
-Requires=qcom-sns-init.service
-StartLimitIntervalSec=0
-
-[Service]
-ExecStart=
-ExecStart=/usr/libexec/iio-sensor-proxy
-Environment=
-RestrictAddressFamilies=AF_UNIX AF_LOCAL AF_NETLINK AF_QIPCRTR
-Restart=on-failure
-RestartSec=5s
-EOF_DROPIN
-
-  install -d -m 0755 "$pkg/usr/lib/udev/rules.d"
-  cat > "$pkg/usr/lib/udev/rules.d/80-tb321fu-qcom-sns.rules" <<'EOF_UDEV'
-ACTION=="remove", GOTO="tb321fu_qcom_sns_end"
-SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp*", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-light ssc-proximity ssc-compass", ENV{ACCEL_MOUNT_MATRIX}="-1,0,0;0,-1,0;0,0,1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="iio-sensor-proxy.service"
-LABEL="tb321fu_qcom_sns_end"
-EOF_UDEV
+  install -d -m 0755 \
+    "$pkg/usr/lib/systemd/system" \
+    "$pkg/usr/lib/systemd/system-sleep" \
+    "$pkg/etc/systemd/system/iio-sensor-proxy.service.d" \
+    "$pkg/usr/lib/udev/rules.d"
+  install -m 0755 "$payload_dir/qcom-sns-resume" \
+    "$pkg/usr/lib/systemd/system-sleep/qcom-sns-resume"
+  install -m 0644 "$payload_dir/qcom-sns-init.service" \
+    "$pkg/usr/lib/systemd/system/qcom-sns-init.service"
+  install -m 0644 "$payload_dir/99-qcom-sns.conf" \
+    "$pkg/etc/systemd/system/iio-sensor-proxy.service.d/99-qcom-sns.conf"
+  install -m 0644 "$payload_dir/80-tb321fu-qcom-sns.rules" \
+    "$pkg/usr/lib/udev/rules.d/80-tb321fu-qcom-sns.rules"
 
   write_control "$pkg" tb321fu-sensors misc \
-    'qcom-sns-hexagonrpc, qcom-sns-iio-sensor-proxy, qcom-sns-libssc, systemd, coreutils, findutils' \
+    'qcom-sns-hexagonrpc, qcom-sns-iio-sensor-proxy, qcom-sns-libssc, systemd, coreutils, findutils, util-linux' \
     'Sensor files for Lenovo Legion Y700 TB321FU' \
     'Verified TB321FU Qualcomm SNS device data and cold-boot initialization glue.' \
+    'Conflicts: y700-sensors' \
     'Replaces: y700-sensors'
   write_tb321fu_maintainer_scripts "$pkg"
+  ci_assert_privileged_payload_security "$pkg" \
+    usr/libexec/qcom-sns/qcom-sns-init \
+    usr/lib/systemd/system-sleep/qcom-sns-resume
   build_deb "$pkg" tb321fu-sensors
 
   registry_count=$(find "$qcom_root/sensors/registry" -type f | wc -l)

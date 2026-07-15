@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/common.sh"
+. "$SCRIPT_DIR/system-payload-policy.sh"
 
 usage() {
   cat <<USAGE
@@ -258,7 +259,15 @@ build_camera_package() {
   write_maintainer_scripts "$pkg"
   validate_camera_payload "$pkg" ""
 
-  find "$pkg" -type d -exec chmod 0755 {} +
+  ci_normalize_system_payload_modes "$pkg"
+  ci_assert_normalized_system_payload_modes "$pkg"
+  ci_assert_privileged_payload_security "$pkg" \
+    opt/libcamera-y700/bin/cam \
+    opt/libcamera-y700/bin/libcamera-bug-report \
+    opt/libcamera-y700/libexec/libcamera/soft_ipa_proxy \
+    usr/local/bin/y700-camera-env \
+    usr/local/bin/y700-camera-cam \
+    usr/local/bin/y700-camera-preview
   ci_normalize_package_tree "$pkg"
   dpkg-deb --build --root-owner-group "$pkg" "$deb" >/dev/null
 

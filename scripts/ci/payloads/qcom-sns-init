@@ -1,0 +1,221 @@
+#!/bin/sh
+set -eu
+
+umask 022
+
+HEXAGONRPCD=${QCOM_SNS_HEXAGONRPCD:-/usr/bin/hexagonrpcd}
+ROOT=${QCOM_SNS_DEVICE_ROOT:-/usr/share/qcom/sm8650/Lenovo/tb321fu}
+STATE=${QCOM_SNS_STATE_ROOT:-/var/lib/qcom-sns}
+DEVICE=${QCOM_SNS_FASTRPC_DEVICE:-/dev/fastrpc-adsp}
+LOGDIR=${QCOM_SNS_LOG_DIR:-/var/log/qcom-sns}
+INIT_TIMEOUT=${QCOM_SNS_INIT_TIMEOUT:-45}
+MIN_FILES=${QCOM_SNS_MIN_REGISTRY_FILES:-200}
+PERSIST="$STATE/persist"
+REGISTRY_PARENT="$PERSIST/sensors/registry"
+REGISTRY="$REGISTRY_PARENT/registry"
+GENERATIONS="$STATE/generations"
+SOURCE_MANIFESTS="$ROOT/.tb321fu-manifests"
+LOG="$LOGDIR/hexagonrpcd-init.log"
+LOCK="$STATE/init.lock"
+slot_root=
+committed=0
+tmp_log=
+
+fail() {
+  printf '%s\n' "$*" >&2
+  printf '%s\n' "$*" >>"$LOG"
+  exit 1
+}
+
+safe_absolute_path() {
+  case $1 in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case $1 in
+    *'/../'*|*/..|*'/./'*|*/.|*'//'*) return 1 ;;
+  esac
+  return 0
+}
+
+cleanup() {
+  [ -z "$tmp_log" ] || rm -f -- "$tmp_log"
+  if [ "$committed" -ne 1 ] && [ -n "$slot_root" ]; then
+    case $slot_root in
+      "$GENERATIONS/slot-a"|"$GENERATIONS/slot-b") rm -rf -- "$slot_root" ;;
+    esac
+  fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+safe_absolute_path "$ROOT" || {
+  printf 'unsafe qcom-sns device root: %s\n' "$ROOT" >&2
+  exit 1
+}
+safe_absolute_path "$STATE" || {
+  printf 'unsafe qcom-sns state root: %s\n' "$STATE" >&2
+  exit 1
+}
+safe_absolute_path "$DEVICE" || {
+  printf 'unsafe qcom-sns FastRPC device: %s\n' "$DEVICE" >&2
+  exit 1
+}
+case $INIT_TIMEOUT in *[!0-9]*|'') exit 1 ;; esac
+case $MIN_FILES in *[!0-9]*|'') exit 1 ;; esac
+[ "$INIT_TIMEOUT" -ge 1 ] && [ "$INIT_TIMEOUT" -le 120 ] || exit 1
+[ "$MIN_FILES" -ge 1 ] && [ "$MIN_FILES" -le 2000 ] || exit 1
+
+for path in "$STATE" "$PERSIST" "$PERSIST/sensors" "$REGISTRY_PARENT" \
+  "$GENERATIONS" "$LOGDIR"; do
+  if [ -L "$path" ]; then
+    printf 'refusing symlinked qcom-sns state path %s\n' "$path" >&2
+    exit 1
+  fi
+done
+mkdir -p "$REGISTRY_PARENT" "$GENERATIONS" "$LOGDIR"
+
+exec 9>"$LOCK"
+flock -x 9
+
+[ -x "$HEXAGONRPCD" ] || fail "missing executable $HEXAGONRPCD"
+[ -d "$ROOT/sensors/registry" ] || fail "missing TB321FU registry source under $ROOT"
+[ -d "$ROOT/sensors/config" ] || fail "missing TB321FU config source under $ROOT"
+[ -s "$SOURCE_MANIFESTS/registry.sha256" ] || fail "missing registry source manifest"
+[ -s "$SOURCE_MANIFESTS/config.sha256" ] || fail "missing config source manifest"
+(cd "$ROOT" && sha256sum -c \
+  .tb321fu-manifests/registry.sha256 \
+  .tb321fu-manifests/config.sha256 >/dev/null) || fail "TB321FU sensor source manifest mismatch"
+
+waited=0
+while [ ! -e "$DEVICE" ] && [ "$waited" -lt 60 ]; do
+  sleep 1
+  waited=$((waited + 1))
+done
+[ -e "$DEVICE" ] || fail "missing $DEVICE after ${waited}s"
+
+current=
+slot=slot-a
+if [ -L "$REGISTRY" ]; then
+  current=$(readlink -f -- "$REGISTRY") || fail "broken qcom-sns registry generation link"
+  case $current in
+    "$GENERATIONS/slot-a/registry") slot=slot-b ;;
+    "$GENERATIONS/slot-b/registry") slot=slot-a ;;
+    *) fail "qcom-sns registry generation escapes managed slots: $current" ;;
+  esac
+elif [ -d "$REGISTRY" ]; then
+  current=$REGISTRY
+elif [ -e "$REGISTRY" ]; then
+  fail "qcom-sns registry path is not a directory or managed link"
+fi
+
+slot_root="$GENERATIONS/$slot"
+case $slot_root in
+  "$GENERATIONS/slot-a"|"$GENERATIONS/slot-b") ;;
+  *) fail "invalid qcom-sns generation slot" ;;
+esac
+rm -rf -- "$slot_root"
+mkdir -p "$slot_root/registry"
+
+if [ -n "$current" ]; then
+  if find -H "$current" -mindepth 1 ! -type d ! -type f -print -quit | grep -q .; then
+    fail "existing qcom-sns registry contains unsupported members"
+  fi
+  if [ "$current" = "$REGISTRY" ]; then
+    cp -a -- "$current/." "$slot_root/registry/"
+  else
+    current_slot=${current%/registry}
+    if (cd "$current_slot" && sha256sum -c manifest.sha256 >/dev/null 2>&1); then
+      cp -a -- "$current/." "$slot_root/registry/"
+    else
+      printf 'discarding invalid previous qcom-sns generation %s\n' "$current" >>"$LOG"
+    fi
+  fi
+fi
+
+tmp_log=$(mktemp "$LOGDIR/.hexagonrpcd-init.XXXXXX")
+rc=0
+QCOM_SNS_REGISTRY_ROOT="$slot_root/registry" \
+  timeout --signal=TERM --kill-after=5 "$INIT_TIMEOUT" \
+  "$HEXAGONRPCD" -f "$DEVICE" -d adsp -s -R "$ROOT" \
+  >"$tmp_log" 2>&1 || rc=$?
+
+case $rc in
+  0|124) ;;
+  *)
+    cat "$tmp_log" >>"$LOG"
+    fail "hexagonrpcd current generation failed rc=$rc"
+    ;;
+esac
+grep -qx 'QCOM_SNS_REGISTRY_ACCESS' "$tmp_log" || {
+  cat "$tmp_log" >>"$LOG"
+  fail "hexagonrpcd current generation did not access the registry"
+}
+
+if find "$slot_root/registry" -mindepth 1 ! -type d ! -type f -print -quit | grep -q .; then
+  fail "generated qcom-sns registry contains unsupported members"
+fi
+count=$(find "$slot_root/registry" -type f | wc -l)
+[ "$count" -ge "$MIN_FILES" ] || {
+  cat "$tmp_log" >>"$LOG"
+  fail "current qcom-sns generation has registry_files=$count rc=$rc"
+}
+
+(cd "$slot_root" &&
+  LC_ALL=C find registry -type f -print0 |
+    LC_ALL=C sort -z |
+    xargs -0 -r sha256sum -- >manifest.sha256)
+[ -s "$slot_root/manifest.sha256" ] || fail "empty qcom-sns generation manifest"
+(cd "$slot_root" && sha256sum -c manifest.sha256 >/dev/null) || \
+  fail "qcom-sns generation manifest verification failed"
+
+boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf unknown)
+device_id=$(stat -c '%t:%T' "$DEVICE" 2>/dev/null || printf unknown)
+source_registry=$(sha256sum "$SOURCE_MANIFESTS/registry.sha256" | awk '{print $1}')
+source_config=$(sha256sum "$SOURCE_MANIFESTS/config.sha256" | awk '{print $1}')
+output_manifest=$(sha256sum "$slot_root/manifest.sha256" | awk '{print $1}')
+cat >"$slot_root/ready.env" <<EOF_READY
+generation=$slot
+boot_id=$boot_id
+fastrpc_device=$device_id
+hexagonrpcd_rc=$rc
+registry_files=$count
+source_registry_manifest_sha256=$source_registry
+source_config_manifest_sha256=$source_config
+output_manifest_sha256=$output_manifest
+EOF_READY
+chmod 0644 "$slot_root/manifest.sha256" "$slot_root/ready.env"
+
+new_link="$REGISTRY_PARENT/.registry.new.$$"
+relative_target="../../../generations/$slot/registry"
+ln -s "$relative_target" "$new_link"
+
+# Keep readiness coupled to the one atomically published registry link.  The
+# fixed path resolves through REGISTRY, so switching REGISTRY also switches the
+# corresponding ready.env without a second commit point.
+ready_target="persist/sensors/registry/registry/../ready.env"
+if [ -L "$STATE/current.ready" ] &&
+  [ "$(readlink -- "$STATE/current.ready")" = "$ready_target" ]; then
+  :
+else
+  ready_link="$STATE/.current.ready.new.$$"
+  ln -s "$ready_target" "$ready_link"
+  mv -Tf -- "$ready_link" "$STATE/current.ready"
+fi
+
+if [ -L "$REGISTRY" ] || [ ! -e "$REGISTRY" ]; then
+  mv -Tf -- "$new_link" "$REGISTRY"
+else
+  legacy="$STATE/.legacy-registry.$$"
+  mv -T -- "$REGISTRY" "$legacy"
+  if mv -Tf -- "$new_link" "$REGISTRY"; then
+    rm -rf -- "$legacy"
+  else
+    mv -T -- "$legacy" "$REGISTRY"
+    fail "failed to publish qcom-sns generation"
+  fi
+fi
+committed=1
+cat "$tmp_log" >>"$LOG"
+printf 'committed generation=%s registry_files=%s rc=%s\n' "$slot" "$count" "$rc" >>"$LOG"
+exit 0

@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/common.sh"
+. "$SCRIPT_DIR/system-payload-policy.sh"
+. "$SCRIPT_DIR/tb321fu-gpu-deb-package.sh"
 
 usage() {
   cat <<USAGE
@@ -30,6 +32,7 @@ Environment inputs:
   HOSTNAME_NAME              default: y700
   DEFAULT_USER_NAME          default: y700
   DEFAULT_USER_PASSWORD_HASH crypt(3) hash supplied via secret; default: locked
+  DEFAULT_USER_AUTHORIZED_KEYS newline-separated OpenSSH public keys supplied via secret
   ROOT_PASSWORD_MODE         locked|set|empty, default: locked
   ROOT_PASSWORD_HASH         crypt(3) hash used when ROOT_PASSWORD_MODE=set
   USER_SUDO_MODE             password|nopasswd|none, default: password
@@ -79,6 +82,7 @@ ci_require_cmd umount
 ci_require_cmd findmnt
 ci_require_cmd realpath
 ci_require_cmd chroot
+ci_require_cmd cmp
 ci_require_cmd dpkg-deb
 ci_require_cmd e2fsck
 ci_require_cmd rsync
@@ -100,6 +104,7 @@ ROOTFS_PARTLABEL=${ROOTFS_PARTLABEL:-userdata}
 HOSTNAME_NAME=${HOSTNAME_NAME:-y700}
 DEFAULT_USER_NAME=${DEFAULT_USER_NAME:-y700}
 DEFAULT_USER_PASSWORD_HASH=${DEFAULT_USER_PASSWORD_HASH:-!}
+DEFAULT_USER_AUTHORIZED_KEYS=${DEFAULT_USER_AUTHORIZED_KEYS:-}
 ROOT_PASSWORD_MODE=${ROOT_PASSWORD_MODE:-locked}
 ROOT_PASSWORD_HASH=${ROOT_PASSWORD_HASH:-}
 USER_SUDO_MODE=${USER_SUDO_MODE:-password}
@@ -146,6 +151,8 @@ fi
 if ci_bool "$INSTALL_FCITX5_CHINESE"; then
   PACKAGE_LIST="$PACKAGE_LIST $FCITX5_CHINESE_PACKAGES"
 fi
+PACKAGE_LIST=$(ci_normalize_package_list "$PACKAGE_LIST")
+ci_require_user_access_path "$DEFAULT_USER_PASSWORD_HASH" "$DEFAULT_USER_AUTHORIZED_KEYS" "$SDDM_AUTOLOGIN"
 
 configure_mozilla_firefox_repo() {
   local root=$1
@@ -209,6 +216,21 @@ rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
 build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
 manifest="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.manifest"
 mounted=0
+
+unmount_chroot_runtime() {
+  local relative target
+  for relative in run sys proc dev/pts dev; do
+    target="$rootfs_dir/$relative"
+    if findmnt -rn --mountpoint "$target" >/dev/null; then
+      umount -- "$target" || ci_die "failed to unmount chroot runtime path: $target"
+    fi
+  done
+  for relative in run sys proc dev/pts dev; do
+    target="$rootfs_dir/$relative"
+    ! findmnt -rn --mountpoint "$target" >/dev/null ||
+      ci_die "chroot runtime path remains mounted: $target"
+  done
+}
 
 apply_y700_firmware_fixes() {
   local root=$1
@@ -274,6 +296,8 @@ apply_y700_audio_policy_fixes() {
   local root=$1
   local conf_dir="$root/etc/wireplumber/wireplumber.conf.d"
   local conf="$conf_dir/51-y700-alsa-auto.conf"
+  local route_conf="$conf_dir/52-tb321fu-headset-route-reconcile.conf"
+  local route_script="$root/usr/share/wireplumber/scripts/tb321fu/headset-route-reconcile.lua"
 
   ci_log "installing Y700 WirePlumber ALSA policy fix"
 
@@ -304,6 +328,15 @@ CONF
   grep -q 'api.acp.auto-profile = true' "$conf" || ci_die "Y700 ALSA policy missing auto-profile=true"
   grep -q 'api.acp.auto-port = true' "$conf" || ci_die "Y700 ALSA policy missing auto-port=true"
   grep -q 'api.alsa.split-enable = false' "$conf" || ci_die "Y700 ALSA policy missing split-enable=false"
+
+  [ ! -e "$conf_dir/52-y700-headset-cleanup.conf" ] ||
+    ci_die "legacy node-presence WirePlumber cleanup config remains in the rootfs"
+  [ ! -e "$root/usr/share/wireplumber/scripts/y700/headset-cleanup.lua" ] ||
+    ci_die "legacy node-presence WirePlumber cleanup script remains in the rootfs"
+  cmp -s "$SCRIPT_DIR/payloads/52-tb321fu-headset-route-reconcile.conf" "$route_conf" ||
+    ci_die "TB321FU WirePlumber route reconcile config is missing or changed"
+  cmp -s "$SCRIPT_DIR/payloads/tb321fu-headset-route-reconcile.lua" "$route_script" ||
+    ci_die "TB321FU WirePlumber route reconcile script is missing or changed"
 }
 
 apply_sddm_autologin() {
@@ -471,9 +504,14 @@ apply_tb321fu_gpu_sensor() {
   local source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-"$SCRIPT_DIR/../../source/tb321fu-ksystemstats-adreno-freq"}
   local rootfs_src=/tmp/tb321fu-ksystemstats-adreno-freq-src
   local rootfs_build=/tmp/tb321fu-ksystemstats-adreno-freq-build
+  local package_stage=/tmp/tb321fu-ksystemstats-gpu-package
+  local package_deb=/tmp/tb321fu-ksystemstats-gpu.deb
+  local runtime_deps_file=/tmp/tb321fu-ksystemstats-gpu.runtime-depends
+  local new_build_deps_file=/tmp/tb321fu-ksystemstats-gpu.new-build-deps
   local plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_tb321fu_gpu.so
   local stock_plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so
   local disabled_stock_plugin_rel=$stock_plugin_rel.disabled-tb321fu-adreno
+  local package_hash package_version package_arch runtime_deps package_output
 
   ci_log "building TB321FU KSystemStats Adreno GPU frequency plugin"
 
@@ -481,7 +519,8 @@ apply_tb321fu_gpu_sensor() {
   [ -f "$source_dir/tb321fu_gpu.cpp" ] || ci_die "missing TB321FU GPU sensor source: $source_dir/tb321fu_gpu.cpp"
   [ -f "$source_dir/metadata.json" ] || ci_die "missing TB321FU GPU sensor source: $source_dir/metadata.json"
 
-  rm -rf "$root$rootfs_src" "$root$rootfs_build"
+  rm -rf "$root$rootfs_src" "$root$rootfs_build" "$root$package_stage"
+  rm -f "$root$package_deb" "$root$runtime_deps_file" "$root$new_build_deps_file"
   install -d -m 0755 "$root$rootfs_src"
   rsync -a --delete "$source_dir"/ "$root$rootfs_src"/
 
@@ -512,10 +551,12 @@ fi
 
 src=/tmp/tb321fu-ksystemstats-adreno-freq-src
 build=/tmp/tb321fu-ksystemstats-adreno-freq-build
-plugin=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_tb321fu_gpu.so
-stock=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so
-disabled=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so.disabled-tb321fu-adreno
-build_deps="cmake extra-cmake-modules g++ make libksysguard-dev libkf6coreaddons-dev libsensors-dev"
+stage=/tmp/tb321fu-ksystemstats-gpu-package
+plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_tb321fu_gpu.so
+plugin=$stage/$plugin_rel
+runtime_deps_file=/tmp/tb321fu-ksystemstats-gpu.runtime-depends
+new_build_deps_file=/tmp/tb321fu-ksystemstats-gpu.new-build-deps
+build_deps="cmake extra-cmake-modules g++ make dpkg-dev libksysguard-dev libkf6coreaddons-dev libsensors-dev"
 
 new_build_deps=""
 for pkg in $build_deps; do
@@ -531,35 +572,31 @@ apt-get install -y --no-install-recommends $build_deps
 
 cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build "$build" -j"${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}"
-cmake --install "$build"
+rm -rf "$stage"
+DESTDIR="$stage" cmake --install "$build"
 
 test -f "$plugin"
-if ! dpkg-divert --list "$stock" | grep -Fq "$disabled"; then
-  rm -f "$disabled"
-  dpkg-divert --local --rename --add --divert "$disabled" "$stock"
-fi
-rm -f "$stock"
-test ! -e "$stock"
+install -d -m 0755 "$stage/usr/share/tb321fu-ksystemstats-gpu"
+(cd "$stage" && sha256sum "./$plugin_rel" > \
+  ./usr/share/tb321fu-ksystemstats-gpu/ksystemstats_plugin_tb321fu_gpu.so.sha256)
 
-install -d -m 0755 /usr/share/tb321fu-ksystemstats-gpu
-sha256sum "$plugin" > /usr/share/tb321fu-ksystemstats-gpu/ksystemstats_plugin_tb321fu_gpu.so.sha256
-dpkg-divert --list "$stock" > /usr/share/tb321fu-ksystemstats-gpu/stock-plugin-diversion.txt
-grep -Fq "$disabled" /usr/share/tb321fu-ksystemstats-gpu/stock-plugin-diversion.txt
+install -d -m 0755 "$src/debian"
+cat > "$src/debian/control" <<'SHLIBS_CONTROL'
+Source: tb321fu-ksystemstats-gpu
+Section: utils
+Priority: optional
+Maintainer: TB321FU Linux maintainers <noreply@example.invalid>
+Standards-Version: 4.7.0
 
-rm -rf "$src" "$build"
-
-if [ -n "$new_build_deps" ]; then
-  apt-get purge -y $new_build_deps
-  apt-get autoremove -y --purge
-fi
-apt-get clean
-rm -rf /var/lib/apt/lists/*
-rm -f /etc/apt/apt.conf.d/99ci-proxy
-
-test -f "$plugin"
-test ! -e "$stock"
-test ! -e "$src"
-test ! -e "$build"
+Package: tb321fu-ksystemstats-gpu
+Architecture: any
+Depends: ${shlibs:Depends}
+Description: TB321FU Adreno frequency provider for KSystemStats
+SHLIBS_CONTROL
+(cd "$src" && dpkg-shlibdeps -O -e"$plugin") | \
+  sed -n 's/^shlibs:Depends=//p' > "$runtime_deps_file"
+test -s "$runtime_deps_file"
+printf '%s\n' "$new_build_deps" > "$new_build_deps_file"
 GPU_SENSOR_BUILD
   chmod +x "$root/root/ci-build-tb321fu-gpu-sensor.sh"
 
@@ -593,6 +630,61 @@ GPU_SENSOR_BUILD
     TB321FU_GPU_SENSOR_BUILD_JOBS="${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}" \
     bash /root/ci-build-tb321fu-gpu-sensor.sh
 
+  [ "$(wc -l < "$root$runtime_deps_file")" -eq 1 ] || \
+    ci_die "TB321FU GPU package runtime dependency output is not exactly one line"
+  runtime_deps=$(tr -d '\r\n' < "$root$runtime_deps_file")
+  [ -n "$runtime_deps" ] || ci_die "TB321FU GPU package runtime dependencies are empty"
+  package_arch=$(chroot "$root" dpkg --print-architecture)
+  package_hash=$(
+    {
+      sha256sum "$root$package_stage/$plugin_rel" | awk '{print $1}'
+      sha256sum "$SCRIPT_DIR/tb321fu-gpu-deb-package.sh" | awk '{print $1}'
+      printf 'architecture=%s\nruntime-depends=%s\n' "$package_arch" "$runtime_deps"
+    } | sha256sum | awk '{print $1}'
+  )
+  package_version="1.${package_hash:0:16}"
+  tb321fu_write_gpu_deb_metadata \
+    "$root$package_stage" "$package_version" "$package_arch" "$runtime_deps"
+  (
+    cd "$root$package_stage"
+    find usr -type f -print0 | \
+      sort -z | xargs -0 -r md5sum > DEBIAN/md5sums
+  )
+  chmod 0644 "$root$package_stage/DEBIAN/control" "$root$package_stage/DEBIAN/md5sums"
+  dpkg-deb --root-owner-group --build "$root$package_stage" "$root$package_deb"
+  package_output="$OUTPUT_DIR/${OUTPUT_PREFIX}-tb321fu-ksystemstats-gpu_${package_version}_${package_arch}.deb"
+  chroot "$root" dpkg --install "$package_deb"
+
+  chroot "$root" dpkg-query -W -f='${Status}\n' tb321fu-ksystemstats-gpu | \
+    grep -Fx 'install ok installed' >/dev/null || ci_die "TB321FU GPU package is not installed"
+  chroot "$root" dpkg-query -S "/$plugin_rel" | \
+    grep -Fx "tb321fu-ksystemstats-gpu: /$plugin_rel" >/dev/null || \
+    ci_die "TB321FU GPU plugin is not owned by its native package"
+  chroot "$root" dpkg-divert --listpackage "/$stock_plugin_rel" | \
+    grep -Fx tb321fu-ksystemstats-gpu >/dev/null || \
+    ci_die "TB321FU GPU stock-plugin diversion has the wrong owner"
+  chroot "$root" sh -eu -c \
+    'cd / && sha256sum -c /usr/share/tb321fu-ksystemstats-gpu/ksystemstats_plugin_tb321fu_gpu.so.sha256'
+  find "$OUTPUT_DIR" -maxdepth 1 -type f \
+    -name "${OUTPUT_PREFIX}-tb321fu-ksystemstats-gpu_*.deb" -delete
+  install -m 0644 "$root$package_deb" "$package_output"
+
+  local -a new_build_deps=()
+  read -r -a new_build_deps < "$root$new_build_deps_file" || true
+  if [ "${#new_build_deps[@]}" -gt 0 ]; then
+    local dependency
+    for dependency in "${new_build_deps[@]}"; do
+      [[ $dependency =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || ci_die "unsafe GPU build dependency: $dependency"
+    done
+    chroot "$root" apt-mark auto "${new_build_deps[@]}"
+    chroot "$root" apt-get autoremove -y --purge
+  fi
+  chroot "$root" apt-get clean
+  rm -rf "$root/var/lib/apt/lists"/* \
+    "$root$rootfs_src" "$root$rootfs_build" "$root$package_stage"
+  rm -f "$root$package_deb" "$root$runtime_deps_file" "$root$new_build_deps_file" \
+    "$root/etc/apt/apt.conf.d/99ci-proxy"
+
   rm -f "$root/etc/resolv.conf"
   if [ -f "$gpu_resolv_link" ]; then
     ln -s "$(cat "$gpu_resolv_link")" "$root/etc/resolv.conf"
@@ -606,7 +698,8 @@ GPU_SENSOR_BUILD
   [ -f "$root/$plugin_rel" ] || ci_die "TB321FU GPU sensor plugin missing after build: /$plugin_rel"
   [ ! -e "$root/$stock_plugin_rel" ] || ci_die "stock KSystemStats GPU plugin still enabled: /$stock_plugin_rel"
   [ -f "$root/$disabled_stock_plugin_rel" ] || ci_die "disabled stock KSystemStats GPU plugin missing: /$disabled_stock_plugin_rel"
-  [ -s "$root/usr/share/tb321fu-ksystemstats-gpu/stock-plugin-diversion.txt" ] || ci_die "stock GPU plugin dpkg diversion record missing"
+  [ -s "$root/usr/share/tb321fu-ksystemstats-gpu/ksystemstats_plugin_tb321fu_gpu.so.sha256" ] || \
+    ci_die "TB321FU GPU package checksum is missing"
 }
 
 cleanup() {
@@ -713,7 +806,8 @@ if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
 fi
 
 apt-get update
-apt-get install -y $PACKAGE_LIST
+mapfile -t requested_packages <<< "$PACKAGE_LIST"
+apt-get install -y -- "${requested_packages[@]}"
 
 if ci_bool_chroot "$INSTALL_FIREFOX"; then
   firefox_version=$(dpkg-query -W -f='${Version}' firefox 2>/dev/null || true)
@@ -866,8 +960,13 @@ cat > /etc/skel/.config/kwinoutputconfig.json <<'KWINOUTPUTCONFIG'
 KWINOUTPUTCONFIG
 chmod 0644 /etc/skel/.config/kwinoutputconfig.json
 
-systemctl enable NetworkManager || true
-systemctl enable ssh || true
+systemctl enable NetworkManager.service ssh.service
+for required_unit in NetworkManager.service ssh.service; do
+  systemctl is-enabled --quiet "$required_unit" || {
+    echo "required system service was not enabled: $required_unit" >&2
+    exit 1
+  }
+done
 
 if ! id -u "$DEFAULT_USER_NAME" >/dev/null 2>&1; then
   useradd -m -s /bin/bash "$DEFAULT_USER_NAME"
@@ -877,8 +976,13 @@ if [ -n "$DEFAULT_USER_PASSWORD_HASH" ] && [ "$DEFAULT_USER_PASSWORD_HASH" != '!
 else
   passwd -l "$DEFAULT_USER_NAME" || true
 fi
-
 default_user_group=$(id -gn "$DEFAULT_USER_NAME")
+if [ -n "$DEFAULT_USER_AUTHORIZED_KEYS" ]; then
+  install -d -m 0700 -o "$DEFAULT_USER_NAME" -g "$default_user_group" "/home/$DEFAULT_USER_NAME/.ssh"
+  printf '%s\n' "$DEFAULT_USER_AUTHORIZED_KEYS" > "/home/$DEFAULT_USER_NAME/.ssh/authorized_keys"
+  chown "$DEFAULT_USER_NAME:$default_user_group" "/home/$DEFAULT_USER_NAME/.ssh/authorized_keys"
+  chmod 0600 "/home/$DEFAULT_USER_NAME/.ssh/authorized_keys"
+fi
 if [ -d "/home/$DEFAULT_USER_NAME" ]; then
   install -d -m 0755 "/home/$DEFAULT_USER_NAME/.config"
   for skel_config in kwinrc plasmakeyboardrc kwinoutputconfig.json; do
@@ -1023,6 +1127,8 @@ if [ -n "${CAMERA_STACK_DEB_DIR:-}" ]; then
   find "$CAMERA_STACK_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
 fi
 
+ci_prepare_y700_daily_payload_deb \
+  "$rootfs_dir/var/tmp/ci-debs" "$work_dir/device-deb-policy"
 prepare_tb321fu_compat_firmware_deb "$rootfs_dir/var/tmp/ci-debs"
 
 if ci_bool "$INSTALL_FIREFOX"; then
@@ -1038,6 +1144,7 @@ chroot "$rootfs_dir" env -i \
   INSTALL_FCITX5_CHINESE="$INSTALL_FCITX5_CHINESE" \
   DEFAULT_USER_NAME="$DEFAULT_USER_NAME" \
   DEFAULT_USER_PASSWORD_HASH="$DEFAULT_USER_PASSWORD_HASH" \
+  DEFAULT_USER_AUTHORIZED_KEYS="$DEFAULT_USER_AUTHORIZED_KEYS" \
   ROOT_PASSWORD_MODE="$ROOT_PASSWORD_MODE" \
   ROOT_PASSWORD_HASH="$ROOT_PASSWORD_HASH" \
   USER_SUDO_MODE="$USER_SUDO_MODE" \
@@ -1064,14 +1171,28 @@ else
   ln -s ../run/systemd/resolve/stub-resolv.conf "$rootfs_dir/etc/resolv.conf"
 fi
 
+overlay_stage=
 if [ -n "${OVERLAY_ARCHIVE:-}" ]; then
   tmp_overlay="$work_dir/overlay.archive"
-  ci_log "applying overlay archive: $OVERLAY_ARCHIVE"
+  overlay_stage="$work_dir/final-overlay"
+  mkdir -p "$overlay_stage"
+  ci_log "staging overlay archive: $OVERLAY_ARCHIVE"
   ci_download "$OVERLAY_ARCHIVE" "$tmp_overlay" "$OVERLAY_ARCHIVE_SHA256"
-  ci_extract_archive "$tmp_overlay" "$rootfs_dir"
+  ci_extract_archive "$tmp_overlay" "$overlay_stage"
+  ci_validate_rootfs_overlay_tree "$overlay_stage"
 fi
 if [ -n "${OVERLAY_DIR:-}" ]; then
-  ci_log "applying overlay directory: $OVERLAY_DIR"
+  ci_validate_rootfs_overlay_tree "$OVERLAY_DIR"
+fi
+
+unmount_chroot_runtime
+
+if [ -n "$overlay_stage" ]; then
+  ci_log "applying staged overlay archive: $OVERLAY_ARCHIVE"
+  rsync -aH --numeric-ids "$overlay_stage"/ "$rootfs_dir"/
+fi
+if [ -n "${OVERLAY_DIR:-}" ]; then
+  ci_log "applying validated overlay directory: $OVERLAY_DIR"
   rsync -aH --numeric-ids "$OVERLAY_DIR"/ "$rootfs_dir"/
 fi
 
@@ -1087,6 +1208,15 @@ fi
 if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
   apply_tb321fu_gpu_sensor "$rootfs_dir"
 fi
+
+ci_assert_privileged_payload_security "$rootfs_dir" \
+  usr/libexec/tb321fu-haptics/bind-aw86937 \
+  opt/libcamera-y700/bin/cam \
+  opt/libcamera-y700/bin/libcamera-bug-report \
+  opt/libcamera-y700/libexec/libcamera/soft_ipa_proxy \
+  usr/local/bin/y700-camera-env \
+  usr/local/bin/y700-camera-cam \
+  usr/local/bin/y700-camera-preview
 
 cat > "$build_info" <<INFO
 generated=$(ci_iso8601_timestamp)

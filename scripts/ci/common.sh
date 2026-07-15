@@ -34,6 +34,99 @@ ci_validate_output_prefix() {
     ci_die "invalid OUTPUT_PREFIX (1-64 characters; letters, digits, dot, underscore and hyphen only): $value"
 }
 
+ci_normalize_package_list() {
+  local raw=${1-} line token
+  local -a line_tokens=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    line_tokens=()
+    read -r -a line_tokens <<< "$line"
+    for token in "${line_tokens[@]}"; do
+      [[ ${#token} -le 128 && $token =~ ^[A-Za-z0-9][A-Za-z0-9+.:_@=-]*$ ]] ||
+        ci_die "invalid package token: $token"
+      printf '%s\n' "$token"
+    done
+  done <<< "$raw"
+}
+
+ci_resolve_path_for_comparison() {
+  local path=$1 parent
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    realpath -e -- "$path"
+    return
+  fi
+  parent=$(realpath -e -- "$(dirname -- "$path")")
+  printf '%s/%s\n' "$parent" "$(basename -- "$path")"
+}
+
+ci_require_distinct_paths() {
+  local -a labels=() paths=() resolved=()
+  local label path i j
+  [ "$#" -ge 4 ] && [ $(( $# % 2 )) -eq 0 ] ||
+    ci_die "ci_require_distinct_paths expects LABEL PATH pairs"
+  while [ "$#" -gt 0 ]; do
+    label=$1
+    path=$2
+    labels+=("$label")
+    paths+=("$path")
+    resolved+=("$(ci_resolve_path_for_comparison "$path")")
+    shift 2
+  done
+  for ((i = 0; i < ${#paths[@]}; i++)); do
+    for ((j = i + 1; j < ${#paths[@]}; j++)); do
+      if [ "${resolved[i]}" = "${resolved[j]}" ] ||
+         { [ -e "${paths[i]}" ] && [ -e "${paths[j]}" ] && [ "${paths[i]}" -ef "${paths[j]}" ]; }; then
+        ci_die "${labels[i]} and ${labels[j]} must refer to distinct paths"
+      fi
+    done
+  done
+}
+
+ci_validate_password_hash() {
+  local value=$1
+  [[ ${#value} -ge 13 && ${#value} -le 512 && $value != *:* && $value != *[[:space:]]* && $value != \!* && $value != \** ]] ||
+    ci_die "DEFAULT_USER_PASSWORD_HASH is not a usable crypt(3) hash"
+}
+
+ci_validate_authorized_keys() {
+  local value=$1 line key_type key_blob remainder
+  local found=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    [ -n "$line" ] || continue
+    case $line in \#*) continue ;; esac
+    key_type=
+    key_blob=
+    remainder=
+    read -r key_type key_blob remainder <<< "$line"
+    case $key_type in
+      ssh-ed25519|sk-ssh-ed25519@openssh.com|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa) ;;
+      *) ci_die "unsupported or option-prefixed authorized key type: $key_type" ;;
+    esac
+    [[ ${#key_blob} -ge 16 && $key_blob =~ ^[A-Za-z0-9+/]+={0,3}$ ]] ||
+      ci_die "invalid authorized key body for type $key_type"
+    found=1
+  done <<< "$value"
+  [ "$found" -eq 1 ] || ci_die "DEFAULT_USER_AUTHORIZED_KEYS contains no public key"
+}
+
+ci_require_user_access_path() {
+  local password_hash=$1 authorized_keys=$2 autologin=$3
+  local access_paths=0
+  if [ -n "$password_hash" ] && [ "$password_hash" != '!' ]; then
+    ci_validate_password_hash "$password_hash"
+    access_paths=$((access_paths + 1))
+  fi
+  if [ -n "$authorized_keys" ]; then
+    ci_validate_authorized_keys "$authorized_keys"
+    access_paths=$((access_paths + 1))
+  fi
+  if ci_bool "$autologin"; then
+    access_paths=$((access_paths + 1))
+  fi
+  [ "$access_paths" -gt 0 ] ||
+    ci_die "no user access path: set a password hash, authorized key, or explicitly enable SDDM autologin"
+}
+
 ci_source_date_epoch() {
   local epoch=${SOURCE_DATE_EPOCH:-0}
   [[ $epoch =~ ^[0-9]{1,10}$ ]] ||
@@ -116,6 +209,16 @@ ci_unmount_tree() {
   }
 }
 
+ci_validate_rootfs_overlay_tree() {
+  local root=$1 relative
+  [ -d "$root" ] || ci_die "rootfs overlay is not a directory: $root"
+  for relative in dev proc sys run; do
+    if [ -e "$root/$relative" ] || [ -L "$root/$relative" ]; then
+      ci_die "rootfs overlay must not contain runtime path: $relative"
+    fi
+  done
+}
+
 ci_safe_rmtree() {
   local candidate=$1 parent=$2 prefix=$3 resolved resolved_parent
   [ -e "$candidate" ] || return 0
@@ -141,6 +244,7 @@ ci_safe_rmtree() {
 
 ci_verify_download() {
   local file=$1 verifier=$2 expected actual
+  local -a primary_fingerprints=()
   case $verifier in
     sha256:*) expected=${verifier#sha256:} ;;
     [[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]]*) expected=$verifier ;;
@@ -148,9 +252,18 @@ ci_verify_download() {
       expected=${verifier#openpgp-fpr:}
       [[ $expected =~ ^[A-Fa-f0-9]{40}$ ]] || ci_die "invalid OpenPGP fingerprint: $expected"
       ci_require_cmd gpg
-      gpg --batch --quiet --show-keys --with-colons "$file" 2>/dev/null |
-        awk -F: '$1 == "fpr" { print toupper($10) }' |
-        grep -Fxq "${expected^^}" || ci_die "OpenPGP fingerprint mismatch for $file"
+      mapfile -t primary_fingerprints < <(
+        gpg --batch --quiet --show-keys --with-colons "$file" 2>/dev/null |
+          awk -F: '
+            $1 == "pub" { want_primary_fpr=1; next }
+            $1 == "sub" { want_primary_fpr=0; next }
+            $1 == "fpr" && want_primary_fpr { print toupper($10); want_primary_fpr=0 }
+          '
+      )
+      [ "${#primary_fingerprints[@]}" -eq 1 ] ||
+        ci_die "OpenPGP input must contain exactly one primary key: $file"
+      [ "${primary_fingerprints[0]}" = "${expected^^}" ] ||
+        ci_die "OpenPGP fingerprint mismatch for $file"
       return
       ;;
     *) ci_die "unsupported or missing download verifier for $file" ;;

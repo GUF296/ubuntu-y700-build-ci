@@ -1,0 +1,20 @@
+[Unit]
+Description=Initialize Qualcomm SNS registry for Lenovo TB321FU
+After=qrtr-ns.service dbus.service dev-fastrpc\x2dadsp.device
+Wants=qrtr-ns.service
+BindsTo=dev-fastrpc\x2dadsp.device
+PartOf=qrtr-ns.service
+Before=iio-sensor-proxy.service
+Conflicts=y700-sns-init.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/qcom-sns/qcom-sns-init
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=120s
+
+[Install]
+WantedBy=multi-user.target
