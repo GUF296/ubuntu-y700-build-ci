@@ -53,6 +53,7 @@ case ${MOCK_MODE:-success} in
     sleep 5
     ;;
   flood)
+    echo QCOM_SNS_REGISTRY_ACCESS >&2
     dd if=/dev/zero bs=65536 count=64 2>/dev/null
     ;;
   *) exit 9 ;;
