@@ -1,0 +1,3 @@
+machines:
+  "Lenovo Legion Y700 (2025) / TB321FU":
+    DSP_LIBRARY_PATH: "/sm8650/Lenovo/tb321fu/"

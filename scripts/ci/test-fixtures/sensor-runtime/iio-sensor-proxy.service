@@ -1,0 +1,19 @@
+[Unit]
+Description=IIO Sensor Proxy service
+
+[Service]
+Type=dbus
+BusName=net.hadess.SensorProxy
+ExecStart=/usr/libexec/iio-sensor-proxy
+#Uncomment this to enable debug
+#Environment="G_MESSAGES_DEBUG=all"
+
+# Lockdown
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_LOCAL AF_NETLINK AF_QIPCRTR
+MemoryDenyWriteExecute=true
+RestrictRealtime=true

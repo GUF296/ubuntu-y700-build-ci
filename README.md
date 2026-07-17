@@ -10,9 +10,9 @@ Primary workflow:
 
 - `.github/workflows/build-rootfs-and-grub.yml`
 
-The workflow exposes common dispatch inputs directly in the GitHub Actions UI, including output prefix, Ubuntu mirror, image sizes, rootfs labels, default user settings, sudo mode, and optional SDDM autologin.
+The workflow exposes output/release controls, Ubuntu mirror, image size, rootfs label, hostname and three advanced config blocks in the GitHub Actions UI. Default-user, sudo and SDDM autologin settings are `rootfs_config` keys rather than separate UI fields.
 
-It also keeps three optional advanced override inputs:
+The release/output controls and advanced override inputs are:
 
 - `release_tag`: optional release tag to upload artifacts to.
 - `prerelease`: must be enabled for remediation releases.
@@ -37,9 +37,7 @@ ROOTFS_LABEL=Ubuntu
 ROOTFS_PARTLABEL=userdata
 HOSTNAME_NAME=y700
 DEFAULT_USER_NAME=y700
-DEFAULT_USER_PASSWORD_HASH=!
 ROOT_PASSWORD_MODE=locked
-ROOT_PASSWORD_HASH=
 USER_SUDO_MODE=password
 SDDM_AUTOLOGIN=0
 SDDM_AUTOLOGIN_SESSION=plasma
@@ -55,13 +53,17 @@ DEB_ARCHIVE=
 DEB_ARCHIVE_SHA256=
 SENSOR_DEB_ARCHIVE=
 SENSOR_DEB_ARCHIVE_SHA256=
+SENSOR_PRODUCER_COMMIT=
 HAPTICS_DEB_ARCHIVE=
 HAPTICS_DEB_ARCHIVE_SHA256=
+HAPTICS_PRODUCER_COMMIT=
 CLEAN_APT_CACHE=1
 COMPRESS=7z
 CHUNK_SIZE=
 KEEP_RAW_IMAGE=0
 ```
+
+Password hashes are repository secrets (`DEFAULT_USER_PASSWORD_HASH` and `ROOT_PASSWORD_HASH`), not config-file keys. The config parser rejects and does not serialize them.
 
 ## Boot Config
 
@@ -91,6 +93,8 @@ Optional override example:
 ```text
 KERNEL_ARTIFACT_ARCHIVE=
 KERNEL_ARTIFACT_ARCHIVE_SHA256=
+HAPTICS_MODULE_SHA256=
+HAPTICS_HELPER_BINARY_SHA256=
 BOOTAA64_EFI_URL=
 QCOMRAMP_EFI_URL=
 QCOMRAMP_CFG_NAME=qcomramp.cfg
@@ -124,8 +128,9 @@ When `release_tag` is set, the release uploads the user-facing boot/rootfs artif
 - `KERNEL-BUNDLE.tsv`
 - `VERIFIED-BUNDLE.tsv`
 - `VERIFIED-INPUTS.tsv`
+- `ROOTFS-PACKAGES.tsv`, the sorted installed package/version/architecture inventory
 
-The release notes include the rootfs, boot and source config used for that build. Password-like values are redacted from the notes. Release uploads require single-file archives; leave `CHUNK_SIZE` and `BOOT_CHUNK_SIZE` empty when creating a release. The UEFI `boot.img.7z` asset is committed under `source/boot-image/` so release builds do not depend on a previous release to supply it.
+The release notes include the rootfs, boot and source config used for that build. Password and password-hash assignments are rejected during config parsing and are never serialized into the notes. Release uploads require single-file archives; leave `CHUNK_SIZE` and `BOOT_CHUNK_SIZE` empty when creating a release. The UEFI `boot.img.7z` asset is committed under `source/boot-image/` so release builds do not depend on a previous release to supply it.
 
 When `release_tag` is non-empty on the remediation branch, `prerelease=true` is mandatory. The tested 2026-06-29 release and its assets are never replaced.
 
@@ -142,12 +147,15 @@ Set `INSTALL_FCITX5_CHINESE=0` in `rootfs_config` to opt out.
 
 ## External Device Debs
 
-The rootfs workflow can consume prebuilt device deb archives instead of rebuilding every device package inline:
+The remediation workflow consumes prebuilt device deb archives that have already passed their producer gates:
 
-- `SENSOR_DEB_ARCHIVE` plus `SENSOR_DEB_ARCHIVE_SHA256`: archive containing exactly the clean-producer `qcom-sns-libssc`, `qcom-sns-hexagonrpc`, `qcom-sns-iio-sensor-proxy`, and `tb321fu-sensors` packages and their source/checksum locks.
-- `HAPTICS_DEB_ARCHIVE` plus `HAPTICS_DEB_ARCHIVE_SHA256`: archive containing the verified `tb321fu-haptics` package and `HAPTICS-SOURCE-LOCK.tsv` bound to the selected kernel bundle.
+- `SENSOR_DEB_ARCHIVE` plus `SENSOR_DEB_ARCHIVE_SHA256`: dispatcher-approved archive containing exactly `qcom-sns-libssc`, `qcom-sns-hexagonrpc`, `qcom-sns-iio-sensor-proxy`, and `tb321fu-sensors` plus their source/checksum locks. The external archive SHA is the compiled-asset trust root.
+- `SENSOR_PRODUCER_COMMIT`: exact clean sensor-producer commit recorded in that source lock; remediation dispatches must set it explicitly so the historical default archive cannot be accepted accidentally. Matching this label proves lock consistency, not source derivation of the compiled DEBs; publish the commit and retain the producer run separately for rebuild comparison.
+- `HAPTICS_DEB_ARCHIVE` plus `HAPTICS_DEB_ARCHIVE_SHA256`: exact five-root archive containing the verified `tb321fu-haptics` package, strict `HAPTICS-SOURCE-LOCK.tsv`, single-ref `HAPTICS-PRODUCER.bundle`, fixed eight-entry checksum manifest, and `HAPTICS-SOURCE-SNAPSHOT/` bound to the selected kernel bundle.
+- `HAPTICS_PRODUCER_COMMIT`: exact clean haptics-producer commit recorded in that source lock.
+- `HAPTICS_MODULE_SHA256` and `HAPTICS_HELPER_BINARY_SHA256`: independently approved compiled-payload digests from the authenticated haptics producer run.
 
-When `BUILD_Y700_SENSOR_DEBS=1` or `BUILD_TB321FU_HAPTICS_DEB=1`, the workflow now requires either a prebuilt deb archive/directory or all source inputs needed to build that component. It intentionally fails on missing inputs rather than producing a successful rootfs with missing sensor or haptics support.
+Sensor and haptics packages are intentionally not rebuilt inline by this consumer workflow. The legacy inline builders produce a different package contract and are not release inputs. Build each component in its owning producer repository, publish the exact producer commit and strict archive, then pass the archive URL/SHA and required external digest pins here. Deprecated inline-producer config keys are rejected instead of being silently ignored.
 
 Recommended split:
 
@@ -160,26 +168,32 @@ The historical defaults remain visible for baseline provenance only. They do not
 
 The release is intentionally a two-stage handoff. First commit the final kernel changes, approve the post-`olddefconfig` configuration digest, and run `package-kernel-bootstrap.sh` from the clean commit-bound source/build. It emits a kernel archive and replacement device-DEB archive with byte-identical `KERNEL-BUNDLE.tsv` and `SOURCE-LOCK.tsv` files. It does not emit or duplicate a kernel SDK.
 
-Build haptics from the same clean kernel source/build and pass that small `KERNEL-BUNDLE.tsv` to the haptics producer. Build sensors from the clean sensor producer. Publish only these bounded bootstrap archives as prerelease inputs, then dispatch this workflow from the exact remediation branch with `prerelease=true`.
+Build haptics from the same clean kernel source/build and pass that small `KERNEL-BUNDLE.tsv` to the haptics producer. Build sensors from the clean sensor producer, publish that exact producer commit, and record the authenticated producer run used to approve the sensor archive digest. Publish only these bounded bootstrap archives as prerelease inputs, then dispatch this workflow from the exact remediation branch with `prerelease=true`.
 
-Replace every placeholder below with one immutable HTTPS release URL and its lowercase SHA-256. Put the first six lines in `rootfs_config`:
+Once the four-input verifier succeeds, the staged sensor archive and verified haptics archive or directory take exclusive precedence. The device archive may not carry reserved sensor or haptics package names, and the rootfs builder rejects duplicate package identities, colliding DEB basenames, or an archive plus a same-component DEB directory instead of allowing one input bucket to replace another.
+
+Replace every placeholder below with one immutable HTTPS release URL and its lowercase SHA-256. Put these eight lines in `rootfs_config`:
 
 ```text
 DEB_ARCHIVE=<device-deb-archive-url>
 DEB_ARCHIVE_SHA256=<64-hex-sha256>
 SENSOR_DEB_ARCHIVE=<sensor-deb-archive-url>
 SENSOR_DEB_ARCHIVE_SHA256=<64-hex-sha256>
+SENSOR_PRODUCER_COMMIT=<40-hex-sensor-producer-commit>
 HAPTICS_DEB_ARCHIVE=<haptics-deb-archive-url>
 HAPTICS_DEB_ARCHIVE_SHA256=<64-hex-sha256>
+HAPTICS_PRODUCER_COMMIT=<40-hex-haptics-producer-commit>
 ```
 
-Put these two lines in `source_config`:
+Put these four lines in `source_config`:
 
 ```text
 KERNEL_ARTIFACT_ARCHIVE=<kernel-artifact-archive-url>
 KERNEL_ARTIFACT_ARCHIVE_SHA256=<64-hex-sha256>
+HAPTICS_MODULE_SHA256=<64-lowercase-hex-sha256>
+HAPTICS_HELPER_BINARY_SHA256=<64-lowercase-hex-sha256>
 ```
 
-Leave `boot_config` empty. This preserves the tested template, EFI payload, `PARTLABEL=userdata`, and `drm_client_lib.active=none` handoff. Before any rootfs/GRUB work, the verifier recomputes the bundle ID, requires identical kernel/device metadata, verifies Image/DTB/config/modules, checks every kernel and haptics module vermagic, validates all four haptics identity fields, and separately validates the exact sensor archive. `VERIFIED-INPUTS.tsv` records one authoritative value for each URL/SHA pair even though the raw advanced config notes retain historical defaults followed by overrides.
+Leave `boot_config` empty. This preserves the tested template, EFI payload, `PARTLABEL=userdata`, and `drm_client_lib.active=none` handoff. Before any rootfs/GRUB work, the verifier recomputes the bundle ID, requires identical kernel/device metadata, verifies Image/DTB/config/modules, checks every kernel and haptics module vermagic, and requires the exact clean haptics producer commit. It rejects any missing, extra, or reordered haptics source-lock field; recomputes all five fixed-path source snapshot hashes; and checks the exact firmware, module, and helper paths, modes, and final binary hashes inside the DEB. The module/helper binary digests are trusted dispatcher inputs copied independently from an authenticated producer run (or compared across two producer builds); they prevent archive-internal lock rewriting but are not a claim of bit-identical source-derived reproduction. The sensor verifier separately enforces the exact package set, control relationships, audited maintainer-script and privileged runtime-policy digests, AArch64 ELF identity, and all 541 device-data checksums. Its external archive SHA is likewise a dispatcher-approved compiled-asset trust root; the matching sensor producer commit is a recoverability/provenance label and does not by itself prove a bit-identical source rebuild. `VERIFIED-INPUTS.tsv` records one authoritative value for each URL/SHA/commit input even though the raw advanced config notes retain historical defaults followed by overrides.
 
 Passing these gates proves build and package consistency, not tablet behavior. Camera, audio, sensor SSR/resume, haptics cancellation/suspend, display, touch and boot still require the prerelease hardware checklist on TB321FU.

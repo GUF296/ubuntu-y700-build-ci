@@ -173,14 +173,19 @@ ci_normalize_fat_tree() {
 }
 
 ci_e2fsck_repair() {
-  local target=$1 rc
+  local target=$1 allow_repairs=${2:-1} rc
   if e2fsck -f -y -- "$target"; then
     rc=0
   else
     rc=$?
   fi
   case $rc in
-    0|1) return 0 ;;
+    0) return 0 ;;
+    1)
+      [ "$allow_repairs" = 1 ] ||
+        ci_die "e2fsck modified $target after build evidence was recorded"
+      return 0
+      ;;
     *) ci_die "e2fsck failed for $target with status $rc" ;;
   esac
 }

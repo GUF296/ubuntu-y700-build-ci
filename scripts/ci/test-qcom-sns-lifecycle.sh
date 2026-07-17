@@ -52,12 +52,39 @@ case ${MOCK_MODE:-success} in
     echo QCOM_SNS_REGISTRY_ACCESS >&2
     sleep 5
     ;;
+  flood)
+    dd if=/dev/zero bs=65536 count=64 2>/dev/null
+    ;;
   *) exit 9 ;;
 esac
 EOF_MOCK
 chmod 0755 "$mock"
 
+shim_bin="$tmp/bin"
+mkdir -p "$shim_bin"
+cat >"$shim_bin/mv" <<'EOF_MV_SHIM'
+#!/bin/sh
+set -eu
+last=
+for argument do
+  last=$argument
+done
+/usr/bin/mv "$@"
+case ${MV_SIGNAL_MODE:-} in
+  registry)
+    [ "$last" != "${MV_SIGNAL_DESTINATION:-}" ] || kill -TERM "$PPID"
+    ;;
+  legacy)
+    case $last in
+      "${MV_SIGNAL_LEGACY_PREFIX:-}"*) kill -TERM "$PPID" ;;
+    esac
+    ;;
+esac
+EOF_MV_SHIM
+chmod 0755 "$shim_bin/mv"
+
 run_init() {
+  PATH="$shim_bin:/usr/bin:/bin" \
   QCOM_SNS_HEXAGONRPCD="$mock" \
   QCOM_SNS_DEVICE_ROOT="$root" \
   QCOM_SNS_STATE_ROOT="$state" \
@@ -65,6 +92,9 @@ run_init() {
   QCOM_SNS_LOG_DIR="$logs" \
   QCOM_SNS_INIT_TIMEOUT="${TEST_TIMEOUT:-2}" \
   QCOM_SNS_MIN_REGISTRY_FILES=3 \
+  MV_SIGNAL_MODE="${MV_SIGNAL_MODE:-}" \
+  MV_SIGNAL_DESTINATION="$registry" \
+  MV_SIGNAL_LEGACY_PREFIX="$state/.legacy-registry." \
   MOCK_MODE="${MOCK_MODE:-success}" \
     "$init"
 }
@@ -113,6 +143,19 @@ second_target=$(readlink "$registry")
 [ -s "$state/current.ready" ]
 (cd "$(dirname "$(readlink -f "$registry")")" && sha256sum -c manifest.sha256 >/dev/null)
 
+# A stop/SSR signal delivered immediately after the atomic registry rename must
+# never make cleanup delete the generation that just became visible.
+if MV_SIGNAL_MODE=registry run_init; then
+  echo 'post-publication TERM unexpectedly reported success' >&2
+  exit 1
+fi
+[ -L "$registry" ]
+signalled_target=$(readlink -f "$registry")
+[ -d "$signalled_target" ]
+[ -f "$registry/calibration" ]
+run_init
+[ -d "$(readlink -f "$registry")" ]
+
 # A listener that remains healthy until the bounded timeout is also accepted.
 MOCK_MODE=timeout TEST_TIMEOUT=1 run_init
 [ -f "$registry/generated-2" ]
@@ -126,9 +169,116 @@ if run_init; then
   exit 1
 fi
 [ "$(readlink "$registry")" = "$accepted_target" ]
+printf 'config\n' >"$root/sensors/config/device.conf"
+
+# A signal between moving a legacy directory aside and publishing the managed
+# symlink must restore the legacy directory. A later run then migrates it.
+rm -rf -- "$state"
+mkdir -p "$registry"
+printf 'legacy-after-signal\n' >"$registry/legacy-after-signal"
+if MV_SIGNAL_MODE=legacy run_init; then
+  echo 'legacy pre-publication TERM unexpectedly reported success' >&2
+  exit 1
+fi
+[ -d "$registry" ] && [ ! -L "$registry" ]
+[ -f "$registry/legacy-after-signal" ]
+run_init
+[ -L "$registry" ] && [ -d "$(readlink -f "$registry")" ]
+
+# The legacy branch has a second signal window after publishing the managed
+# symlink but before the parent shell records publication. Cleanup must detect
+# the visible target, preserve it and remove the moved legacy backup.
+rm -rf -- "$state"
+mkdir -p "$registry"
+printf 'legacy-published-before-term\n' >"$registry/legacy-published-before-term"
+if MV_SIGNAL_MODE=registry run_init; then
+  echo 'legacy post-publication TERM unexpectedly reported success' >&2
+  exit 1
+fi
+[ -L "$registry" ]
+[ -d "$(readlink -f "$registry")" ]
+[ -f "$registry/legacy-published-before-term" ]
+[ -z "$(find "$state" -maxdepth 1 -name '.legacy-registry.*' -print -quit)" ]
+run_init
+[ -L "$registry" ] && [ -d "$(readlink -f "$registry")" ]
+
+# Repeated SSR/resume must not grow the private diagnostic log without bound.
+truncate -s 2097152 "$logs/hexagonrpcd-init.log"
+run_init
+[ "$(stat -c '%s' "$logs/hexagonrpcd-init.log")" -lt 600000 ]
+[ "$(stat -c '%a' "$logs/hexagonrpcd-init.log")" = 640 ]
+flood_target=$(readlink "$registry")
+if MOCK_MODE=flood run_init; then
+  echo 'unbounded hexagonrpcd output unexpectedly passed' >&2
+  exit 1
+fi
+[ "$(readlink "$registry")" = "$flood_target" ]
+[ "$(stat -c '%s' "$logs/hexagonrpcd-init.log")" -lt 600000 ]
+
+# A broken link is recoverable only when its literal target is one of the two
+# managed slots; arbitrary symlink targets remain fatal.
+rm -rf -- "$state"
+mkdir -p "$state/persist/sensors/registry" "$state/generations"
+ln -s ../../../generations/slot-a/registry "$registry"
+run_init
+[ -L "$registry" ] && [ -d "$(readlink -f "$registry")" ]
+
+rm -f -- "$registry"
+ln -s /tmp/unmanaged-qcom-sns-registry "$registry"
+if run_init; then
+  echo 'unmanaged qcom-sns registry symlink unexpectedly passed' >&2
+  exit 1
+fi
+rm -f -- "$registry"
+run_init
+[ -L "$registry" ] && [ -d "$(readlink -f "$registry")" ]
+
+# A power loss after moving the legacy directory can leave the process-PID
+# backup behind. Exactly one regular orphan is recovered; ambiguous state is
+# rejected instead of silently choosing calibration data.
+rm -rf -- "$state"
+mkdir -p "$registry"
+printf 'orphaned-calibration\n' >"$registry/orphaned-calibration"
+mv -T -- "$registry" "$state/.legacy-registry.4242"
+run_init
+[ -L "$registry" ] && [ -f "$registry/orphaned-calibration" ]
+[ -z "$(find "$state" -maxdepth 1 -name '.legacy-registry.*' -print -quit)" ]
+
+# If an active managed slot exists but its manifest is incomplete after power
+# loss, the unique legacy orphan must win instead of being deleted early.
+rm -rf -- "$state"
+mkdir -p \
+  "$state/generations/slot-a/registry" \
+  "$state/persist/sensors/registry" \
+  "$state/.legacy-registry.4343"
+printf 'incomplete-active\n' >"$state/generations/slot-a/registry/incomplete"
+printf 'recoverable-calibration\n' > \
+  "$state/.legacy-registry.4343/recoverable-calibration"
+ln -s ../../../generations/slot-a/registry "$registry"
+run_init
+[ -L "$registry" ] && [ -f "$registry/recoverable-calibration" ]
+[ -z "$(find "$state" -maxdepth 1 -name '.legacy-registry.*' -print -quit)" ]
+
+rm -rf -- "$state"
+mkdir -p "$state"
+ln -s /tmp "$state/.legacy-registry.4444"
+if run_init; then
+  echo 'symlinked legacy orphan unexpectedly passed' >&2
+  exit 1
+fi
+
+rm -rf -- "$state"
+mkdir -p "$state/.legacy-registry.1" "$state/.legacy-registry.2"
+if run_init; then
+  echo 'multiple legacy orphans unexpectedly passed' >&2
+  exit 1
+fi
+rm -rf -- "$state"
+run_init
+[ -L "$registry" ] && [ -d "$(readlink -f "$registry")" ]
 
 [ "$(find "$state/generations" -mindepth 1 -maxdepth 1 -type d | wc -l)" -le 2 ]
-[ ! -e "$state/.legacy-registry.$$" ]
+[ -z "$(find "$state" -maxdepth 1 -name '.legacy-registry.*' -print -quit)" ]
 
 grep -Fq 'BindsTo=dev-fastrpc\x2dadsp.device' "$service"
 grep -Fq 'PartOf=qrtr-ns.service' "$service"

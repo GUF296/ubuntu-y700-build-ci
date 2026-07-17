@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 要创建或更新的 Release 标签；留空只生成 Actions artifact，不上传 Release。
+        description: 要创建的全新 prerelease 标签；已有 tag/release 会被拒绝，留空只生成 Actions artifact。
         required: false
         type: string
       prerelease:
@@ -50,7 +50,7 @@ on:
         type: string
         default: ""
       source_config:
-        description: 可选高级源码/启动组件覆盖配置，按 KEY=value 每行填写；通常无需修改，不填则使用内置默认配置。
+        description: 可选高级内核/启动输入覆盖配置，按 KEY=value 每行填写；通常无需修改，不填则使用内置默认配置。
         required: false
         type: string
         default: ""
@@ -143,26 +143,12 @@ jobs:
           OVERLAY_ARCHIVE_SHA256=
           DEB_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-device-debs-20260624-201420-compat1.tar.gz
           DEB_ARCHIVE_SHA256=047c1baccc420f1c28bf6d761cfc811dd7aeccfcbab6d03746ca01daf6cdfe04
-          BUILD_Y700_SENSOR_DEBS=1
           SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260627.1/tb321fu-sensor-debs_20260627.1_arm64.tar.gz
           SENSOR_DEB_ARCHIVE_SHA256=62ebf6fb41730b9f52da2efc99ac5807fd41dd39d7f97dea070ba5f5ce34ab10
-          SENSOR_SOURCE_ARCHIVE=
-          SENSOR_SOURCE_ARCHIVE_SHA256=
-          SENSOR_BASELINE_OVERLAY_ARCHIVE=
-          SENSOR_BASELINE_OVERLAY_ARCHIVE_SHA256=
-          SENSOR_DEB_VERSION=20260627.1
-          SENSOR_STRIP=1
-          BUILD_TB321FU_HAPTICS_DEB=1
+          SENSOR_PRODUCER_COMMIT=
           HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20260627.2/tb321fu-haptics-debs_20260627.2_arm64.tar.gz
           HAPTICS_DEB_ARCHIVE_SHA256=5a87f510ad07ba60a8a2a663a0782e6f186a56b1586d52c816425fab45b20a37
-          HAPTICS_SOURCE_ARCHIVE=
-          HAPTICS_SOURCE_ARCHIVE_SHA256=
-          KERNEL_SOURCE_ARCHIVE=
-          KERNEL_SOURCE_ARCHIVE_SHA256=
-          KERNEL_BUILD_ARCHIVE=
-          KERNEL_BUILD_ARCHIVE_SHA256=
-          HAPTICS_DEB_VERSION=20260627.2
-          HAPTICS_STRIP=1
+          HAPTICS_PRODUCER_COMMIT=f25d3a29d83a3c8a2f63bcc56306818e5973f994
           BUILD_TB321FU_CAMERA_STACK=1
           CAMERA_STACK_ARCHIVE=
           CAMERA_STACK_ARCHIVE_SHA256=
@@ -210,6 +196,8 @@ jobs:
           QCOMRAMP_CFG_NAME=qcomramp.cfg
           GRUB_BUILD_ARCHIVE=
           GRUB_BUILD_ARCHIVE_SHA256=
+          HAPTICS_MODULE_SHA256=
+          HAPTICS_HELPER_BINARY_SHA256=
           DTB_NAME=sm8650-lenovo-tb321fu.dtb
           CONFIG_EOF
           sed -i 's/^          //' "$RUNNER_TEMP/rootfs.env" "$RUNNER_TEMP/boot.env" "$RUNNER_TEMP/source.env"
@@ -262,8 +250,12 @@ jobs:
             DEB_ARCHIVE_SHA256="$DEB_ARCHIVE_SHA256" \
             SENSOR_DEB_ARCHIVE="$SENSOR_DEB_ARCHIVE" \
             SENSOR_DEB_ARCHIVE_SHA256="$SENSOR_DEB_ARCHIVE_SHA256" \
+            EXPECTED_SENSOR_PRODUCER_COMMIT="$SENSOR_PRODUCER_COMMIT" \
             HAPTICS_DEB_ARCHIVE="$HAPTICS_DEB_ARCHIVE" \
             HAPTICS_DEB_ARCHIVE_SHA256="$HAPTICS_DEB_ARCHIVE_SHA256" \
+            EXPECTED_HAPTICS_PRODUCER_COMMIT="$HAPTICS_PRODUCER_COMMIT" \
+            EXPECTED_HAPTICS_MODULE_SHA256="$HAPTICS_MODULE_SHA256" \
+            EXPECTED_HAPTICS_HELPER_BINARY_SHA256="$HAPTICS_HELPER_BINARY_SHA256" \
             DTB_NAME="$DTB_NAME" \
             bash scripts/ci/verify-kernel-bundle.sh
           cat "$verified_dir/verified.env" >> "$GITHUB_ENV"
@@ -294,96 +286,6 @@ jobs:
             exit 1
           fi
 
-      - name: Build source sensor debs
-        run: |
-          set -euo pipefail
-          if [ "${BUILD_Y700_SENSOR_DEBS:-0}" != "1" ]; then
-            echo 'BUILD_Y700_SENSOR_DEBS is not 1; skipping.'
-            echo 'Y700_SENSOR_DEB_DIR=' >> "$GITHUB_ENV"
-            exit 0
-          fi
-          if [ -z "${SENSOR_SOURCE_ARCHIVE:-}" ] && [ -z "${SENSOR_SOURCE_DIR:-}" ]; then
-            if [ -n "${SENSOR_DEB_ARCHIVE:-}" ] || [ -n "${SENSOR_DEB_DIR:-}" ]; then
-              echo 'Prebuilt sensor deb input provided; skipping source sensor deb build.'
-              echo 'Y700_SENSOR_DEB_DIR=' >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo 'BUILD_Y700_SENSOR_DEBS=1 requires SENSOR_SOURCE_ARCHIVE/SENSOR_SOURCE_DIR plus SENSOR_BASELINE_OVERLAY_ARCHIVE/SENSOR_BASELINE_OVERLAY_DIR, or provide SENSOR_DEB_ARCHIVE/SENSOR_DEB_DIR, or set BUILD_Y700_SENSOR_DEBS=0.' >&2
-            exit 1
-          fi
-          if [ -z "${SENSOR_BASELINE_OVERLAY_ARCHIVE:-}" ] && [ -z "${SENSOR_BASELINE_OVERLAY_DIR:-}" ]; then
-            if [ -n "${SENSOR_DEB_ARCHIVE:-}" ] || [ -n "${SENSOR_DEB_DIR:-}" ]; then
-              echo 'Prebuilt sensor deb input provided; skipping source sensor deb build.'
-              echo 'Y700_SENSOR_DEB_DIR=' >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo 'BUILD_Y700_SENSOR_DEBS=1 requires SENSOR_BASELINE_OVERLAY_ARCHIVE/SENSOR_BASELINE_OVERLAY_DIR, or provide SENSOR_DEB_ARCHIVE/SENSOR_DEB_DIR, or set BUILD_Y700_SENSOR_DEBS=0.' >&2
-            exit 1
-          fi
-          env OUTPUT_DIR="out/y700-sensor-debs" \
-            ARCH="${ARCH:-arm64}" \
-            SENSOR_DEB_VERSION="${SENSOR_DEB_VERSION:-20260626.1}" \
-            SENSOR_SOURCE_ARCHIVE="${SENSOR_SOURCE_ARCHIVE:-}" \
-            SENSOR_SOURCE_ARCHIVE_SHA256="${SENSOR_SOURCE_ARCHIVE_SHA256:-}" \
-            SENSOR_SOURCE_DIR="${SENSOR_SOURCE_DIR:-}" \
-            SENSOR_BASELINE_OVERLAY_ARCHIVE="${SENSOR_BASELINE_OVERLAY_ARCHIVE:-}" \
-            SENSOR_BASELINE_OVERLAY_ARCHIVE_SHA256="${SENSOR_BASELINE_OVERLAY_ARCHIVE_SHA256:-}" \
-            SENSOR_BASELINE_OVERLAY_DIR="${SENSOR_BASELINE_OVERLAY_DIR:-}" \
-            SENSOR_STRIP="${SENSOR_STRIP:-1}" \
-            bash scripts/ci/build-y700-sensor-debs.sh
-          echo 'Y700_SENSOR_DEB_DIR=out/y700-sensor-debs' >> "$GITHUB_ENV"
-
-      - name: Build source haptics deb
-        run: |
-          set -euo pipefail
-          if [ "${BUILD_TB321FU_HAPTICS_DEB:-0}" != "1" ]; then
-            echo 'BUILD_TB321FU_HAPTICS_DEB is not 1; skipping.'
-            echo 'TB321FU_HAPTICS_DEB_DIR=' >> "$GITHUB_ENV"
-            exit 0
-          fi
-          if [ -z "${HAPTICS_SOURCE_ARCHIVE:-}" ] && [ -z "${HAPTICS_SOURCE_DIR:-}" ]; then
-            if [ -n "${HAPTICS_DEB_ARCHIVE:-}" ] || [ -n "${HAPTICS_DEB_DIR:-}" ]; then
-              echo 'Prebuilt haptics deb input provided; skipping source haptics deb build.'
-              echo 'TB321FU_HAPTICS_DEB_DIR=' >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo 'BUILD_TB321FU_HAPTICS_DEB=1 requires HAPTICS_SOURCE_ARCHIVE/HAPTICS_SOURCE_DIR plus KERNEL_SOURCE_ARCHIVE/KERNEL_SOURCE_DIR and KERNEL_BUILD_ARCHIVE/KERNEL_BUILD_DIR, or provide HAPTICS_DEB_ARCHIVE/HAPTICS_DEB_DIR, or set BUILD_TB321FU_HAPTICS_DEB=0.' >&2
-            exit 1
-          fi
-          if [ -z "${KERNEL_SOURCE_ARCHIVE:-}" ] && [ -z "${KERNEL_SOURCE_DIR:-}" ]; then
-            if [ -n "${HAPTICS_DEB_ARCHIVE:-}" ] || [ -n "${HAPTICS_DEB_DIR:-}" ]; then
-              echo 'Prebuilt haptics deb input provided; skipping source haptics deb build.'
-              echo 'TB321FU_HAPTICS_DEB_DIR=' >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo 'BUILD_TB321FU_HAPTICS_DEB=1 requires KERNEL_SOURCE_ARCHIVE/KERNEL_SOURCE_DIR, or provide HAPTICS_DEB_ARCHIVE/HAPTICS_DEB_DIR, or set BUILD_TB321FU_HAPTICS_DEB=0.' >&2
-            exit 1
-          fi
-          if [ -z "${KERNEL_BUILD_ARCHIVE:-}" ] && [ -z "${KERNEL_BUILD_DIR:-}" ]; then
-            if [ -n "${HAPTICS_DEB_ARCHIVE:-}" ] || [ -n "${HAPTICS_DEB_DIR:-}" ]; then
-              echo 'Prebuilt haptics deb input provided; skipping source haptics deb build.'
-              echo 'TB321FU_HAPTICS_DEB_DIR=' >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo 'BUILD_TB321FU_HAPTICS_DEB=1 requires KERNEL_BUILD_ARCHIVE/KERNEL_BUILD_DIR, or provide HAPTICS_DEB_ARCHIVE/HAPTICS_DEB_DIR, or set BUILD_TB321FU_HAPTICS_DEB=0.' >&2
-            exit 1
-          fi
-          env OUTPUT_DIR="out/tb321fu-haptics-debs" \
-            ARCH="${ARCH:-arm64}" \
-            HAPTICS_DEB_VERSION="${HAPTICS_DEB_VERSION:-20260627.1}" \
-            HAPTICS_SOURCE_ARCHIVE="${HAPTICS_SOURCE_ARCHIVE:-}" \
-            HAPTICS_SOURCE_ARCHIVE_SHA256="${HAPTICS_SOURCE_ARCHIVE_SHA256:-}" \
-            HAPTICS_SOURCE_DIR="${HAPTICS_SOURCE_DIR:-}" \
-            KERNEL_SOURCE_ARCHIVE="${KERNEL_SOURCE_ARCHIVE:-}" \
-            KERNEL_SOURCE_ARCHIVE_SHA256="${KERNEL_SOURCE_ARCHIVE_SHA256:-}" \
-            KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR:-}" \
-            KERNEL_BUILD_ARCHIVE="${KERNEL_BUILD_ARCHIVE:-}" \
-            KERNEL_BUILD_ARCHIVE_SHA256="${KERNEL_BUILD_ARCHIVE_SHA256:-}" \
-            KERNEL_BUILD_DIR="${KERNEL_BUILD_DIR:-}" \
-            HAPTICS_STRIP="${HAPTICS_STRIP:-1}" \
-            bash scripts/ci/build-tb321fu-haptics-deb.sh
-          echo 'TB321FU_HAPTICS_DEB_DIR=out/tb321fu-haptics-debs' >> "$GITHUB_ENV"
-
       - name: Build verified camera stack deb
         run: |
           set -euo pipefail
@@ -408,8 +310,25 @@ jobs:
           ROOT_PASSWORD_HASH: ${{ secrets.ROOT_PASSWORD_HASH }}
         run: |
           set -euo pipefail
+          sensor_deb_dir="${SENSOR_DEB_DIR:-}"
+          haptics_deb_dir="${HAPTICS_DEB_DIR:-}"
+          if [ -n "${VERIFIED_KERNEL_BUNDLE_DIR:-}" ]; then
+            [ -n "${SENSOR_DEB_ARCHIVE:-}" ] || {
+              echo 'Verified handoff is missing its staged sensor archive.' >&2
+              exit 1
+            }
+            sensor_deb_dir=
+            if [ -n "${HAPTICS_DEB_ARCHIVE:-}" ]; then
+              haptics_deb_dir=
+            elif [ -n "${HAPTICS_DEB_DIR:-}" ]; then
+              haptics_deb_dir="$HAPTICS_DEB_DIR"
+            else
+              echo 'Verified handoff is missing its staged haptics input.' >&2
+              exit 1
+            fi
+          fi
           sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD_HASH,DEFAULT_USER_AUTHORIZED_KEYS,ROOT_PASSWORD_MODE,ROOT_PASSWORD_HASH,USER_SUDO_MODE,SDDM_AUTOLOGIN,SDDM_AUTOLOGIN_SESSION,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,OVERLAY_ARCHIVE_SHA256,DEB_ARCHIVE,DEB_ARCHIVE_SHA256,DEB_DIR,SENSOR_DEB_ARCHIVE,SENSOR_DEB_ARCHIVE_SHA256,SENSOR_DEB_DIR,HAPTICS_DEB_ARCHIVE,HAPTICS_DEB_ARCHIVE_SHA256,HAPTICS_DEB_DIR,CAMERA_STACK_DEB_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GNOME_SNAPSHOT,INSTALL_FIREFOX,INSTALL_FCITX5_CHINESE,FCITX5_CHINESE_PACKAGES,DISABLE_SNAPD,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
-            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-${SENSOR_DEB_DIR:-}}" HAPTICS_DEB_DIR="${TB321FU_HAPTICS_DEB_DIR:-${HAPTICS_DEB_DIR:-}}" CAMERA_STACK_DEB_DIR="${TB321FU_CAMERA_STACK_DEB_DIR:-}" bash scripts/ci/build-rootfs-image.sh
+            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="$sensor_deb_dir" HAPTICS_DEB_DIR="$haptics_deb_dir" CAMERA_STACK_DEB_DIR="${TB321FU_CAMERA_STACK_DEB_DIR:-}" bash scripts/ci/build-rootfs-image.sh
           sudo chown -R "$USER:$USER" out
 
       - name: Build GRUB boot image
@@ -537,6 +456,8 @@ jobs:
             "$release_dir/VERIFIED-BUNDLE.tsv"
           install -m 0644 "$VERIFIED_KERNEL_BUNDLE_DIR/VERIFIED-INPUTS.tsv" \
             "$release_dir/VERIFIED-INPUTS.tsv"
+          install -m 0644 "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.packages.tsv" \
+            "$release_dir/ROOTFS-PACKAGES.tsv"
 
           split_large_release_assets() {
             local max_bytes=1992294400

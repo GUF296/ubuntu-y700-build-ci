@@ -86,6 +86,51 @@ ci_deb_member_owners() {
   done < <(find "$payload_dir" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
 }
 
+ci_copy_deb_unique() {
+  local source=$1 destination_dir=$2 label=${3:-DEB input}
+  local basename destination
+
+  [ -f "$source" ] && [ ! -L "$source" ] ||
+    ci_die "$label is not a regular file: $source"
+  basename=$(basename -- "$source")
+  case "$basename" in
+    *.deb) ;;
+    *) ci_die "$label is not a .deb file: $source" ;;
+  esac
+  install -d -m 0755 "$destination_dir"
+  destination="$destination_dir/$basename"
+  [ ! -e "$destination" ] && [ ! -L "$destination" ] ||
+    ci_die "DEB basename collision: $basename"
+  cp -a -- "$source" "$destination"
+}
+
+ci_assert_unique_deb_packages() {
+  local payload_dir=$1 invalid nested deb package architecture
+  declare -A package_owner=()
+
+  [ -d "$payload_dir" ] || return 0
+  invalid=$(find "$payload_dir" -mindepth 1 -name '*.deb' ! -type f -print -quit)
+  [ -z "$invalid" ] || ci_die "DEB input path is not a regular file: $invalid"
+  nested=$(find "$payload_dir" -mindepth 2 -type f -name '*.deb' -print -quit)
+  [ -z "$nested" ] || ci_die "nested DEB is not an install input: $nested"
+  while IFS= read -r -d '' deb; do
+    [ ! -L "$deb" ] || ci_die "DEB input must not be a symlink: $deb"
+    package=$(dpkg-deb -f "$deb" Package) || ci_die "cannot read DEB package identity: $deb"
+    case "$package" in
+      ''|*[!a-z0-9+.-]*) ci_die "invalid DEB package identity '$package': $deb" ;;
+    esac
+    architecture=$(dpkg-deb -f "$deb" Architecture) ||
+      ci_die "cannot read DEB architecture: $deb"
+    case "$architecture" in
+      arm64|all) ;;
+      *) ci_die "unsupported DEB architecture '$architecture': $deb" ;;
+    esac
+    [ -z "${package_owner[$package]+x}" ] ||
+      ci_die "duplicate DEB Package '$package': ${package_owner[$package]} and $deb"
+    package_owner[$package]=$deb
+  done < <(find "$payload_dir" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+}
+
 ci_regenerate_deb_md5sums() {
   local package_root=$1 relative
 
@@ -134,6 +179,38 @@ ci_migrate_tb321fu_audio_route_policy() {
     "$package_root/$new_script"
 }
 
+ci_remove_tb321fu_legacy_sensor_haptics() {
+  local root=$1 relative
+  local -a files=(
+    etc/dbus-1/system.d/net.hadess.SensorProxy-y700-ssc.conf
+    etc/systemd/system/iio-sensor-proxy.service.d/10-y700-ssc.conf
+    etc/systemd/system/y700-sns-init.service
+    etc/systemd/system/y700-aw86937-haptics.service
+    etc/systemd/system/multi-user.target.wants/y700-sns-init.service
+    etc/systemd/system/multi-user.target.wants/y700-aw86937-haptics.service
+    etc/udev/rules.d/80-y700-iio-sensor-proxy.rules
+    etc/udev/rules.d/90-y700-haptics.rules
+    usr/lib/systemd/system/y700-sns-init.service
+    usr/lib/systemd/system/y700-aw86937-haptics.service
+    usr/lib/udev/rules.d/80-y700-iio-sensor-proxy.rules
+    usr/lib/udev/rules.d/90-y700-haptics.rules
+    usr/local/bin/y700-sns-init.sh
+    usr/local/sbin/y700-sns-init.sh
+    usr/local/bin/y700-iio-sensor-proxy
+    usr/local/bin/y700-monitor-sensor
+    usr/local/sbin/y700-iio-sensor-proxy
+    usr/local/libexec/y700-iio-sensor-proxy
+    usr/local/bin/y700-aw86937-bind
+    usr/local/sbin/y700-aw86937-bind
+  )
+
+  [ -d "$root" ] || ci_die "legacy cleanup root not found: $root"
+  for relative in "${files[@]}"; do
+    rm -f -- "$root/$relative"
+  done
+  rm -rf -- "$root/usr/local/lib/y700-sns" "$root/usr/local/share/y700-sns"
+}
+
 ci_prepare_y700_daily_payload_deb() {
   local payload_dir=$1 scratch=$2 deb package daily_deb= canonical_deb=
   local daily_stage="$scratch/y700-daily-rootfs-overlay" canonical_stage="$scratch/tb321fu-haptics"
@@ -179,6 +256,7 @@ ci_prepare_y700_daily_payload_deb() {
   rm -rf -- "$daily_stage" "$canonical_stage"
   dpkg-deb -R "$daily_deb" "$daily_stage"
   dpkg-deb -x "$canonical_deb" "$canonical_stage"
+  ci_remove_tb321fu_legacy_sensor_haptics "$daily_stage"
   for relative in "${firmware[@]}"; do
     [ -f "$daily_stage/$relative" ] || ci_die "daily haptics firmware is missing: /$relative"
     [ -f "$canonical_stage/$relative" ] || ci_die "canonical haptics firmware is missing: /$relative"

@@ -56,12 +56,24 @@ for token in \
   'bash scripts/ci/verify-kernel-bundle.sh' \
   'SENSOR_DEB_ARCHIVE="$SENSOR_DEB_ARCHIVE"' \
   'SENSOR_DEB_ARCHIVE_SHA256="$SENSOR_DEB_ARCHIVE_SHA256"' \
+  'EXPECTED_SENSOR_PRODUCER_COMMIT="$SENSOR_PRODUCER_COMMIT"' \
   'HAPTICS_DEB_ARCHIVE="$HAPTICS_DEB_ARCHIVE"' \
+  'EXPECTED_HAPTICS_PRODUCER_COMMIT="$HAPTICS_PRODUCER_COMMIT"' \
+  'EXPECTED_HAPTICS_MODULE_SHA256="$HAPTICS_MODULE_SHA256"' \
+  'EXPECTED_HAPTICS_HELPER_BINARY_SHA256="$HAPTICS_HELPER_BINARY_SHA256"' \
   'cat "$verified_dir/verified.env" >> "$GITHUB_ENV"' \
   'Remediation releases must set prerelease=true.' \
   'VERIFIED-INPUTS.tsv'; do
   require_workflow_literal "$token"
 done
+
+sudo_preserve_env=$(grep -F 'sudo --preserve-env=' "$workflow") ||
+  fail "workflow rootfs sudo environment boundary is missing"
+case "$sudo_preserve_env" in
+  *HAPTICS_MODULE_SHA256*|*HAPTICS_HELPER_BINARY_SHA256*)
+    fail "trusted haptics digests leak into the rootfs sudo environment"
+    ;;
+esac
 
 postinst=$(awk '
   /cat > "\$package_root\/DEBIAN\/postinst" <<EOF/ { capture = 1; next }
@@ -173,5 +185,75 @@ set -e
 [ "$ignored_status" -ne 0 ] || fail "ignored source residue was accepted"
 grep -Fq 'kernel worktree contains ignored files before release packaging' <<<"$ignored_output" ||
   fail "ignored source residue failed at the wrong boundary"
+
+sensor_commit=1111111111111111111111111111111111111111
+haptics_commit=2222222222222222222222222222222222222222
+haptics_module_sha=$(printf '3%.0s' {1..64})
+haptics_helper_binary_sha=$(printf '4%.0s' {1..64})
+config_fixture="$fixture/rootfs.env"
+github_env_fixture="$fixture/github.env"
+{
+  printf 'SENSOR_PRODUCER_COMMIT=%s\n' "$sensor_commit"
+  printf 'HAPTICS_PRODUCER_COMMIT=%s\n' "$haptics_commit"
+  printf 'HAPTICS_MODULE_SHA256=%s\n' "$haptics_module_sha"
+  printf 'HAPTICS_HELPER_BINARY_SHA256=%s\n' "$haptics_helper_binary_sha"
+} > "$config_fixture"
+GITHUB_ENV="$github_env_fixture" \
+  bash "$SCRIPT_DIR/apply-workflow-config.sh" "$config_fixture"
+read_exported_config() {
+  local key=$1 file=$2
+  awk -v key="$key" '
+  index($0, key "<<") == 1 {
+    delimiter = $0
+    sub("^" key "<<", "", delimiter)
+    if ((getline value) <= 0 || (getline terminator) <= 0 || terminator != delimiter)
+      exit 2
+    print value
+    found = 1
+  }
+  END { if (!found) exit 3 }
+  ' "$file"
+}
+propagated_sensor_commit=$(read_exported_config SENSOR_PRODUCER_COMMIT \
+  "$github_env_fixture") || fail "SENSOR_PRODUCER_COMMIT was not exported through workflow config"
+[ "$propagated_sensor_commit" = "$sensor_commit" ] ||
+  fail "SENSOR_PRODUCER_COMMIT changed during workflow config propagation"
+propagated_haptics_commit=$(read_exported_config HAPTICS_PRODUCER_COMMIT \
+  "$github_env_fixture") || fail "HAPTICS_PRODUCER_COMMIT was not exported through workflow config"
+[ "$propagated_haptics_commit" = "$haptics_commit" ] ||
+  fail "HAPTICS_PRODUCER_COMMIT changed during workflow config propagation"
+propagated_haptics_module_sha=$(read_exported_config HAPTICS_MODULE_SHA256 \
+  "$github_env_fixture") || fail "HAPTICS_MODULE_SHA256 was not exported through workflow config"
+[ "$propagated_haptics_module_sha" = "$haptics_module_sha" ] ||
+  fail "HAPTICS_MODULE_SHA256 changed during workflow config propagation"
+propagated_haptics_helper_binary_sha=$(read_exported_config \
+  HAPTICS_HELPER_BINARY_SHA256 "$github_env_fixture") ||
+  fail "HAPTICS_HELPER_BINARY_SHA256 was not exported through workflow config"
+[ "$propagated_haptics_helper_binary_sha" = "$haptics_helper_binary_sha" ] ||
+  fail "HAPTICS_HELPER_BINARY_SHA256 changed during workflow config propagation"
+
+printf 'HAPTICS_MODULE_SHA256=%s\n' "$(printf 'A%.0s' {1..64})" > "$config_fixture"
+set +e
+invalid_haptics_digest_output=$(GITHUB_ENV="$github_env_fixture" \
+  bash "$SCRIPT_DIR/apply-workflow-config.sh" "$config_fixture" 2>&1)
+invalid_haptics_digest_status=$?
+set -e
+[ "$invalid_haptics_digest_status" -ne 0 ] ||
+  fail "uppercase haptics digest was accepted"
+grep -Fq 'HAPTICS_MODULE_SHA256 must be empty or 64 lowercase hex characters' \
+  <<<"$invalid_haptics_digest_output" ||
+  fail "invalid haptics digest failed at the wrong boundary"
+
+printf 'SENSOR_PRODUCER_COMMIT=%s\n' ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD > "$config_fixture"
+set +e
+invalid_sensor_commit_output=$(GITHUB_ENV="$github_env_fixture" \
+  bash "$SCRIPT_DIR/apply-workflow-config.sh" "$config_fixture" 2>&1)
+invalid_sensor_commit_status=$?
+set -e
+[ "$invalid_sensor_commit_status" -ne 0 ] ||
+  fail "uppercase sensor producer commit was accepted"
+grep -Fq 'SENSOR_PRODUCER_COMMIT must be empty or 40 lowercase hex characters' \
+  <<<"$invalid_sensor_commit_output" ||
+  fail "invalid sensor producer commit failed at the wrong boundary"
 
 printf 'KERNEL_BOOTSTRAP_POLICY=PASS\n'

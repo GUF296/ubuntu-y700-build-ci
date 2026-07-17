@@ -131,6 +131,10 @@ DEB_ARCHIVE_SHA256=${DEB_ARCHIVE_SHA256:-}
 SENSOR_DEB_ARCHIVE_SHA256=${SENSOR_DEB_ARCHIVE_SHA256:-}
 HAPTICS_DEB_ARCHIVE_SHA256=${HAPTICS_DEB_ARCHIVE_SHA256:-}
 OVERLAY_ARCHIVE_SHA256=${OVERLAY_ARCHIVE_SHA256:-}
+[ -z "${SENSOR_DEB_ARCHIVE:-}" ] || [ -z "${SENSOR_DEB_DIR:-}" ] ||
+  ci_die "set only one of SENSOR_DEB_ARCHIVE and SENSOR_DEB_DIR"
+[ -z "${HAPTICS_DEB_ARCHIVE:-}" ] || [ -z "${HAPTICS_DEB_DIR:-}" ] ||
+  ci_die "set only one of HAPTICS_DEB_ARCHIVE and HAPTICS_DEB_DIR"
 SOURCE_DATE_EPOCH=$(ci_source_date_epoch)
 export SOURCE_DATE_EPOCH
 TB321FU_COMPAT_ARCHIVE_NAME=${TB321FU_COMPAT_ARCHIVE_NAME:-y700-compat1-extra-rootfs-overlay.tar.gz}
@@ -202,9 +206,9 @@ include_deb_archive() {
 
   copied=0
   while IFS= read -r -d '' deb; do
-    cp -a "$deb" "$rootfs_dir/var/tmp/ci-debs/"
+    ci_copy_deb_unique "$deb" "$rootfs_dir/var/tmp/ci-debs" "$label archive member"
     copied=$((copied + 1))
-  done < <(find "$extract" -type f -name '*.deb' -print0)
+  done < <(find "$extract" -type f -name '*.deb' -print0 | sort -z)
 
   [ "$copied" -gt 0 ] || ci_die "$label deb archive did not contain any .deb files: $src"
 }
@@ -215,6 +219,7 @@ rootfs_dir="$work_dir/rootfs"
 rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
 build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
 manifest="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.manifest"
+package_inventory="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.packages.tsv"
 mounted=0
 
 unmount_chroot_runtime() {
@@ -446,27 +451,10 @@ apply_tb321fu_legacy_cleanup() {
   local root=$1
 
   ci_log "removing legacy y700 sensor and haptics glue that conflicts with TB321FU packages"
+  ci_remove_tb321fu_legacy_sensor_haptics "$root"
   rm -f \
-    "$root/etc/systemd/system/iio-sensor-proxy.service.d/10-y700-ssc.conf" \
-    "$root/etc/systemd/system/y700-sns-init.service" \
-    "$root/etc/systemd/system/y700-aw86937-haptics.service" \
     "$root/etc/systemd/system/smartmontools.service" \
-    "$root/etc/systemd/system/sddm.service.d/10-y700-audio-card-guard.conf" \
-    "$root/etc/udev/rules.d/80-y700-iio-sensor-proxy.rules" \
-    "$root/etc/udev/rules.d/90-y700-haptics.rules" \
-    "$root/usr/lib/udev/rules.d/80-y700-iio-sensor-proxy.rules" \
-    "$root/usr/local/sbin/y700-sns-init.sh" \
-    "$root/usr/local/libexec/y700-iio-sensor-proxy" \
-    "$root/usr/local/sbin/y700-aw86937-bind"
-  rm -rf \
-    "$root/usr/local/lib/y700-sns" \
-    "$root/usr/local/share/y700-sns"
-
-  if [ -d "$root/etc/systemd/system/multi-user.target.wants" ]; then
-    rm -f \
-      "$root/etc/systemd/system/multi-user.target.wants/y700-sns-init.service" \
-      "$root/etc/systemd/system/multi-user.target.wants/y700-aw86937-haptics.service"
-  fi
+    "$root/etc/systemd/system/sddm.service.d/10-y700-audio-card-guard.conf"
 
   if [ -f "$root/usr/lib/systemd/system/qcom-sns-init.service" ]; then
     install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
@@ -1103,7 +1091,9 @@ if [ -n "${DEB_ARCHIVE:-}" ]; then
 fi
 if [ -n "${DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
-  find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
+  while IFS= read -r -d '' deb; do
+    ci_copy_deb_unique "$deb" "$rootfs_dir/var/tmp/ci-debs" 'device DEB directory member'
+  done < <(find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
 fi
 if [ -n "${SENSOR_DEB_ARCHIVE:-}" ]; then
   include_deb_archive sensor "$SENSOR_DEB_ARCHIVE" "$SENSOR_DEB_ARCHIVE_SHA256"
@@ -1111,7 +1101,9 @@ fi
 if [ -n "${SENSOR_DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
   ci_log "including source-built sensor debs from: $SENSOR_DEB_DIR"
-  find "$SENSOR_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
+  while IFS= read -r -d '' deb; do
+    ci_copy_deb_unique "$deb" "$rootfs_dir/var/tmp/ci-debs" 'sensor DEB directory member'
+  done < <(find "$SENSOR_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
 fi
 if [ -n "${HAPTICS_DEB_ARCHIVE:-}" ]; then
   include_deb_archive haptics "$HAPTICS_DEB_ARCHIVE" "$HAPTICS_DEB_ARCHIVE_SHA256"
@@ -1119,17 +1111,22 @@ fi
 if [ -n "${HAPTICS_DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
   ci_log "including source-built haptics debs from: $HAPTICS_DEB_DIR"
-  find "$HAPTICS_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
+  while IFS= read -r -d '' deb; do
+    ci_copy_deb_unique "$deb" "$rootfs_dir/var/tmp/ci-debs" 'haptics DEB directory member'
+  done < <(find "$HAPTICS_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
 fi
 if [ -n "${CAMERA_STACK_DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
   ci_log "including source-built camera stack debs from: $CAMERA_STACK_DEB_DIR"
-  find "$CAMERA_STACK_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
+  while IFS= read -r -d '' deb; do
+    ci_copy_deb_unique "$deb" "$rootfs_dir/var/tmp/ci-debs" 'camera DEB directory member'
+  done < <(find "$CAMERA_STACK_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
 fi
 
 ci_prepare_y700_daily_payload_deb \
   "$rootfs_dir/var/tmp/ci-debs" "$work_dir/device-deb-policy"
 prepare_tb321fu_compat_firmware_deb "$rootfs_dir/var/tmp/ci-debs"
+ci_assert_unique_deb_packages "$rootfs_dir/var/tmp/ci-debs"
 
 if ci_bool "$INSTALL_FIREFOX"; then
   configure_mozilla_firefox_repo "$rootfs_dir"
@@ -1258,12 +1255,19 @@ rm -f \
   "$rootfs_dir/SHA256SUMS.txt" \
   "$rootfs_dir/Y700-ROOTFS-OVERLAY-MANIFEST.tsv"
 
+ci_log "writing installed-package inventory"
+LC_ALL=C chroot "$rootfs_dir" dpkg-query -W \
+  -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\t${Architecture}\n' |
+  LC_ALL=C awk -F '\t' '$1 == "ii " { print $2 "\t" $3 "\t" $4 }' |
+  LC_ALL=C sort > "$package_inventory"
+[ -s "$package_inventory" ] || ci_die "installed-package inventory is empty"
+
 ci_log "writing manifest"
 (cd "$rootfs_dir" && find . -xdev -printf '%y\t%u\t%g\t%m\t%s\t%p\n' | sort) > "$manifest"
 
 ci_unmount_tree "$rootfs_dir"
 mounted=0
-ci_e2fsck_repair "$rootfs_img"
+ci_e2fsck_repair "$rootfs_img" 0
 
 ci_log "checksumming rootfs image"
 raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
@@ -1271,7 +1275,11 @@ raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
 
 checksum_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.SHA256SUMS"
 rm -f "$checksum_file"
-(cd "$OUTPUT_DIR" && sha256sum "$(basename "$build_info")" "$(basename "$manifest")" "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
+(cd "$OUTPUT_DIR" && sha256sum \
+  "$(basename "$build_info")" \
+  "$(basename "$manifest")" \
+  "$(basename "$package_inventory")" \
+  "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
 
 case "$COMPRESS" in
   none)

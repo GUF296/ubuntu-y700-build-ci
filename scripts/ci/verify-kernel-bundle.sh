@@ -17,8 +17,12 @@ Required environment:
   DEB_ARCHIVE_SHA256
   SENSOR_DEB_ARCHIVE
   SENSOR_DEB_ARCHIVE_SHA256
+  EXPECTED_SENSOR_PRODUCER_COMMIT
   HAPTICS_DEB_ARCHIVE and HAPTICS_DEB_ARCHIVE_SHA256,
     or HAPTICS_DEB_DIR
+  EXPECTED_HAPTICS_PRODUCER_COMMIT
+  EXPECTED_HAPTICS_MODULE_SHA256
+  EXPECTED_HAPTICS_HELPER_BINARY_SHA256
 
 Optional environment:
   OUTPUT_DIR       default: out/tb321fu-verified-kernel-bundle
@@ -35,7 +39,7 @@ case "${1:-}" in
 esac
 [ "$#" -eq 0 ] || { usage >&2; exit 2; }
 
-for command in sha256sum find sort cmp dpkg-deb realpath install awk python3 head grep stat; do
+for command in sha256sum find sort cmp dpkg dpkg-deb realpath install awk python3 head grep stat git sed tr; do
   ci_require_cmd "$command"
 done
 
@@ -45,6 +49,10 @@ done
 : "${DEB_ARCHIVE_SHA256:?set DEB_ARCHIVE_SHA256}"
 : "${SENSOR_DEB_ARCHIVE:?set SENSOR_DEB_ARCHIVE}"
 : "${SENSOR_DEB_ARCHIVE_SHA256:?set SENSOR_DEB_ARCHIVE_SHA256}"
+: "${EXPECTED_SENSOR_PRODUCER_COMMIT:?set EXPECTED_SENSOR_PRODUCER_COMMIT}"
+: "${EXPECTED_HAPTICS_PRODUCER_COMMIT:?set EXPECTED_HAPTICS_PRODUCER_COMMIT}"
+: "${EXPECTED_HAPTICS_MODULE_SHA256:?set EXPECTED_HAPTICS_MODULE_SHA256}"
+: "${EXPECTED_HAPTICS_HELPER_BINARY_SHA256:?set EXPECTED_HAPTICS_HELPER_BINARY_SHA256}"
 
 HAPTICS_DEB_ARCHIVE=${HAPTICS_DEB_ARCHIVE:-}
 HAPTICS_DEB_ARCHIVE_SHA256=${HAPTICS_DEB_ARCHIVE_SHA256:-}
@@ -56,6 +64,14 @@ MODINFO=${MODINFO:-modinfo}
 [[ $KERNEL_ARTIFACT_ARCHIVE_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid kernel archive SHA-256"
 [[ $DEB_ARCHIVE_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid device archive SHA-256"
 [[ $SENSOR_DEB_ARCHIVE_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid sensor archive SHA-256"
+[[ $EXPECTED_SENSOR_PRODUCER_COMMIT =~ ^[0-9a-f]{40}$ ]] ||
+  ci_die "EXPECTED_SENSOR_PRODUCER_COMMIT must be 40 lowercase hex characters"
+[[ $EXPECTED_HAPTICS_PRODUCER_COMMIT =~ ^[0-9a-f]{40}$ ]] ||
+  ci_die "EXPECTED_HAPTICS_PRODUCER_COMMIT must be 40 lowercase hex characters"
+[[ $EXPECTED_HAPTICS_MODULE_SHA256 =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die "EXPECTED_HAPTICS_MODULE_SHA256 must be 64 lowercase hex characters"
+[[ $EXPECTED_HAPTICS_HELPER_BINARY_SHA256 =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die "EXPECTED_HAPTICS_HELPER_BINARY_SHA256 must be 64 lowercase hex characters"
 [[ $DTB_NAME =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\.dtb$ ]] || ci_die "unsafe DTB_NAME"
 if [ -n "$HAPTICS_DEB_ARCHIVE" ] && [ -n "$HAPTICS_DEB_DIR" ]; then
   ci_die "set only one of HAPTICS_DEB_ARCHIVE and HAPTICS_DEB_DIR"
@@ -129,11 +145,34 @@ find_unique_file() {
   result=${matches[0]}
 }
 
+validate_device_package_namespace() {
+  local invalid deb package
+  declare -A package_owner=()
+
+  invalid=$(find "$device_root" -mindepth 1 -name '*.deb' ! -type f -print -quit)
+  [ -z "$invalid" ] ||
+    ci_die "device archive contains a non-regular DEB path: $invalid"
+  while IFS= read -r -d '' deb; do
+    package=$(dpkg-deb -f "$deb" Package) ||
+      ci_die "cannot read device DEB package identity: $deb"
+    case "$package" in
+      qcom-sns-libssc|qcom-sns-hexagonrpc|qcom-sns-iio-sensor-proxy|tb321fu-sensors|y700-sensors|\
+      tb321fu-haptics|tb321fu-haptics-common|tb321fu-haptics-modules-*|y700-haptics)
+        ci_die "device archive contains reserved component package: $package"
+        ;;
+    esac
+    [ -z "${package_owner[$package]+x}" ] ||
+      ci_die "device archive contains duplicate Package '$package'"
+    package_owner[$package]=$deb
+  done < <(find "$device_root" -type f -name '*.deb' -print0 | sort -z)
+}
+
 load_tsv() {
   local file=$1
   local -n values=$2
   local line key value extra
 
+  reject_nul_bytes "$file" 'TSV'
   while IFS= read -r line || [ -n "$line" ]; do
     [[ $line != *$'\r'* ]] || ci_die "TSV contains CR: $file"
     IFS=$'\t' read -r key value extra <<<"$line"
@@ -142,6 +181,23 @@ load_tsv() {
     [ -z "${values[$key]+x}" ] || ci_die "duplicate TSV key $key: $file"
     values[$key]=$value
   done < "$file"
+}
+
+require_exact_tsv_order() {
+  local file=$1
+  shift
+  local -a expected=("$@") lines=()
+  local index key value extra
+
+  reject_nul_bytes "$file" 'TSV'
+  mapfile -t lines < "$file"
+  [ "${#lines[@]}" -eq "${#expected[@]}" ] ||
+    ci_die "unexpected TSV field count: $file"
+  for index in "${!expected[@]}"; do
+    IFS=$'\t' read -r key value extra <<<"${lines[$index]}"
+    [ "$key" = "${expected[$index]}" ] ||
+      ci_die "unexpected TSV field order at line $((index + 1)): expected ${expected[$index]}, got ${key:-empty}: $file"
+  done
 }
 
 require_tsv_key() {
@@ -156,20 +212,167 @@ check_sha() {
   [ "$actual" = "$expected" ] || ci_die "$label SHA-256 mismatch: expected $expected, got $actual"
 }
 
+require_regular_mode() {
+  local file=$1 mode=$2 label=$3
+
+  [ -f "$file" ] && [ ! -L "$file" ] || ci_die "$label must be a regular file: $file"
+  [ "$(stat -c '%a' "$file")" = "$mode" ] ||
+    ci_die "$label must have mode 0$mode: $file"
+}
+
+verify_haptics_checksum_manifest() {
+  local manifest=$1
+  shift
+  local -a expected=("$@") lines=()
+  local index line digest suffix
+
+  reject_nul_bytes "$manifest" 'haptics checksum manifest'
+  mapfile -t lines < "$manifest"
+  [ "${#lines[@]}" -eq "${#expected[@]}" ] ||
+    ci_die "haptics checksum manifest has an unexpected entry count"
+  for index in "${!expected[@]}"; do
+    line=${lines[$index]}
+    [ "${#line}" -ge 67 ] || ci_die "malformed haptics checksum entry at line $((index + 1))"
+    digest=${line:0:64}
+    suffix=${line:64}
+    [[ $digest =~ ^[0-9a-f]{64}$ ]] ||
+      ci_die "invalid haptics checksum digest at line $((index + 1))"
+    [ "$suffix" = "  ${expected[$index]}" ] ||
+      ci_die "unexpected haptics checksum path/order at line $((index + 1))"
+  done
+  (cd "$(dirname -- "$manifest")" &&
+    sha256sum --strict --check "$(basename -- "$manifest")" >/dev/null) ||
+    ci_die "haptics checksum manifest verification failed"
+}
+
+extract_haptics_git_blob() {
+  local repo=$1 commit=$2 relative=$3 destination=$4
+  local expected_mode=${5:-100644}
+  local entry mode type object tmp
+  local -a clean_git=(
+    env -i
+    PATH="$PATH"
+    HOME="$work/git-home"
+    LC_ALL=C
+    GIT_CONFIG_NOSYSTEM=1
+    GIT_CONFIG_GLOBAL=/dev/null
+    GIT_NO_REPLACE_OBJECTS=1
+    git --no-replace-objects --git-dir="$repo"
+  )
+
+  case "$relative" in
+    ''|/*|../*|*/../*|*/..|*\\*) ci_die "unsafe haptics producer Git path: $relative" ;;
+  esac
+  entry=$("${clean_git[@]}" ls-tree "$commit" -- "$relative") ||
+    ci_die "cannot inspect haptics producer Git path: $relative"
+  [ -n "$entry" ] && [ "$(wc -l <<<"$entry")" -eq 1 ] ||
+    ci_die "haptics producer Git path must occur exactly once: $relative"
+  mode=${entry%% *}
+  entry=${entry#* }
+  type=${entry%% *}
+  entry=${entry#* }
+  object=${entry%%$'\t'*}
+  [ "$mode" = "$expected_mode" ] && [ "$type" = blob ] && [[ $object =~ ^[0-9a-f]{40}$ ]] ||
+    ci_die "haptics producer Git path is not a regular blob: $relative"
+  mkdir -p "$(dirname -- "$destination")"
+  tmp="${destination}.part.$$"
+  rm -f -- "$tmp"
+  if ! "${clean_git[@]}" cat-file blob "$object" > "$tmp"; then
+    rm -f -- "$tmp"
+    ci_die "cannot export haptics producer Git blob: $relative"
+  fi
+  chmod 0644 "$tmp"
+  mv -f -- "$tmp" "$destination"
+}
+
+extract_haptics_heredoc() {
+  local builder=$1 marker=$2 destination=$3
+  python3 "$SCRIPT_DIR/extract-shell-heredoc.py" \
+    "$builder" "$marker" "$destination" ||
+    ci_die "cannot derive committed haptics payload template: $marker"
+}
+
+reject_nul_bytes() {
+  local file=$1 label=$2
+
+  if ! LC_ALL=C tr -d '\000' < "$file" | cmp -s -- "$file" -; then
+    ci_die "$label contains NUL"
+  fi
+}
+
 validate_sensor_archive() {
-  local root=$1 deb package architecture version common_version=
-  local source_lock checksum_file checksum_dir
+  local LC_ALL=C
+  local root=$1 deb package architecture version common_version= member basename line digest
+  local source_lock checksum_file device_data component repository revision extra index
+  local expected_basename device_path path_component previous_device_path=
+  local producer_commit= device_data_manifest_sha= device_record_count=0
+  local sensor_libssc_deb sensor_hexagonrpc_deb sensor_iio_deb sensor_device_deb
   local -A expected=(
     [qcom-sns-libssc]=0
     [qcom-sns-hexagonrpc]=0
     [qcom-sns-iio-sensor-proxy]=0
     [tb321fu-sensors]=0
   )
-  local -a sensor_debs=()
+  local -A sensor_deb_by_package=()
+  local -A expected_members=(
+    [SOURCE-LOCK.tsv]=0
+    [DEVICE-DATA.sha256]=0
+    [SHA256SUMS-y700-sensor-debs.txt]=0
+  )
+  local -a package_order=(
+    qcom-sns-hexagonrpc
+    qcom-sns-iio-sensor-proxy
+    qcom-sns-libssc
+    tb321fu-sensors
+  )
+  local -a source_components=(
+    sensor-producer
+    libssc
+    iio-sensor-proxy
+    hexagonrpc
+    device-data-manifest
+    producer-state
+  )
+  local -a source_repositories=(
+    https://github.com/GUF296/tb321fu-sensor-debs
+    https://github.com/GUF296/libssc.git
+    https://github.com/GUF296/iio-sensor-proxy.git
+    https://github.com/GUF296/hexagonrpc.git
+    local-tree
+    git-status
+  )
+  local -a source_revisions=(
+    "$EXPECTED_SENSOR_PRODUCER_COMMIT"
+    b7719402d5d45f64d8ac533ff02698fdd84e1edc
+    4054d61222b473c1b172a04faf0677845201ec7f
+    86d7a139ef35bb2e62ea13bd7b166a1ec08a4b97
+    ''
+    clean
+  )
+  local -a sensor_debs=() sensor_members=() source_lines=() checksum_lines=()
+  local -a path_components=()
 
-  mapfile -d '' -t sensor_debs < <(find "$root" -type f -name '*.deb' -print0 | sort -z)
+  mapfile -d '' -t sensor_debs < <(
+    find "$root" -mindepth 1 -maxdepth 1 -type f -name '*.deb' -print0 | sort -z
+  )
   [ "${#sensor_debs[@]}" -eq "${#expected[@]}" ] ||
     ci_die "sensor archive must contain exactly four DEBs"
+  device_data="$root/DEVICE-DATA.sha256"
+  find_unique_file sensor_libssc_deb "$root" 'qcom-sns-libssc_*.deb' \
+    'qcom-sns-libssc sensor DEB'
+  find_unique_file sensor_hexagonrpc_deb "$root" 'qcom-sns-hexagonrpc_*.deb' \
+    'qcom-sns-hexagonrpc sensor DEB'
+  find_unique_file sensor_iio_deb "$root" 'qcom-sns-iio-sensor-proxy_*.deb' \
+    'qcom-sns-iio-sensor-proxy sensor DEB'
+  find_unique_file sensor_device_deb "$root" 'tb321fu-sensors_*.deb' \
+    'tb321fu-sensors sensor DEB'
+  python3 "$SCRIPT_DIR/verify-sensor-deb-structure.py" \
+    --libssc-deb "$sensor_libssc_deb" \
+    --hexagonrpc-deb "$sensor_hexagonrpc_deb" \
+    --iio-sensor-proxy-deb "$sensor_iio_deb" \
+    --tb321fu-sensors-deb "$sensor_device_deb" \
+    --device-data-manifest "$device_data" ||
+    ci_die "sensor DEB structure verification failed"
   for deb in "${sensor_debs[@]}"; do
     package=$(dpkg-deb -f "$deb" Package)
     architecture=$(dpkg-deb -f "$deb" Architecture)
@@ -177,31 +380,147 @@ validate_sensor_archive() {
     [ -n "${expected[$package]+x}" ] || ci_die "unexpected sensor package: $package"
     [ "${expected[$package]}" -eq 0 ] || ci_die "duplicate sensor package: $package"
     [ "$architecture" = arm64 ] || ci_die "sensor package is not arm64: $package"
+    [[ $version =~ ^[0-9][0-9A-Za-z.+~_-]{0,63}$ ]] &&
+      dpkg --validate-version "$version" >/dev/null ||
+      ci_die "unsafe sensor package version: $package"
     if [ -z "$common_version" ]; then
       common_version=$version
     else
       [ "$version" = "$common_version" ] || ci_die "sensor package versions differ"
     fi
+    basename=$(basename -- "$deb")
+    expected_basename="${package}_${version}_arm64.deb"
+    [ "$basename" = "$expected_basename" ] ||
+      ci_die "sensor DEB basename mismatch: expected $expected_basename"
+    [ -z "${expected_members[$basename]+x}" ] ||
+      ci_die "duplicate sensor archive member: $basename"
+    expected_members[$basename]=0
+    sensor_deb_by_package[$package]=$deb
     expected[$package]=1
   done
   for package in "${!expected[@]}"; do
     [ "${expected[$package]}" -eq 1 ] || ci_die "missing sensor package: $package"
   done
 
-  find_unique_file source_lock "$root" SOURCE-LOCK.tsv 'sensor SOURCE-LOCK.tsv'
-  head -n 1 "$source_lock" | grep -Fxq $'component\trepository\tcommit' ||
+  mapfile -d '' -t sensor_members < <(
+    find "$root" -mindepth 1 -printf '%P\0' | sort -z
+  )
+  [ "${#sensor_members[@]}" -eq "${#expected_members[@]}" ] ||
+    ci_die "sensor archive must contain exactly seven root members"
+  for member in "${sensor_members[@]}"; do
+    [ -n "${expected_members[$member]+x}" ] ||
+      ci_die "unexpected sensor archive member: $member"
+    [ -f "$root/$member" ] && [ ! -L "$root/$member" ] ||
+      ci_die "sensor archive member is not a regular file: $member"
+    [ "$(stat -c '%a' "$root/$member")" = 644 ] ||
+      ci_die "sensor archive member is not mode 0644: $member"
+    expected_members[$member]=1
+  done
+  for member in "${!expected_members[@]}"; do
+    [ "${expected_members[$member]}" -eq 1 ] ||
+      ci_die "missing sensor archive member: $member"
+  done
+
+  source_lock="$root/SOURCE-LOCK.tsv"
+  [ "$(stat -c '%s' "$source_lock")" -le 4096 ] ||
+    ci_die "sensor source lock exceeds size limit"
+  reject_nul_bytes "$source_lock" 'sensor source lock'
+  mapfile -t source_lines < "$source_lock"
+  [ "${#source_lines[@]}" -eq 7 ] ||
+    ci_die "sensor source lock must contain exactly seven records"
+  [ "${source_lines[0]}" = $'component\trepository\tcommit' ] ||
     ci_die "sensor source lock has an invalid header"
-  grep -Fxq $'producer-state\tgit-status\tclean' "$source_lock" ||
-    ci_die "sensor source lock is not from a clean producer"
-  find_unique_file checksum_file "$root" SHA256SUMS-y700-sensor-debs.txt \
-    'sensor package checksum manifest'
-  checksum_dir=$(dirname -- "$checksum_file")
-  (cd "$checksum_dir" && sha256sum -c "$(basename -- "$checksum_file")" >/dev/null) ||
+  for ((index = 0; index < ${#source_components[@]}; index++)); do
+    line=${source_lines[index + 1]}
+    [[ $line != *$'\r'* ]] || ci_die "sensor source lock contains CR"
+    case "$line" in
+      *$'\t'*$'\t'*$'\t'*) ci_die "sensor source lock has too many fields" ;;
+    esac
+    IFS=$'\t' read -r component repository revision extra <<<"$line"
+    [ -n "$component" ] && [ -n "$repository" ] && [ -n "$revision" ] && [ -z "$extra" ] ||
+      ci_die "sensor source lock has a malformed record"
+    [ "$component" = "${source_components[index]}" ] ||
+      ci_die "sensor source lock has unexpected record order"
+    [ "$repository" = "${source_repositories[index]}" ] ||
+      ci_die "sensor source lock repository mismatch: $component"
+    if [ "$component" = sensor-producer ]; then
+      [[ $revision =~ ^[0-9a-f]{40}$ ]] ||
+        ci_die "sensor source lock has a malformed source revision: $component"
+      producer_commit=$revision
+    elif [ "$component" = device-data-manifest ]; then
+      [[ $revision =~ ^[0-9a-f]{64}$ ]] ||
+        ci_die "sensor source lock has a malformed device-data record"
+      device_data_manifest_sha=$revision
+    else
+      [ "$revision" = "${source_revisions[index]}" ] ||
+        ci_die "sensor source lock revision mismatch: $component"
+      if [ "$component" != producer-state ]; then
+        [[ $revision =~ ^[0-9a-f]{40}$ ]] ||
+          ci_die "sensor source lock has a malformed source revision: $component"
+      fi
+    fi
+  done
+  [ "$producer_commit" = "$EXPECTED_SENSOR_PRODUCER_COMMIT" ] ||
+    ci_die "sensor producer commit mismatch"
+
+  [ -s "$device_data" ] || ci_die "sensor device-data manifest is empty"
+  [ "$(stat -c '%s' "$device_data")" -le 1048576 ] ||
+    ci_die "sensor device-data manifest exceeds size limit"
+  reject_nul_bytes "$device_data" 'sensor device-data manifest'
+  [ "$(sha256sum "$device_data" | awk '{print $1}')" = "$device_data_manifest_sha" ] ||
+    ci_die "sensor device-data manifest digest mismatch"
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ $line != *$'\r'* ]] || ci_die "sensor device-data manifest contains CR"
+    [[ $line =~ ^[0-9a-f]{64}\ \ \./([-A-Za-z0-9._+/]+)$ ]] ||
+      ci_die "sensor device-data manifest has a malformed record"
+    device_path=${BASH_REMATCH[1]}
+    [ "${#device_path}" -lt 4096 ] && [[ $device_path != /* ]] &&
+      [[ $device_path != *//* ]] && [[ $device_path != */ ]] ||
+      ci_die "sensor device-data manifest has an unsafe path"
+    IFS=/ read -r -a path_components <<<"$device_path"
+    for path_component in "${path_components[@]}"; do
+      [ -n "$path_component" ] && [ "$path_component" != . ] &&
+        [ "$path_component" != .. ] && [ "${#path_component}" -le 255 ] ||
+        ci_die "sensor device-data manifest has an unsafe path"
+    done
+    if [ -n "$previous_device_path" ] && [[ ! $previous_device_path < $device_path ]]; then
+      ci_die "sensor device-data manifest paths are not strictly ordered"
+    fi
+    previous_device_path=$device_path
+    device_record_count=$((device_record_count + 1))
+    [ "$device_record_count" -le 4096 ] ||
+      ci_die "sensor device-data manifest has too many records"
+  done < "$device_data"
+  [ "$device_record_count" -eq 541 ] ||
+    ci_die "sensor device-data manifest must contain exactly 541 records"
+
+  checksum_file="$root/SHA256SUMS-y700-sensor-debs.txt"
+  [ "$(stat -c '%s' "$checksum_file")" -le 4096 ] ||
+    ci_die "sensor checksum manifest exceeds size limit"
+  reject_nul_bytes "$checksum_file" 'sensor checksum manifest'
+  mapfile -t checksum_lines < "$checksum_file"
+  [ "${#checksum_lines[@]}" -eq "${#package_order[@]}" ] ||
+    ci_die "sensor checksum manifest must contain exactly four records"
+  for ((index = 0; index < ${#package_order[@]}; index++)); do
+    line=${checksum_lines[index]}
+    [[ $line != *$'\r'* ]] || ci_die "sensor checksum manifest contains CR"
+    [[ $line =~ ^([0-9a-f]{64})\ \ \./([-A-Za-z0-9._+~]*\.deb)$ ]] ||
+      ci_die "sensor checksum manifest has a malformed record"
+    digest=${BASH_REMATCH[1]}
+    basename=${BASH_REMATCH[2]}
+    expected_basename="${package_order[index]}_${common_version}_arm64.deb"
+    [ "${#basename}" -le 255 ] && [ "$basename" = "$expected_basename" ] ||
+      ci_die "sensor checksum manifest has unexpected DEB order or name"
+    [ "$(sha256sum "$root/$basename" | awk '{print $1}')" = "$digest" ] ||
+      ci_die "sensor package checksum mismatch: $basename"
+  done
+  (cd "$root" && sha256sum --strict --check "$(basename -- "$checksum_file")" >/dev/null) ||
     ci_die "sensor package checksum verification failed"
   sensor_source_lock=$source_lock
   sensor_package_version=$common_version
 }
 
+validate_device_package_namespace
 find_unique_file kernel_bundle "$kernel_root" KERNEL-BUNDLE.tsv 'kernel KERNEL-BUNDLE.tsv'
 find_unique_file device_bundle "$device_root" KERNEL-BUNDLE.tsv 'device KERNEL-BUNDLE.tsv'
 validated_bundle="$work/KERNEL-BUNDLE.validated.tsv"
@@ -280,46 +599,337 @@ mapfile -d '' -t module_dirs < <(find "$modules_parent" -mindepth 1 -maxdepth 1 
 [ "${#module_dirs[@]}" -eq 1 ] || ci_die "kernel modules DEB must contain exactly one release"
 [ "$(basename -- "${module_dirs[0]}")" = "${kernel_meta[kernel-release]}" ] || ci_die "kernel modules directory release mismatch"
 module_count=0
+kernel_vermagic=
 while IFS= read -r -d '' module; do
   vermagic=$("$MODINFO" -F vermagic "$module")
   case "$vermagic" in
     "${kernel_meta[kernel-release]}"|"${kernel_meta[kernel-release]} "*) ;;
     *) ci_die "kernel module vermagic mismatch: $module: $vermagic" ;;
   esac
+  if [ -z "$kernel_vermagic" ]; then
+    kernel_vermagic=$vermagic
+  else
+    [ "$vermagic" = "$kernel_vermagic" ] ||
+      ci_die "kernel module vermagic flags mismatch: $module: $vermagic"
+  fi
   module_count=$((module_count + 1))
 done < <(find "${module_dirs[0]}" -type f -name '*.ko*' -print0)
 [ "$module_count" -gt 0 ] || ci_die "kernel modules DEB contains no modules"
+[ -n "$kernel_vermagic" ] || ci_die "kernel modules DEB has no canonical vermagic"
 
+find_unique_file haptics_deb "$haptics_root" 'tb321fu-haptics_*.deb' 'haptics DEB'
 find_unique_file haptics_lock "$haptics_root" HAPTICS-SOURCE-LOCK.tsv 'HAPTICS-SOURCE-LOCK.tsv'
+find_unique_file haptics_checksum_manifest "$haptics_root" \
+  SHA256SUMS-tb321fu-haptics-debs.txt 'haptics checksum manifest'
+find_unique_file haptics_producer_bundle "$haptics_root" \
+  HAPTICS-PRODUCER.bundle 'haptics producer Git bundle'
+[ "$haptics_deb" = "$haptics_root/$(basename -- "$haptics_deb")" ] ||
+  ci_die "haptics DEB must be at the archive root"
+[ "$haptics_lock" = "$haptics_root/HAPTICS-SOURCE-LOCK.tsv" ] ||
+  ci_die "HAPTICS-SOURCE-LOCK.tsv must be at the archive root"
+[ "$haptics_checksum_manifest" = "$haptics_root/SHA256SUMS-tb321fu-haptics-debs.txt" ] ||
+  ci_die "haptics checksum manifest must be at the archive root"
+[ "$haptics_producer_bundle" = "$haptics_root/HAPTICS-PRODUCER.bundle" ] ||
+  ci_die "haptics producer Git bundle must be at the archive root"
+require_regular_mode "$haptics_lock" 644 'HAPTICS-SOURCE-LOCK.tsv'
+require_regular_mode "$haptics_checksum_manifest" 644 'haptics checksum manifest'
+require_regular_mode "$haptics_producer_bundle" 644 'haptics producer Git bundle'
+declare -a haptics_lock_fields=(
+  schema
+  haptics-producer-commit
+  haptics-producer-state
+  aw86937-driver-sha256
+  aw86937-build-source-sha256
+  haptic-ram-firmware-sha256
+  haptic-click-firmware-sha256
+  haptic-test-helper-sha256
+  aw86937-module-sha256
+  haptic-test-helper-binary-sha256
+  kernel-bundle-id
+  kernel-release
+  kernel-source-commit
+  kernel-config-sha256
+  kernel-build-archive-sha256
+  source-date-epoch
+)
+require_exact_tsv_order "$haptics_lock" "${haptics_lock_fields[@]}"
 declare -A haptics_meta=()
 load_tsv "$haptics_lock" haptics_meta
-for key in kernel-bundle-id kernel-release kernel-source-commit kernel-config-sha256; do
-  require_tsv_key haptics_meta "$key" "$haptics_lock"
+[ "${haptics_meta[schema]}" = tb321fu.haptics-source-lock/v1 ] ||
+  ci_die "unsupported haptics source-lock schema"
+[ "${haptics_meta[haptics-producer-commit]}" = "$EXPECTED_HAPTICS_PRODUCER_COMMIT" ] ||
+  ci_die "haptics producer commit mismatch"
+[ "${haptics_meta[haptics-producer-state]}" = clean ] ||
+  ci_die "haptics producer source lock is not clean"
+for key in \
+  aw86937-driver-sha256 \
+  aw86937-build-source-sha256 \
+  haptic-ram-firmware-sha256 \
+  haptic-click-firmware-sha256 \
+  haptic-test-helper-sha256 \
+  aw86937-module-sha256 \
+  haptic-test-helper-binary-sha256; do
+  [[ ${haptics_meta[$key]} =~ ^[0-9a-f]{64}$ ]] ||
+    ci_die "invalid haptics source SHA-256 field: $key"
 done
+[ "${haptics_meta[aw86937-module-sha256]}" = "$EXPECTED_HAPTICS_MODULE_SHA256" ] ||
+  ci_die "haptics module SHA-256 differs from the external expected digest"
+[ "${haptics_meta[haptic-test-helper-binary-sha256]}" = \
+    "$EXPECTED_HAPTICS_HELPER_BINARY_SHA256" ] ||
+  ci_die "haptics helper binary SHA-256 differs from the external expected digest"
 [ "${haptics_meta[kernel-bundle-id]}" = "${kernel_meta[kernel-bundle-id]}" ] || ci_die "haptics kernel-bundle-id mismatch"
 [ "${haptics_meta[kernel-release]}" = "${kernel_meta[kernel-release]}" ] || ci_die "haptics kernel-release mismatch"
 [ "${haptics_meta[kernel-source-commit]}" = "${kernel_meta[kernel-source-commit]}" ] || ci_die "haptics kernel-source-commit mismatch"
 [ "${haptics_meta[kernel-config-sha256]}" = "${kernel_meta[kernel-config-sha256]}" ] || ci_die "haptics kernel-config-sha256 mismatch"
+case "${haptics_meta[kernel-build-archive-sha256]}" in
+  local-build-directory) ;;
+  *)
+    [[ ${haptics_meta[kernel-build-archive-sha256]} =~ ^[0-9a-f]{64}$ ]] ||
+      ci_die "invalid haptics kernel build archive SHA-256"
+    ;;
+esac
+[[ ${haptics_meta[source-date-epoch]} =~ ^[0-9]{1,10}$ ]] ||
+  ci_die "invalid haptics source-date-epoch"
+[ "${haptics_meta[source-date-epoch]}" = "${kernel_meta[source-date-epoch]}" ] ||
+  ci_die "haptics source-date-epoch mismatch"
 
-find_unique_file haptics_deb "$haptics_root" 'tb321fu-haptics_*.deb' 'haptics DEB'
-[ "$(dpkg-deb -f "$haptics_deb" Package)" = tb321fu-haptics ] || ci_die "unexpected haptics package name"
-[ "$(dpkg-deb -f "$haptics_deb" Architecture)" = arm64 ] || ci_die "unexpected haptics package architecture"
+haptics_snapshot="$haptics_root/HAPTICS-SOURCE-SNAPSHOT"
+[ -d "$haptics_snapshot" ] && [ ! -L "$haptics_snapshot" ] ||
+  ci_die "missing exact HAPTICS-SOURCE-SNAPSHOT directory"
+haptics_snapshot_driver="$haptics_snapshot/source/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c"
+haptics_snapshot_build_source="$haptics_snapshot/build/aw86937-haptics.c"
+haptics_snapshot_ram="$haptics_snapshot/source/haptics/rootfs-reference/usr/lib/firmware/haptic_ram.bin"
+haptics_snapshot_click="$haptics_snapshot/source/haptics/rootfs-reference/usr/lib/firmware/haptic_click.bin"
+haptics_snapshot_helper="$haptics_snapshot/source/haptics/baseline-20260614-daily-clean/testing-tools/y700-haptic-test.c"
+mapfile -d '' -t haptics_snapshot_files < <(find "$haptics_snapshot" -type f -print0 | sort -z)
+[ "${#haptics_snapshot_files[@]}" -eq 5 ] ||
+  ci_die "HAPTICS-SOURCE-SNAPSHOT must contain exactly five files"
+[ -z "$(find "$haptics_snapshot" ! -type d ! -type f -print -quit)" ] ||
+  ci_die "HAPTICS-SOURCE-SNAPSHOT contains a non-regular member"
+[ -z "$(find "$haptics_snapshot" -type d -empty -print -quit)" ] ||
+  ci_die "HAPTICS-SOURCE-SNAPSHOT contains an unexpected empty directory"
+[ -z "$(find "$haptics_snapshot" -type d ! -perm 0755 -print -quit)" ] ||
+  ci_die "HAPTICS-SOURCE-SNAPSHOT contains a non-0755 directory"
+for source_file in \
+  "$haptics_snapshot_driver" \
+  "$haptics_snapshot_build_source" \
+  "$haptics_snapshot_ram" \
+  "$haptics_snapshot_click" \
+  "$haptics_snapshot_helper"; do
+  require_regular_mode "$source_file" 644 'haptics source snapshot file'
+done
+check_sha "$haptics_snapshot_driver" "${haptics_meta[aw86937-driver-sha256]}" \
+  'AW86937 original driver source'
+check_sha "$haptics_snapshot_build_source" "${haptics_meta[aw86937-build-source-sha256]}" \
+  'AW86937 patched build source'
+check_sha "$haptics_snapshot_ram" "${haptics_meta[haptic-ram-firmware-sha256]}" \
+  'haptic_ram.bin source snapshot'
+check_sha "$haptics_snapshot_click" "${haptics_meta[haptic-click-firmware-sha256]}" \
+  'haptic_click.bin source snapshot'
+check_sha "$haptics_snapshot_helper" "${haptics_meta[haptic-test-helper-sha256]}" \
+  'haptics test helper source'
+
+declare -A expected_haptics_root=(
+  ["$haptics_deb"]=1
+  ["$haptics_lock"]=1
+  ["$haptics_checksum_manifest"]=1
+  ["$haptics_producer_bundle"]=1
+  ["$haptics_snapshot"]=1
+)
+while IFS= read -r -d '' haptics_root_member; do
+  [ -n "${expected_haptics_root[$haptics_root_member]+x}" ] ||
+    ci_die "haptics archive root contains an unexpected member: $(basename -- "$haptics_root_member")"
+  unset 'expected_haptics_root[$haptics_root_member]'
+done < <(find "$haptics_root" -mindepth 1 -maxdepth 1 -print0)
+[ "${#expected_haptics_root[@]}" -eq 0 ] ||
+  ci_die "haptics archive root is missing a required member"
+
+verify_haptics_checksum_manifest "$haptics_checksum_manifest" \
+  "./$(basename -- "$haptics_deb")" \
+  ./HAPTICS-SOURCE-LOCK.tsv \
+  ./HAPTICS-PRODUCER.bundle \
+  ./HAPTICS-SOURCE-SNAPSHOT/source/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c \
+  ./HAPTICS-SOURCE-SNAPSHOT/build/aw86937-haptics.c \
+  ./HAPTICS-SOURCE-SNAPSHOT/source/haptics/rootfs-reference/usr/lib/firmware/haptic_ram.bin \
+  ./HAPTICS-SOURCE-SNAPSHOT/source/haptics/rootfs-reference/usr/lib/firmware/haptic_click.bin \
+  ./HAPTICS-SOURCE-SNAPSHOT/source/haptics/baseline-20260614-daily-clean/testing-tools/y700-haptic-test.c
+
+require_regular_mode "$haptics_deb" 644 'haptics DEB'
 haptics_data_tar="$work/haptics-data.tar"
 haptics_data="$work/haptics-data"
-dpkg-deb --fsys-tarfile "$haptics_deb" > "$haptics_data_tar"
-ci_extract_archive "$haptics_data_tar" "$haptics_data"
-mapfile -d '' -t haptics_modules < <(find "$haptics_data/usr/lib/modules" -type f -name 'aw86937-haptics.ko*' -print0 2>/dev/null)
-[ "${#haptics_modules[@]}" -eq 1 ] || ci_die "haptics DEB must contain exactly one aw86937-haptics module"
-case "${haptics_modules[0]}" in
-  */usr/lib/modules/"${kernel_meta[kernel-release]}"/extra/aw86937-haptics.ko*) ;;
-  *) ci_die "haptics module path release mismatch" ;;
-esac
-haptics_vermagic=$("$MODINFO" -F vermagic "${haptics_modules[0]}")
-case "$haptics_vermagic" in
-  "${kernel_meta[kernel-release]}"|"${kernel_meta[kernel-release]} "*) ;;
-  *) ci_die "haptics module vermagic mismatch: $haptics_vermagic" ;;
-esac
+haptics_control_tar="$work/haptics-control.tar"
+haptics_control="$work/haptics-control"
+python3 "$SCRIPT_DIR/verify-haptics-deb-structure.py" \
+  --deb "$haptics_deb" \
+  --control-tar "$haptics_control_tar" \
+  --data-tar "$haptics_data_tar" \
+  --kernel-release "${kernel_meta[kernel-release]}" \
+  --source-date-epoch "${haptics_meta[source-date-epoch]}" \
+  --extract-only || ci_die "bounded haptics DEB extraction failed"
 
+declare -a clean_git_env=(
+  env -i
+  PATH="$PATH"
+  HOME="$work/git-home"
+  LC_ALL=C
+  GIT_CONFIG_NOSYSTEM=1
+  GIT_CONFIG_GLOBAL=/dev/null
+  GIT_NO_REPLACE_OBJECTS=1
+)
+haptics_bundle_repo="$work/haptics-producer.git"
+install -d -m 0700 "$work/git-home"
+"${clean_git_env[@]}" git init --bare -q "$haptics_bundle_repo" ||
+  ci_die "cannot initialize haptics producer bundle verifier"
+haptics_bundle_heads=$("${clean_git_env[@]}" git bundle list-heads "$haptics_producer_bundle") ||
+  ci_die "cannot list haptics producer Git bundle heads"
+mapfile -t haptics_bundle_head_lines <<<"$haptics_bundle_heads"
+[ "${#haptics_bundle_head_lines[@]}" -eq 1 ] && [ -n "${haptics_bundle_head_lines[0]}" ] ||
+  ci_die "haptics producer Git bundle must advertise exactly one ref"
+IFS=' ' read -r haptics_bundle_commit haptics_bundle_ref haptics_bundle_extra \
+  <<<"${haptics_bundle_head_lines[0]}"
+[ -z "$haptics_bundle_extra" ] &&
+  [ "$haptics_bundle_ref" = refs/heads/tb321fu-haptics-producer ] ||
+  ci_die "haptics producer Git bundle advertises an unexpected ref"
+[ "$haptics_bundle_commit" = "$EXPECTED_HAPTICS_PRODUCER_COMMIT" ] ||
+  ci_die "haptics producer Git bundle commit mismatch"
+"${clean_git_env[@]}" git -C "$haptics_bundle_repo" bundle verify \
+  "$haptics_producer_bundle" >/dev/null 2>&1 ||
+  ci_die "haptics producer Git bundle verification failed"
+"${clean_git_env[@]}" git -C "$haptics_bundle_repo" bundle unbundle \
+  "$haptics_producer_bundle" >/dev/null ||
+  ci_die "cannot import haptics producer Git bundle"
+"${clean_git_env[@]}" git --no-replace-objects --git-dir="$haptics_bundle_repo" \
+  cat-file -e "$EXPECTED_HAPTICS_PRODUCER_COMMIT^{commit}" ||
+  ci_die "haptics producer Git bundle lacks the expected commit"
+"${clean_git_env[@]}" git --git-dir="$haptics_bundle_repo" update-ref \
+  refs/heads/tb321fu-haptics-producer "$EXPECTED_HAPTICS_PRODUCER_COMMIT" ||
+  ci_die "cannot anchor the imported haptics producer commit"
+"${clean_git_env[@]}" git --git-dir="$haptics_bundle_repo" symbolic-ref HEAD \
+  refs/heads/tb321fu-haptics-producer ||
+  ci_die "cannot anchor the haptics producer verifier HEAD"
+haptics_fsck_output=$("${clean_git_env[@]}" git --git-dir="$haptics_bundle_repo" \
+  fsck --strict --no-reflogs --unreachable 2>&1) ||
+  ci_die "haptics producer Git bundle object verification failed"
+[ -z "$haptics_fsck_output" ] ||
+  ci_die "haptics producer Git bundle contains unreachable or unexpected objects"
+
+haptics_committed="$work/haptics-producer-committed"
+haptics_committed_driver="$haptics_committed/aw86937-y700.c"
+haptics_committed_ram="$haptics_committed/haptic_ram.bin"
+haptics_committed_click="$haptics_committed/haptic_click.bin"
+haptics_committed_helper="$haptics_committed/y700-haptic-test.c"
+haptics_committed_builder="$haptics_committed/build-tb321fu-haptics-deb.sh"
+extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
+  haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c "$haptics_committed_driver"
+extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
+  haptics/rootfs-reference/usr/lib/firmware/haptic_ram.bin "$haptics_committed_ram"
+extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
+  haptics/rootfs-reference/usr/lib/firmware/haptic_click.bin "$haptics_committed_click"
+extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
+  haptics/baseline-20260614-daily-clean/testing-tools/y700-haptic-test.c "$haptics_committed_helper"
+extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
+  scripts/ci/build-tb321fu-haptics-deb.sh "$haptics_committed_builder" 100755
+cmp -s "$haptics_committed_driver" "$haptics_snapshot_driver" ||
+  ci_die "AW86937 source snapshot does not match the producer commit"
+cmp -s "$haptics_committed_ram" "$haptics_snapshot_ram" ||
+  ci_die "haptic_ram.bin snapshot does not match the producer commit"
+cmp -s "$haptics_committed_click" "$haptics_snapshot_click" ||
+  ci_die "haptic_click.bin snapshot does not match the producer commit"
+cmp -s "$haptics_committed_helper" "$haptics_snapshot_helper" ||
+  ci_die "haptics helper source snapshot does not match the producer commit"
+haptics_reproduced_build_source="$haptics_committed/aw86937-haptics.c"
+install -m 0644 "$haptics_committed_driver" "$haptics_reproduced_build_source"
+sed -i \
+  -e 's/Lenovo Y700 AW86937 input force-feedback haptics driver/Lenovo TB321FU AW86937 input force-feedback haptics driver/g' \
+  -e 's/\.name = "aw86937-y700"/.name = "aw86937-haptics"/g' \
+  "$haptics_reproduced_build_source"
+if ! grep -q '"aw86937_haptics"' "$haptics_reproduced_build_source"; then
+  sed -i '/{ "aw86937_y700" }/i\	{ "aw86937_haptics" },' \
+    "$haptics_reproduced_build_source"
+fi
+cmp -s "$haptics_reproduced_build_source" "$haptics_snapshot_build_source" ||
+  ci_die "AW86937 patched build source is not the deterministic producer transform"
+
+ci_extract_archive "$haptics_data_tar" "$haptics_data"
+ci_extract_archive "$haptics_control_tar" "$haptics_control"
+haptics_package_version=$(dpkg-deb -f "$haptics_deb" Version)
+[[ $haptics_package_version =~ ^[0-9][0-9A-Za-z.+~_-]{0,63}$ ]] ||
+  ci_die "unsafe haptics package version"
+dpkg --validate-version "$haptics_package_version" >/dev/null ||
+  ci_die "invalid haptics package version"
+[ "$(basename -- "$haptics_deb")" = "tb321fu-haptics_${haptics_package_version}_arm64.deb" ] ||
+  ci_die "haptics DEB filename does not match its package version"
+haptics_expected_control="$work/haptics-expected-control"
+cat > "$haptics_expected_control" <<EOF_HAPTICS_CONTROL
+Package: tb321fu-haptics
+Version: $haptics_package_version
+Section: misc
+Priority: optional
+Architecture: arm64
+Maintainer: GUF296 <guf296@users.noreply.github.com>
+Depends: kmod, systemd, udev, coreutils, findutils, feedbackd, feedbackd-device-themes
+Conflicts: y700-haptics
+Replaces: y700-haptics
+Description: AW86937 haptics support for Lenovo Legion Y700 TB321FU
+ Source-built AW86937 force-feedback haptics module, firmware, feedbackd udev
+ integration and TB321FU boot-time binding glue.
+EOF_HAPTICS_CONTROL
+cmp -s "$haptics_expected_control" "$haptics_control/control" ||
+  ci_die "haptics DEB control metadata differs from the producer contract"
+declare -A haptics_template_targets=(
+  [EOF_POSTINST]="$haptics_control/postinst"
+  [EOF_POSTRM]="$haptics_control/postrm"
+  [EOF_BIND]="$haptics_data/usr/libexec/tb321fu-haptics/bind-aw86937"
+  [EOF_SERVICE]="$haptics_data/usr/lib/systemd/system/tb321fu-haptics.service"
+  [EOF_UDEV]="$haptics_data/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
+  [EOF_CONF]="$haptics_data/etc/skel/.config/plasmakeyboardrc"
+)
+for haptics_template in EOF_POSTINST EOF_POSTRM EOF_BIND EOF_SERVICE EOF_UDEV EOF_CONF; do
+  haptics_expected_template="$work/haptics-template-$haptics_template"
+  extract_haptics_heredoc \
+    "$haptics_committed_builder" "$haptics_template" "$haptics_expected_template"
+  cmp -s "$haptics_expected_template" "${haptics_template_targets[$haptics_template]}" ||
+    ci_die "haptics DEB payload differs from committed template: $haptics_template"
+done
+find_unique_file haptics_ram_firmware "$haptics_data" haptic_ram.bin 'haptic_ram.bin'
+find_unique_file haptics_click_firmware "$haptics_data" haptic_click.bin 'haptic_click.bin'
+haptics_expected_ram="$haptics_data/usr/lib/firmware/haptic_ram.bin"
+haptics_expected_click="$haptics_data/usr/lib/firmware/haptic_click.bin"
+[ "$haptics_ram_firmware" = "$haptics_expected_ram" ] ||
+  ci_die "haptic_ram.bin is not installed at usr/lib/firmware/haptic_ram.bin"
+[ "$haptics_click_firmware" = "$haptics_expected_click" ] ||
+  ci_die "haptic_click.bin is not installed at usr/lib/firmware/haptic_click.bin"
+require_regular_mode "$haptics_ram_firmware" 644 'haptic_ram.bin'
+require_regular_mode "$haptics_click_firmware" 644 'haptic_click.bin'
+check_sha "$haptics_ram_firmware" "${haptics_meta[haptic-ram-firmware-sha256]}" \
+  'haptic_ram.bin'
+check_sha "$haptics_click_firmware" "${haptics_meta[haptic-click-firmware-sha256]}" \
+  'haptic_click.bin'
+mapfile -d '' -t haptics_modules < <(find "$haptics_data" -type f -name 'aw86937-haptics.ko*' -print0 2>/dev/null)
+[ "${#haptics_modules[@]}" -eq 1 ] || ci_die "haptics DEB must contain exactly one aw86937-haptics module"
+haptics_expected_module="$haptics_data/usr/lib/modules/${kernel_meta[kernel-release]}/extra/aw86937-haptics.ko"
+[ "${haptics_modules[0]}" = "$haptics_expected_module" ] ||
+  ci_die "haptics module path release mismatch"
+require_regular_mode "$haptics_expected_module" 644 'aw86937-haptics.ko'
+check_sha "$haptics_expected_module" "$EXPECTED_HAPTICS_MODULE_SHA256" \
+  'aw86937-haptics.ko'
+haptics_vermagic=$("$MODINFO" -F vermagic "${haptics_modules[0]}")
+[ "$haptics_vermagic" = "$kernel_vermagic" ] ||
+  ci_die "haptics module vermagic differs from kernel modules: $haptics_vermagic"
+find_unique_file haptics_helper "$haptics_data" tb321fu-haptic-test 'tb321fu-haptic-test'
+haptics_expected_helper="$haptics_data/usr/bin/tb321fu-haptic-test"
+[ "$haptics_helper" = "$haptics_expected_helper" ] ||
+  ci_die "tb321fu-haptic-test is not installed at usr/bin/tb321fu-haptic-test"
+require_regular_mode "$haptics_expected_helper" 755 'tb321fu-haptic-test'
+check_sha "$haptics_expected_helper" "$EXPECTED_HAPTICS_HELPER_BINARY_SHA256" \
+  'tb321fu-haptic-test'
+python3 "$SCRIPT_DIR/verify-haptics-deb-structure.py" \
+  --deb "$haptics_deb" \
+  --control-tar "$haptics_control_tar" \
+  --data-tar "$haptics_data_tar" \
+  --kernel-release "${kernel_meta[kernel-release]}" \
+  --source-date-epoch "${haptics_meta[source-date-epoch]}" ||
+  ci_die "haptics DEB structure verification failed"
 stage="$work/stage"
 mkdir -p "$stage"
 install -m 0644 "$kernel_archive" "$stage/kernel-artifacts.archive"
@@ -353,7 +963,9 @@ fi
   printf 'device-archive-sha256\t%s\n' "$device_archive_sha"
   printf 'sensor-archive-sha256\t%s\n' "$sensor_archive_sha"
   printf 'sensor-package-version\t%s\n' "$sensor_package_version"
+  printf 'sensor-producer-commit\t%s\n' "$EXPECTED_SENSOR_PRODUCER_COMMIT"
   printf 'haptics-archive-sha256\t%s\n' "${haptics_archive_sha:-directory-input}"
+  printf 'haptics-producer-commit\t%s\n' "${haptics_meta[haptics-producer-commit]}"
   printf 'kernel-module-count\t%s\n' "$module_count"
 } > "$stage/VERIFIED-BUNDLE.tsv"
 
@@ -372,8 +984,13 @@ write_verified_input() {
   write_verified_input device-deb-archive-sha256 "${DEB_ARCHIVE_SHA256,,}"
   write_verified_input sensor-deb-archive "$SENSOR_DEB_ARCHIVE"
   write_verified_input sensor-deb-archive-sha256 "${SENSOR_DEB_ARCHIVE_SHA256,,}"
+  write_verified_input sensor-producer-commit "$EXPECTED_SENSOR_PRODUCER_COMMIT"
   write_verified_input haptics-deb-archive "${HAPTICS_DEB_ARCHIVE:-directory:$HAPTICS_DEB_DIR}"
   write_verified_input haptics-deb-archive-sha256 "${HAPTICS_DEB_ARCHIVE_SHA256,,}"
+  write_verified_input haptics-producer-commit "$EXPECTED_HAPTICS_PRODUCER_COMMIT"
+  write_verified_input haptics-module-sha256 "$EXPECTED_HAPTICS_MODULE_SHA256"
+  write_verified_input haptics-helper-binary-sha256 \
+    "$EXPECTED_HAPTICS_HELPER_BINARY_SHA256"
 } > "$stage/VERIFIED-INPUTS.tsv"
 
 {

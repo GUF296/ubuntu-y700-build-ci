@@ -29,6 +29,7 @@ payload="$tmp/payload"
 install -d -m 0755 "$payload"
 make_control "$daily_root" y700-daily-rootfs-overlay
 install -d -m 0777 \
+  "$daily_root/etc/dbus-1/system.d" \
   "$daily_root/etc/systemd/system" \
   "$daily_root/etc/wireplumber/wireplumber.conf.d" \
   "$daily_root/usr/lib/firmware" \
@@ -36,6 +37,12 @@ install -d -m 0777 \
   "$daily_root/usr/bin" \
   "$daily_root/usr/local/bin" \
   "$daily_root/usr/share/wireplumber/scripts/y700" \
+  "$daily_root/etc/systemd/system/multi-user.target.wants" \
+  "$daily_root/etc/udev/rules.d" \
+  "$daily_root/usr/local/lib/y700-sns" \
+  "$daily_root/usr/local/libexec" \
+  "$daily_root/usr/local/sbin" \
+  "$daily_root/usr/local/share/y700-sns" \
   "$daily_root/opt/libcamera-y700/bin" \
   "$daily_root/opt/libcamera-y700/libexec/libcamera"
 printf 'ram-firmware\n' > "$daily_root/usr/lib/firmware/haptic_ram.bin"
@@ -47,6 +54,24 @@ install -m 0644 "$SCRIPT_DIR/test-fixtures/tested-headset-cleanup.lua" \
 printf 'unit\n' > "$daily_root/etc/systemd/system/fixture.service"
 printf 'library\n' > "$daily_root/usr/lib/aarch64-linux-gnu/libfixture.so"
 printf '#!/bin/sh\nexit 0\n' > "$daily_root/usr/bin/fixture-helper"
+printf 'legacy sensor service\n' > "$daily_root/etc/systemd/system/y700-sns-init.service"
+printf 'legacy haptics service\n' > \
+  "$daily_root/etc/systemd/system/y700-aw86937-haptics.service"
+ln -s ../y700-sns-init.service \
+  "$daily_root/etc/systemd/system/multi-user.target.wants/y700-sns-init.service"
+ln -s ../y700-aw86937-haptics.service \
+  "$daily_root/etc/systemd/system/multi-user.target.wants/y700-aw86937-haptics.service"
+printf 'legacy sensor rule\n' > \
+  "$daily_root/etc/udev/rules.d/80-y700-iio-sensor-proxy.rules"
+printf 'legacy sensor D-Bus policy\n' > \
+  "$daily_root/etc/dbus-1/system.d/net.hadess.SensorProxy-y700-ssc.conf"
+printf 'legacy haptics rule\n' > "$daily_root/etc/udev/rules.d/90-y700-haptics.rules"
+printf '#!/bin/sh\nexit 0\n' > "$daily_root/usr/local/bin/y700-monitor-sensor"
+printf '#!/bin/sh\nexit 0\n' > "$daily_root/usr/local/sbin/y700-sns-init.sh"
+printf '#!/bin/sh\nexit 0\n' > "$daily_root/usr/local/libexec/y700-iio-sensor-proxy"
+printf '#!/bin/sh\nexit 0\n' > "$daily_root/usr/local/sbin/y700-aw86937-bind"
+printf 'legacy lib\n' > "$daily_root/usr/local/lib/y700-sns/libssc.so.2"
+printf 'legacy data\n' > "$daily_root/usr/local/share/y700-sns/registry"
 for executable in \
   "$daily_root/opt/libcamera-y700/bin/cam" \
   "$daily_root/opt/libcamera-y700/bin/libcamera-bug-report" \
@@ -81,6 +106,39 @@ printf '#!/bin/sh\nexit 0\n' > "$haptics_root/usr/libexec/tb321fu-haptics/bind-a
 chmod 0644 "$haptics_root/usr/lib/firmware/"*.bin
 chmod 0755 "$haptics_root/usr/libexec/tb321fu-haptics/bind-aw86937"
 dpkg-deb --build --root-owner-group "$haptics_root" "$payload/haptics.deb" >/dev/null
+
+ci_assert_unique_deb_packages "$payload"
+duplicate_package_dir="$tmp/duplicate-package"
+install -d -m 0755 "$duplicate_package_dir"
+cp "$payload/daily.deb" "$duplicate_package_dir/daily-a.deb"
+cp "$payload/daily.deb" "$duplicate_package_dir/daily-b.deb"
+if (ci_assert_unique_deb_packages "$duplicate_package_dir" >/dev/null 2>&1); then
+  echo 'duplicate DEB Package identity was accepted' >&2
+  exit 1
+fi
+
+symlink_package_dir="$tmp/symlink-package"
+install -d -m 0755 "$symlink_package_dir"
+cp "$payload/daily.deb" "$symlink_package_dir/payload.bin"
+ln -s payload.bin "$symlink_package_dir/disguised.deb"
+if (ci_assert_unique_deb_packages "$symlink_package_dir" >/dev/null 2>&1); then
+  echo 'symlinked DEB path was accepted' >&2
+  exit 1
+fi
+
+collision_source_a="$tmp/collision-a"
+collision_source_b="$tmp/collision-b"
+collision_destination="$tmp/collision-destination"
+install -d -m 0755 "$collision_source_a" "$collision_source_b"
+cp "$payload/daily.deb" "$collision_source_a/same.deb"
+cp "$payload/haptics.deb" "$collision_source_b/same.deb"
+ci_copy_deb_unique "$collision_source_a/same.deb" \
+  "$collision_destination" 'collision fixture A'
+if (ci_copy_deb_unique "$collision_source_b/same.deb" \
+    "$collision_destination" 'collision fixture B' >/dev/null 2>&1); then
+  echo 'DEB basename collision was accepted' >&2
+  exit 1
+fi
 
 audio_drift_payload="$tmp/audio-drift-payload"
 audio_drift_root="$tmp/audio-drift-root"
@@ -133,10 +191,22 @@ dpkg-deb -x "$payload/haptics.deb" "$tmp/before"
   ! -path './etc/wireplumber/wireplumber.conf.d/52-tb321fu-headset-route-reconcile.conf' \
   ! -path './usr/share/wireplumber/scripts/y700/headset-cleanup.lua' \
   ! -path './usr/share/wireplumber/scripts/tb321fu/headset-route-reconcile.lua' \
+  ! -path './etc/systemd/system/y700-sns-init.service' \
+  ! -path './etc/systemd/system/y700-aw86937-haptics.service' \
+  ! -path './etc/udev/rules.d/80-y700-iio-sensor-proxy.rules' \
+  ! -path './etc/udev/rules.d/90-y700-haptics.rules' \
+  ! -path './etc/dbus-1/system.d/net.hadess.SensorProxy-y700-ssc.conf' \
+  ! -path './usr/local/bin/y700-monitor-sensor' \
+  ! -path './usr/local/sbin/y700-sns-init.sh' \
+  ! -path './usr/local/libexec/y700-iio-sensor-proxy' \
+  ! -path './usr/local/sbin/y700-aw86937-bind' \
+  ! -path './usr/local/lib/y700-sns/*' \
+  ! -path './usr/local/share/y700-sns/*' \
   -print0 | sort -z | xargs -0 sha256sum) > "$tmp/before.sha256"
 
 export SOURCE_DATE_EPOCH=0
 ci_prepare_y700_daily_payload_deb "$payload" "$tmp/rewrite"
+ci_assert_unique_deb_packages "$payload"
 
 [ "$(ci_deb_member_owners "$payload" usr/lib/firmware/haptic_ram.bin | wc -l)" -eq 1 ]
 [ "$(ci_deb_member_owners "$payload" usr/lib/firmware/haptic_click.bin | wc -l)" -eq 1 ]
@@ -150,10 +220,42 @@ dpkg-deb -x "$payload/haptics.deb" "$tmp/after"
   ! -path './etc/wireplumber/wireplumber.conf.d/52-tb321fu-headset-route-reconcile.conf' \
   ! -path './usr/share/wireplumber/scripts/y700/headset-cleanup.lua' \
   ! -path './usr/share/wireplumber/scripts/tb321fu/headset-route-reconcile.lua' \
+  ! -path './etc/systemd/system/y700-sns-init.service' \
+  ! -path './etc/systemd/system/y700-aw86937-haptics.service' \
+  ! -path './etc/udev/rules.d/80-y700-iio-sensor-proxy.rules' \
+  ! -path './etc/udev/rules.d/90-y700-haptics.rules' \
+  ! -path './etc/dbus-1/system.d/net.hadess.SensorProxy-y700-ssc.conf' \
+  ! -path './usr/local/bin/y700-monitor-sensor' \
+  ! -path './usr/local/sbin/y700-sns-init.sh' \
+  ! -path './usr/local/libexec/y700-iio-sensor-proxy' \
+  ! -path './usr/local/sbin/y700-aw86937-bind' \
+  ! -path './usr/local/lib/y700-sns/*' \
+  ! -path './usr/local/share/y700-sns/*' \
   -print0 | sort -z | xargs -0 sha256sum) > "$tmp/after.sha256"
 cmp "$tmp/before.sha256" "$tmp/after.sha256"
 [ ! -e "$tmp/after/etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf" ]
 [ ! -e "$tmp/after/usr/share/wireplumber/scripts/y700/headset-cleanup.lua" ]
+for forbidden in \
+  etc/systemd/system/y700-sns-init.service \
+  etc/systemd/system/y700-aw86937-haptics.service \
+  etc/systemd/system/multi-user.target.wants/y700-sns-init.service \
+  etc/systemd/system/multi-user.target.wants/y700-aw86937-haptics.service \
+  etc/udev/rules.d/80-y700-iio-sensor-proxy.rules \
+  etc/udev/rules.d/90-y700-haptics.rules \
+  etc/dbus-1/system.d/net.hadess.SensorProxy-y700-ssc.conf \
+  usr/local/bin/y700-monitor-sensor \
+  usr/local/sbin/y700-sns-init.sh \
+  usr/local/libexec/y700-iio-sensor-proxy \
+  usr/local/sbin/y700-aw86937-bind \
+  usr/local/lib/y700-sns \
+  usr/local/share/y700-sns; do
+  [ ! -e "$tmp/after/$forbidden" ] && [ ! -L "$tmp/after/$forbidden" ]
+done
+if dpkg-deb --fsys-tarfile "$payload/daily.deb" | tar -tf - | \
+    grep -E '(y700-sns-init|y700-aw86937|y700-iio-sensor-proxy|y700-monitor-sensor|SensorProxy-y700-ssc|80-y700-iio|90-y700-haptics|usr/local/(lib|share)/y700-sns)' >/dev/null; then
+  echo 'rewritten daily DEB still owns legacy sensor/haptics payload' >&2
+  exit 1
+fi
 cmp "$SCRIPT_DIR/payloads/52-tb321fu-headset-route-reconcile.conf" \
   "$tmp/after/etc/wireplumber/wireplumber.conf.d/52-tb321fu-headset-route-reconcile.conf"
 cmp "$SCRIPT_DIR/payloads/tb321fu-headset-route-reconcile.lua" \
