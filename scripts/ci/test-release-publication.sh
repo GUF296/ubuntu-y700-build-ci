@@ -16,6 +16,72 @@ cat > "$fakebin/sleep" <<'SH'
 #!/bin/sh
 exit 0
 SH
+cat > "$fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${GH_STATE:?}"
+mkdir -p "$GH_STATE"
+printf '%q ' "$@" >> "$GH_STATE/curl-calls.log"
+printf '\n' >> "$GH_STATE/curl-calls.log"
+
+method=
+data=
+url=
+accept=false
+authorization=false
+api_version=false
+content_type=false
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    --fail-with-body|--silent|--show-error) shift ;;
+    --request) method=$2; shift 2 ;;
+    --header)
+      case $2 in
+        'Accept: application/vnd.github+json') accept=true ;;
+        'Authorization: Bearer test-release-token') authorization=true ;;
+        'X-GitHub-Api-Version: 2022-11-28') api_version=true ;;
+        'Content-Type: application/octet-stream') content_type=true ;;
+        *) printf 'unexpected curl header: %s\n' "$2" >&2; exit 2 ;;
+      esac
+      shift 2
+      ;;
+    --data-binary) data=$2; shift 2 ;;
+    https://*) [ -z "$url" ]; url=$1; shift ;;
+    *) printf 'unexpected curl argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+[ "$method" = POST ]
+$accept
+$authorization
+$api_version
+$content_type
+[ -f "$GH_STATE/exists" ]
+[ "$(cat "$GH_STATE/draft")" = true ]
+[ "$(cat "$GH_STATE/id")" = 101 ]
+prefix=https://uploads.github.com/repos/owner/repository/releases/101/assets?name=
+case $url in
+  "$prefix"*) name=${url#"$prefix"} ;;
+  *) printf 'unexpected upload URL: %s\n' "$url" >&2; exit 2 ;;
+esac
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+[[ $data == @* ]]
+file=${data#@}
+[ -f "$file" ]
+printf 'upload-start %s\n' "$name" >> "$GH_STATE/events.log"
+[ "${GH_FAIL_UPLOAD:-0}" != 1 ] || exit 73
+if awk -F '\t' -v name="$name" '$1 == name { found = 1 } END { exit found ? 0 : 1 }' "$GH_STATE/assets.tsv"; then
+  printf 'duplicate upload asset: %s\n' "$name" >&2
+  exit 67
+fi
+size=$(stat -c '%s' "$file")
+digest=sha256:$(sha256sum "$file" | awk '{print $1}')
+if [ "${GH_CORRUPT_DIGEST:-0}" = 1 ]; then
+  digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+fi
+printf '%s\t%s\t%s\n' "$name" "$size" "$digest" >> "$GH_STATE/assets.tsv"
+printf 'upload-complete %s\n' "$name" >> "$GH_STATE/events.log"
+SH
+
 cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -24,70 +90,6 @@ mkdir -p "$GH_STATE"
 printf '%q ' "$@" >> "$GH_STATE/calls.log"
 printf '\n' >> "$GH_STATE/calls.log"
 
-if [ "${1:-}" = release ]; then
-  operation=${2:-}
-  shift 2
-  case $operation in
-    view)
-      [ -f "$GH_STATE/exists" ]
-      ;;
-    create)
-      tag=$1
-      shift
-      draft=false
-      verify_tag=false
-      target=
-      while [ "$#" -gt 0 ]; do
-        case $1 in
-          --draft) draft=true; shift ;;
-          --verify-tag) verify_tag=true; shift ;;
-          --target) target=$2; shift 2 ;;
-          --title|--notes-file) shift 2 ;;
-          *) printf 'unexpected create argument: %s\n' "$1" >&2; exit 2 ;;
-        esac
-      done
-      [ "$draft" = true ]
-      [ "$verify_tag" = true ]
-      [ -f "$GH_STATE/tag-exists" ]
-      : "${target:?}"
-      : > "$GH_STATE/exists"
-      printf '%s\n' "$tag" > "$GH_STATE/tag"
-      printf '%s\n' "$target" > "$GH_STATE/target"
-      printf 'true\n' > "$GH_STATE/draft"
-      printf 'false\n' > "$GH_STATE/prerelease"
-      printf '101\n' > "$GH_STATE/id"
-      : > "$GH_STATE/assets.tsv"
-      printf 'create-draft\n' >> "$GH_STATE/events.log"
-      ;;
-    edit)
-      printf 'edit-draft\n' >> "$GH_STATE/events.log"
-      ;;
-    delete-asset)
-      name=$2
-      awk -F '\t' -v name="$name" '$1 != name' "$GH_STATE/assets.tsv" > "$GH_STATE/assets.next"
-      mv "$GH_STATE/assets.next" "$GH_STATE/assets.tsv"
-      printf 'delete %s\n' "$name" >> "$GH_STATE/events.log"
-      ;;
-    upload)
-      shift
-      printf 'upload-start\n' >> "$GH_STATE/events.log"
-      [ "${GH_FAIL_UPLOAD:-0}" != 1 ] || exit 73
-      : > "$GH_STATE/assets.tsv"
-      for file in "$@"; do
-        name=${file##*/}
-        size=$(stat -c '%s' "$file")
-        digest=sha256:$(sha256sum "$file" | awk '{print $1}')
-        if [ "${GH_CORRUPT_DIGEST:-0}" = 1 ]; then
-          digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-        fi
-        printf '%s\t%s\t%s\n' "$name" "$size" "$digest" >> "$GH_STATE/assets.tsv"
-      done
-      printf 'upload-complete\n' >> "$GH_STATE/events.log"
-      ;;
-    *) printf 'unexpected release operation: %s\n' "$operation" >&2; exit 2 ;;
-  esac
-  exit
-fi
 
 if [ "${1:-}" = api ]; then
   shift
@@ -99,42 +101,90 @@ if [ "${1:-}" = api ]; then
   endpoint=$1
   shift
   query=
+  paginate=false
   fields=()
   while [ "$#" -gt 0 ]; do
     case $1 in
-      --paginate) shift ;;
+      --paginate) paginate=true; shift ;;
       --jq) query=$2; shift 2 ;;
       -f|-F) fields+=("$2"); shift 2 ;;
       *) printf 'unexpected api argument: %s\n' "$1" >&2; exit 2 ;;
     esac
   done
   if [ "$method" = POST ]; then
-    [ "$endpoint" = "repos/owner/repository/git/refs" ]
-    [ ! -f "$GH_STATE/tag-exists" ] || exit 65
-    ref=
-    sha=
-    for field in "${fields[@]}"; do
-      key=${field%%=*}
-      value=${field#*=}
-      case $key in
-        ref) ref=$value ;;
-        sha) sha=$value ;;
-        *) printf 'unexpected POST field: %s\n' "$key" >&2; exit 2 ;;
-      esac
-    done
-    [ "$ref" = refs/tags/test-20260715 ]
-    [[ $sha =~ ^[0-9a-f]{40}$ ]]
-    tag_target=${GH_CREATE_TAG_TARGET:-$sha}
-    : > "$GH_STATE/tag-exists"
-    if [ "${GH_ANNOTATED_TAG:-0}" = 1 ]; then
-      printf 'tag\n' > "$GH_STATE/tag-type"
-      printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$GH_STATE/tag-object"
-      printf 'commit\n' > "$GH_STATE/peeled-type"
-      printf '%s\n' "$tag_target" > "$GH_STATE/peeled-object"
-    else
-      printf 'commit\n' > "$GH_STATE/tag-type"
-      printf '%s\n' "$tag_target" > "$GH_STATE/tag-object"
-    fi
+    case $endpoint in
+      repos/owner/repository/git/refs)
+        [ ! -f "$GH_STATE/tag-exists" ] || exit 65
+        ref=
+        sha=
+        for field in "${fields[@]}"; do
+          key=${field%%=*}
+          value=${field#*=}
+          case $key in
+            ref) ref=$value ;;
+            sha) sha=$value ;;
+            *) printf 'unexpected tag POST field: %s\n' "$key" >&2; exit 2 ;;
+          esac
+        done
+        [ "$ref" = refs/tags/test-20260715 ]
+        [[ $sha =~ ^[0-9a-f]{40}$ ]]
+        tag_target=${GH_CREATE_TAG_TARGET:-$sha}
+        : > "$GH_STATE/tag-exists"
+        if [ "${GH_ANNOTATED_TAG:-0}" = 1 ]; then
+          printf 'tag\n' > "$GH_STATE/tag-type"
+          printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$GH_STATE/tag-object"
+          printf 'commit\n' > "$GH_STATE/peeled-type"
+          printf '%s\n' "$tag_target" > "$GH_STATE/peeled-object"
+        else
+          printf 'commit\n' > "$GH_STATE/tag-type"
+          printf '%s\n' "$tag_target" > "$GH_STATE/tag-object"
+        fi
+        ;;
+      repos/owner/repository/releases)
+        [ "${GH_FAIL_RELEASE_CREATE:-0}" != 1 ] || exit 72
+        [ -f "$GH_STATE/tag-exists" ]
+        [ ! -f "$GH_STATE/exists" ] || exit 66
+        tag=
+        target=
+        name=
+        body=
+        draft=
+        prerelease=
+        for field in "${fields[@]}"; do
+          key=${field%%=*}
+          value=${field#*=}
+          case $key in
+            tag_name) tag=$value ;;
+            target_commitish) target=$value ;;
+            name) name=$value ;;
+            body) body=$value ;;
+            draft) draft=$value ;;
+            prerelease) prerelease=$value ;;
+            *) printf 'unexpected release POST field: %s\n' "$key" >&2; exit 2 ;;
+          esac
+        done
+        [ "$tag" = test-20260715 ]
+        [[ $target =~ ^[0-9a-f]{40}$ ]]
+        [ "$name" = "$tag" ]
+        [[ $body == @* ]]
+        [ -f "${body#@}" ]
+        [ "$draft" = true ]
+        [ "$prerelease" = false ]
+        reported_tag=${GH_RELEASE_TAG_RESPONSE:-$tag}
+        reported_target=${GH_RELEASE_TARGET_RESPONSE:-$target}
+        : > "$GH_STATE/exists"
+        printf '%s\n' "$reported_tag" > "$GH_STATE/tag"
+        printf '%s\n' "$reported_target" > "$GH_STATE/target"
+        printf 'true\n' > "$GH_STATE/draft"
+        printf 'false\n' > "$GH_STATE/prerelease"
+        printf '101\n' > "$GH_STATE/id"
+        : > "$GH_STATE/assets.tsv"
+        printf 'create-draft\n' >> "$GH_STATE/events.log"
+        [ "$query" = '[.id, .tag_name, (.draft | tostring), .target_commitish, (.prerelease | tostring)] | @tsv' ]
+        printf '101\t%s\ttrue\t%s\tfalse\n' "$reported_tag" "$reported_target"
+        ;;
+      *) printf 'unexpected POST endpoint: %s\n' "$endpoint" >&2; exit 2 ;;
+    esac
     exit
   fi
   if [ "$method" = PATCH ]; then
@@ -157,6 +207,8 @@ if [ "${1:-}" = api ]; then
   case "$endpoint" in
     'repos/owner/repository/releases?per_page=100')
       [ "${GH_FAIL_RELEASE_LIST:-0}" != 1 ] || exit 70
+      [ "$paginate" = true ] || exit 69
+      [ "$query" = '.[].tag_name' ] || exit 2
       [ ! -f "$GH_STATE/exists" ] || cat "$GH_STATE/tag"
       exit
       ;;
@@ -177,15 +229,21 @@ if [ "${1:-}" = api ]; then
       printf '%s\t%s\n' "$(cat "$GH_STATE/peeled-type")" "$(cat "$GH_STATE/peeled-object")"
       exit
       ;;
+    repos/owner/repository/releases/tags/*)
+      [ -f "$GH_STATE/exists" ] || exit 44
+      [ "$(cat "$GH_STATE/draft")" != true ] || exit 44
+      ;;
   esac
 
   if [[ $query == *'["release"'* ]]; then
+    [ "$endpoint" = repos/owner/repository/releases/101 ] || exit 45
     count=0
     [ ! -f "$GH_STATE/snapshot-count" ] || count=$(cat "$GH_STATE/snapshot-count")
     count=$((count + 1))
     printf '%s\n' "$count" > "$GH_STATE/snapshot-count"
     id=$(cat "$GH_STATE/id")
     draft=$(cat "$GH_STATE/draft")
+    tag=$(cat "$GH_STATE/tag")
     target=$(cat "$GH_STATE/target")
     prerelease=$(cat "$GH_STATE/prerelease")
     mutate=false
@@ -194,14 +252,17 @@ if [ "${1:-}" = api ]; then
       case ${GH_MUTATE_KIND:-target} in
         id) id=202 ;;
         draft) draft=false ;;
+        tag) tag=other-tag ;;
         target) target=ffffffffffffffffffffffffffffffffffffffff ;;
+        prerelease) prerelease=true ;;
         extra) : ;;
         digest) : ;;
         *) printf 'unknown mutation kind\n' >&2; exit 2 ;;
       esac
       printf 'external-mutation-%s\n' "${GH_MUTATE_KIND:-target}" >> "$GH_STATE/events.log"
     fi
-    printf 'release\t%s\t%s\t%s\t%s\n' "$id" "$draft" "$target" "$prerelease"
+    printf 'release\t%s\t%s\t%s\t%s\t%s\n' \
+      "$id" "$draft" "$tag" "$target" "$prerelease"
     if $mutate && [ "${GH_MUTATE_KIND:-}" = digest ]; then
       awk -F '\t' 'BEGIN { OFS="\t" } NR == 1 { $3="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } { print }' \
         "$GH_STATE/assets.tsv" | sed 's/^/asset\t/'
@@ -227,7 +288,7 @@ fi
 printf 'unexpected gh command: %s\n' "$*" >&2
 exit 2
 SH
-chmod +x "$fakebin/gh" "$fakebin/sleep"
+chmod +x "$fakebin/gh" "$fakebin/sleep" "$fakebin/curl"
 
 mkdir -p "$scratch/release"
 printf 'alpha\n' > "$scratch/release/alpha.bin"
@@ -241,7 +302,7 @@ run_publish() {
   PATH="$fakebin:$PATH" GH_STATE="$state" GH_TOKEN=test-release-token \
     GITHUB_REPOSITORY=owner/repository \
     GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
-    "$@" "$PUBLISH" test-20260715 "$scratch/release" "$scratch/notes.md"
+    "$@" bash "$PUBLISH" test-20260715 "$scratch/release" "$scratch/notes.md"
 }
 
 state_missing=$scratch/state-missing
@@ -261,6 +322,10 @@ printf 'PASS publication requires explicit prerelease-only mode\n'
 
 state_prerelease=$scratch/state-prerelease
 run_publish "$state_prerelease" env PRERELEASE=1 >/dev/null
+if grep -Fq 'repos/owner/repository/releases/tags/' "$state_prerelease/calls.log"; then
+  printf 'draft release was queried through the tag endpoint\n' >&2
+  exit 1
+fi
 grep -Fxq 'draft=false' "$state_prerelease/patch-fields.log"
 grep -Fxq 'prerelease=true' "$state_prerelease/patch-fields.log"
 grep -Fxq 'make_latest=false' "$state_prerelease/patch-fields.log"
@@ -272,6 +337,34 @@ if run_publish "$state_prerelease" env PRERELEASE=1 >/dev/null 2>&1; then
 fi
 [ "$before" -eq "$(wc -l < "$state_prerelease/events.log")" ]
 printf 'PASS prerelease is public, never latest, and immutable on rerun\n'
+
+state_unused_target=$scratch/state-unused-target
+run_publish "$state_unused_target" env PRERELEASE=1 \
+  GH_RELEASE_TARGET_RESPONSE=main >/dev/null
+[ "$(cat "$state_unused_target/target")" = main ]
+[ "$(cat "$state_unused_target/tag-object")" = 0123456789abcdef0123456789abcdef01234567 ]
+[ "$(cat "$state_unused_target/prerelease")" = true ]
+
+state_create_api_fail=$scratch/state-create-api-fail
+if run_publish "$state_create_api_fail" env PRERELEASE=1 \
+    GH_FAIL_RELEASE_CREATE=1 >/dev/null 2>&1; then
+  printf 'release create API failure was accepted\n' >&2
+  exit 1
+fi
+[ -f "$state_create_api_fail/tag-exists" ]
+[ ! -f "$state_create_api_fail/exists" ]
+[ ! -f "$state_create_api_fail/patch-fields.log" ]
+
+state_create_tag_mismatch=$scratch/state-create-tag-mismatch
+if run_publish "$state_create_tag_mismatch" env PRERELEASE=1 \
+    GH_RELEASE_TAG_RESPONSE=other-tag >/dev/null 2>&1; then
+  printf 'release create API tag mismatch was accepted\n' >&2
+  exit 1
+fi
+[ -f "$state_create_tag_mismatch/exists" ]
+[ "$(cat "$state_create_tag_mismatch/draft")" = true ]
+[ ! -f "$state_create_tag_mismatch/patch-fields.log" ]
+printf 'PASS create API binds release id/tag while Git ref owns commit identity\n'
 
 state_invalid=$scratch/state-invalid
 if run_publish "$state_invalid" env PRERELEASE=true >/dev/null 2>&1; then
@@ -327,7 +420,7 @@ run_publish "$state_annotated" env PRERELEASE=1 GH_ANNOTATED_TAG=1 >/dev/null
 [ "$(cat "$state_annotated/prerelease")" = true ]
 printf 'PASS existing tags fail closed and annotated tags are peeled to the exact commit\n'
 
-for mutation in id draft target extra digest; do
+for mutation in id draft tag target prerelease extra digest; do
   state=$scratch/state-mutation-$mutation
   if run_publish "$state" env PRERELEASE=1 \
       GH_MUTATE_SNAPSHOT=3 GH_MUTATE_KIND="$mutation" >/dev/null 2>&1; then

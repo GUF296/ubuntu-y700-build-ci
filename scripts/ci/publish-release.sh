@@ -32,7 +32,7 @@ release_kind=prerelease
 [ -d "$release_dir" ] || { printf 'release directory not found: %s\n' "$release_dir" >&2; exit 1; }
 [ -f "$notes_file" ] || { printf 'release notes not found: %s\n' "$notes_file" >&2; exit 1; }
 
-for command_name in gh sha256sum stat find sort awk grep uniq wc seq sleep; do
+for command_name in gh curl sha256sum stat find sort awk grep uniq wc seq sleep; do
   command -v "$command_name" >/dev/null || {
     printf 'required command not found: %s\n' "$command_name" >&2
     exit 1
@@ -99,30 +99,32 @@ local_asset_records=$(
 )
 
 fetch_release_snapshot() {
-  gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" --jq \
-    '(["release", (.id | tostring), (.draft | tostring), .target_commitish, (.prerelease | tostring)], (.assets[] | ["asset", .name, (.size | tostring), (.digest // "")])) | @tsv'
+  local release_id=$1
+
+  gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" --jq \
+    '(["release", (.id | tostring), (.draft | tostring), .tag_name, .target_commitish, (.prerelease | tostring)], (.assets[] | ["asset", .name, (.size | tostring), (.digest // "")])) | @tsv'
 }
 
 verify_release_snapshot() {
   local snapshot=$1
   local expected_release_id=$2
   local expected_draft=$3
-  local verify_assets=$4
-  local expected_prerelease=${5:-}
-  local metadata actual_kind actual_id actual_draft actual_target actual_prerelease
+  local expected_target=$4
+  local expected_prerelease=$5
+  local verify_assets=$6
+  local metadata actual_kind actual_id actual_draft actual_tag actual_target actual_prerelease
   local remote_assets remote_count expected_count expected_record
   local expected_name expected_size expected_digest remote_record
 
   metadata=$(printf '%s\n' "$snapshot" | awk -F '\t' \
     '$1 == "release" { print; found++ } END { if (found != 1) exit 1 }') || return 1
-  IFS=$'\t' read -r actual_kind actual_id actual_draft actual_target actual_prerelease <<< "$metadata"
+  IFS=$'\t' read -r actual_kind actual_id actual_draft actual_tag actual_target actual_prerelease <<< "$metadata"
   [ "$actual_kind" = release ] || return 1
   [ "$actual_id" = "$expected_release_id" ] || return 1
   [ "$actual_draft" = "$expected_draft" ] || return 1
-  [ "$actual_target" = "$GITHUB_SHA" ] || return 1
-  if [ -n "$expected_prerelease" ]; then
-    [ "$actual_prerelease" = "$expected_prerelease" ] || return 1
-  fi
+  [ "$actual_tag" = "$release_tag" ] || return 1
+  [ "$actual_target" = "$expected_target" ] || return 1
+  [ "$actual_prerelease" = "$expected_prerelease" ] || return 1
   [ "$verify_assets" = 1 ] || return 0
 
   remote_assets=$(printf '%s\n' "$snapshot" | awk -F '\t' \
@@ -203,29 +205,65 @@ fi
 gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
   -f "ref=refs/tags/$release_tag" -f "sha=$GITHUB_SHA" >/dev/null
 verify_tag_target || exit 1
-gh release create "$release_tag" --draft --target "$GITHUB_SHA" \
-  --verify-tag --title "$release_tag" --notes-file "$notes_file"
-verify_tag_target || exit 1
-
-release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" --jq .id)
+release_record=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+  -f "tag_name=$release_tag" \
+  -f "target_commitish=$GITHUB_SHA" \
+  -f "name=$release_tag" \
+  -F "body=@$notes_file" \
+  -F draft=true -F prerelease=false --jq \
+  '[.id, .tag_name, (.draft | tostring), .target_commitish, (.prerelease | tostring)] | @tsv') || {
+  printf 'cannot create the draft release\n' >&2
+  exit 1
+}
+IFS=$'\t' read -r release_id created_tag created_draft \
+  release_target_commitish created_prerelease <<< "$release_record"
 [[ $release_id =~ ^[0-9]+$ ]] || {
   printf 'release API returned an invalid id: %s\n' "$release_id" >&2
   exit 1
 }
-initial_snapshot=$(fetch_release_snapshot)
-verify_release_snapshot "$initial_snapshot" "$release_id" true 0 || {
+[ "$created_tag" = "$release_tag" ] || {
+  printf 'release API returned an unexpected tag: %s\n' "$created_tag" >&2
+  exit 1
+}
+[ "$created_draft" = true ] || {
+  printf 'release API did not create a draft\n' >&2
+  exit 1
+}
+[ "$created_prerelease" = false ] || {
+  printf 'release API created an unexpected prerelease state\n' >&2
+  exit 1
+}
+[ -n "$release_target_commitish" ] || {
+  printf 'release API returned an empty target_commitish\n' >&2
+  exit 1
+}
+verify_tag_target || exit 1
+initial_snapshot=$(fetch_release_snapshot "$release_id")
+verify_release_snapshot "$initial_snapshot" "$release_id" true \
+  "$release_target_commitish" false 0 || {
   printf 'draft release identity/state changed before asset upload\n' >&2
   printf '%s\n' "$initial_snapshot" >&2
   exit 1
 }
 
-gh release upload "$release_tag" "${assets[@]}"
+for asset in "${assets[@]}"; do
+  asset_name=${asset##*/}
+  curl --fail-with-body --silent --show-error --request POST \
+    --header 'Accept: application/vnd.github+json' \
+    --header "Authorization: Bearer $GH_TOKEN" \
+    --header 'X-GitHub-Api-Version: 2022-11-28' \
+    --header 'Content-Type: application/octet-stream' \
+    --data-binary "@$asset" \
+    "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$asset_name" \
+    >/dev/null
+done
 
 verified=false
 remote_snapshot=
 for attempt in $(seq 1 10); do
-  if remote_snapshot=$(fetch_release_snapshot) && \
-    verify_release_snapshot "$remote_snapshot" "$release_id" true 1; then
+  if remote_snapshot=$(fetch_release_snapshot "$release_id") && \
+    verify_release_snapshot "$remote_snapshot" "$release_id" true \
+      "$release_target_commitish" false 1; then
     verified=true
   fi
   $verified && break
@@ -238,8 +276,9 @@ $verified || {
   exit 1
 }
 
-final_snapshot=$(fetch_release_snapshot)
-verify_release_snapshot "$final_snapshot" "$release_id" true 1 || {
+final_snapshot=$(fetch_release_snapshot "$release_id")
+verify_release_snapshot "$final_snapshot" "$release_id" true \
+  "$release_target_commitish" false 1 || {
   printf 'release changed concurrently after upload verification; release remains draft\n' >&2
   printf '%s\n' "$final_snapshot" >&2
   exit 1
@@ -250,8 +289,9 @@ verify_tag_target || {
 }
 gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
   -F draft=false -F prerelease="$publish_prerelease" -F make_latest="$publish_make_latest" >/dev/null
-published_snapshot=$(fetch_release_snapshot)
-verify_release_snapshot "$published_snapshot" "$release_id" false 1 "$publish_prerelease" || {
+published_snapshot=$(fetch_release_snapshot "$release_id")
+verify_release_snapshot "$published_snapshot" "$release_id" false \
+  "$release_target_commitish" "$publish_prerelease" 1 || {
   printf '%s did not reach the expected immutable public state after final PATCH\n' "$release_kind" >&2
   printf '%s\n' "$published_snapshot" >&2
   exit 1
