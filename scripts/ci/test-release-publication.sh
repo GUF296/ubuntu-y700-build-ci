@@ -94,18 +94,26 @@ printf '\n' >> "$GH_STATE/calls.log"
 if [ "${1:-}" = api ]; then
   shift
   method=GET
-  if [ "${1:-}" = -X ]; then
-    method=$2
-    shift 2
-  fi
-  endpoint=$1
-  shift
+  include=false
+  headers=()
+  endpoint=
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      -X) method=$2; shift 2 ;;
+      -i|--include) include=true; shift ;;
+      -H|--header) headers+=("$2"); shift 2 ;;
+      *) endpoint=$1; shift; break ;;
+    esac
+  done
+  [ -n "$endpoint" ] || exit 2
   query=
   paginate=false
   fields=()
   while [ "$#" -gt 0 ]; do
     case $1 in
       --paginate) paginate=true; shift ;;
+      -i|--include) include=true; shift ;;
+      -H|--header) headers+=("$2"); shift 2 ;;
       --jq) query=$2; shift 2 ;;
       -f|-F) fields+=("$2"); shift 2 ;;
       *) printf 'unexpected api argument: %s\n' "$1" >&2; exit 2 ;;
@@ -169,40 +177,34 @@ if [ "${1:-}" = api ]; then
         [[ $body == @* ]]
         [ -f "${body#@}" ]
         [ "$draft" = true ]
-        [ "$prerelease" = false ]
+        [ "$prerelease" = true ]
         reported_tag=${GH_RELEASE_TAG_RESPONSE:-$tag}
         reported_target=${GH_RELEASE_TARGET_RESPONSE:-$target}
+        reported_name=${GH_RELEASE_NAME_RESPONSE:-$name}
+        body_b64=$(base64 -w 0 < "${body#@}")
+        reported_body_b64=${GH_RELEASE_BODY_B64_RESPONSE:-$body_b64}
         : > "$GH_STATE/exists"
         printf '%s\n' "$reported_tag" > "$GH_STATE/tag"
         printf '%s\n' "$reported_target" > "$GH_STATE/target"
+        printf '%s\n' "$reported_name" > "$GH_STATE/name"
+        printf '%s\n' "$reported_body_b64" > "$GH_STATE/body-b64"
         printf 'true\n' > "$GH_STATE/draft"
-        printf 'false\n' > "$GH_STATE/prerelease"
+        printf '%s\n' "$prerelease" > "$GH_STATE/prerelease"
         printf '101\n' > "$GH_STATE/id"
         : > "$GH_STATE/assets.tsv"
         printf 'create-draft\n' >> "$GH_STATE/events.log"
-        [ "$query" = '[.id, .tag_name, (.draft | tostring), .target_commitish, (.prerelease | tostring)] | @tsv' ]
-        printf '101\t%s\ttrue\t%s\tfalse\n' "$reported_tag" "$reported_target"
+        [ "$query" = '[.id, .tag_name, (.draft | tostring), .target_commitish, (.prerelease | tostring), .name, ((.body // "") | @base64)] | @tsv' ]
+        printf '101\t%s\ttrue\t%s\ttrue\t%s\t%s\n' \
+          "$reported_tag" "$reported_target" "$reported_name" "$reported_body_b64"
         ;;
       *) printf 'unexpected POST endpoint: %s\n' "$endpoint" >&2; exit 2 ;;
     esac
     exit
   fi
-  if [ "$method" = PATCH ]; then
-    [ "$endpoint" = "repos/owner/repository/releases/101" ]
-    for field in "${fields[@]}"; do
-      key=${field%%=*}
-      value=${field#*=}
-      printf '%s=%s\n' "$key" "$value" >> "$GH_STATE/patch-fields.log"
-      case $key in
-        draft) printf '%s\n' "$value" > "$GH_STATE/draft" ;;
-        prerelease) printf '%s\n' "$value" > "$GH_STATE/prerelease" ;;
-        make_latest) : ;;
-        *) printf 'unexpected PATCH field: %s\n' "$key" >&2; exit 2 ;;
-      esac
-    done
-    printf 'publish\n' >> "$GH_STATE/events.log"
-    exit
-  fi
+  [ "$method" != PATCH ] || {
+    printf 'publisher attempted unsupported release PATCH\n' >&2
+    exit 2
+  }
 
   case "$endpoint" in
     'repos/owner/repository/releases?per_page=100')
@@ -237,6 +239,7 @@ if [ "${1:-}" = api ]; then
 
   if [[ $query == *'["release"'* ]]; then
     [ "$endpoint" = repos/owner/repository/releases/101 ] || exit 45
+    [ "$query" = '(["release", (.id | tostring), (.draft | tostring), .tag_name, .target_commitish, (.prerelease | tostring), .name, ((.body // "") | @base64)], (.assets[] | ["asset", .name, (.size | tostring), (.digest // "")])) | @tsv' ] || exit 2
     count=0
     [ ! -f "$GH_STATE/snapshot-count" ] || count=$(cat "$GH_STATE/snapshot-count")
     count=$((count + 1))
@@ -246,6 +249,8 @@ if [ "${1:-}" = api ]; then
     tag=$(cat "$GH_STATE/tag")
     target=$(cat "$GH_STATE/target")
     prerelease=$(cat "$GH_STATE/prerelease")
+    name=$(cat "$GH_STATE/name")
+    body_b64=$(cat "$GH_STATE/body-b64")
     mutate=false
     if [ "${GH_MUTATE_SNAPSHOT:-0}" -eq "$count" ]; then mutate=true; fi
     if $mutate; then
@@ -254,15 +259,17 @@ if [ "${1:-}" = api ]; then
         draft) draft=false ;;
         tag) tag=other-tag ;;
         target) target=ffffffffffffffffffffffffffffffffffffffff ;;
-        prerelease) prerelease=true ;;
+        prerelease) prerelease=false ;;
+        name) name=other-title ;;
+        body) body_b64=b3RoZXItYm9keQ== ;;
         extra) : ;;
         digest) : ;;
         *) printf 'unknown mutation kind\n' >&2; exit 2 ;;
       esac
       printf 'external-mutation-%s\n' "${GH_MUTATE_KIND:-target}" >> "$GH_STATE/events.log"
     fi
-    printf 'release\t%s\t%s\t%s\t%s\t%s\n' \
-      "$id" "$draft" "$tag" "$target" "$prerelease"
+    printf 'release\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$id" "$draft" "$tag" "$target" "$prerelease" "$name" "$body_b64"
     if $mutate && [ "${GH_MUTATE_KIND:-}" = digest ]; then
       awk -F '\t' 'BEGIN { OFS="\t" } NR == 1 { $3="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } { print }' \
         "$GH_STATE/assets.tsv" | sed 's/^/asset\t/'
@@ -290,20 +297,45 @@ exit 2
 SH
 chmod +x "$fakebin/gh" "$fakebin/sleep" "$fakebin/curl"
 
-mkdir -p "$scratch/release"
-printf 'alpha\n' > "$scratch/release/alpha.bin"
-printf 'beta\n' > "$scratch/release/beta.bin"
-(cd "$scratch/release" && sha256sum alpha.bin beta.bin > SHA256SUMS.txt)
-printf '# Notes\n' > "$scratch/notes.md"
+release_stage=$scratch/release-staging
+release_dir=$release_stage/assets
+mkdir -p "$release_dir"
+printf 'alpha\n' > "$release_dir/alpha.bin"
+printf 'beta\n' > "$release_dir/beta.bin"
+printf '# Notes\n' > "$release_dir/BUILD-PARAMETERS.md"
+(cd "$release_dir" && sha256sum BUILD-PARAMETERS.md alpha.bin beta.bin > SHA256SUMS.txt)
 
 run_publish() {
   local state=$1
+  local stage=${PUBLISH_STAGE_ROOT:-"$release_stage"}
   shift
   PATH="$fakebin:$PATH" GH_STATE="$state" GH_TOKEN=test-release-token \
     GITHUB_REPOSITORY=owner/repository \
     GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
-    "$@" bash "$PUBLISH" test-20260715 "$scratch/release" "$scratch/notes.md"
+    "$@" bash "$PUBLISH" test-20260715 "$stage"
 }
+
+outside=$scratch/outside
+mkdir -p "$outside"
+printf '# Outside Notes\n' > "$outside/BUILD-PARAMETERS.md"
+ln -s "$outside" "$scratch/stage-root-link"
+mkdir -p "$scratch/stage-assets-link"
+ln -s "$outside" "$scratch/stage-assets-link/assets"
+mkdir -p "$scratch/stage-notes-link/assets"
+printf 'alpha\n' > "$scratch/stage-notes-link/assets/alpha.bin"
+ln -s "$outside/BUILD-PARAMETERS.md" \
+  "$scratch/stage-notes-link/assets/BUILD-PARAMETERS.md"
+
+for fixture in stage-root-link stage-assets-link stage-notes-link; do
+  state=$scratch/state-$fixture
+  if PUBLISH_STAGE_ROOT="$scratch/$fixture" \
+      run_publish "$state" env PRERELEASE=1 >/dev/null 2>&1; then
+    printf 'publisher accepted symlinked or escaping release staging fixture: %s\n' "$fixture" >&2
+    exit 1
+  fi
+  [ ! -e "$state" ]
+done
+printf 'PASS release staging rejects root, assets, and notes symlink escapes before remote access\n'
 
 state_missing=$scratch/state-missing
 if run_publish "$state_missing" env >/dev/null 2>&1; then
@@ -326,17 +358,22 @@ if grep -Fq 'repos/owner/repository/releases/tags/' "$state_prerelease/calls.log
   printf 'draft release was queried through the tag endpoint\n' >&2
   exit 1
 fi
-grep -Fxq 'draft=false' "$state_prerelease/patch-fields.log"
-grep -Fxq 'prerelease=true' "$state_prerelease/patch-fields.log"
-grep -Fxq 'make_latest=false' "$state_prerelease/patch-fields.log"
+[ "$(cat "$state_prerelease/draft")" = true ]
 [ "$(cat "$state_prerelease/prerelease")" = true ]
+[ ! -f "$state_prerelease/patch-fields.log" ]
+[ ! -f "$state_prerelease/patch-headers.log" ]
+if grep -Fq -- '-X PATCH' "$state_prerelease/calls.log" || \
+   grep -Fq 'If-Match:' "$state_prerelease/calls.log"; then
+  printf 'publisher attempted an unsupported conditional release update\n' >&2
+  exit 1
+fi
 before=$(wc -l < "$state_prerelease/events.log")
 if run_publish "$state_prerelease" env PRERELEASE=1 >/dev/null 2>&1; then
-  printf 'existing public release was accepted on rerun\n' >&2
+  printf 'existing verified draft was accepted on rerun\n' >&2
   exit 1
 fi
 [ "$before" -eq "$(wc -l < "$state_prerelease/events.log")" ]
-printf 'PASS prerelease is public, never latest, and immutable on rerun\n'
+printf 'PASS prerelease draft is verified, private, and immutable on rerun\n'
 
 state_unused_target=$scratch/state-unused-target
 run_publish "$state_unused_target" env PRERELEASE=1 \
@@ -365,6 +402,22 @@ fi
 [ "$(cat "$state_create_tag_mismatch/draft")" = true ]
 [ ! -f "$state_create_tag_mismatch/patch-fields.log" ]
 printf 'PASS create API binds release id/tag while Git ref owns commit identity\n'
+
+for field in name body; do
+  state=$scratch/state-create-$field-mismatch
+  case $field in
+    name) response=GH_RELEASE_NAME_RESPONSE=other-title ;;
+    body) response=GH_RELEASE_BODY_B64_RESPONSE=b3RoZXItYm9keQ== ;;
+  esac
+  if run_publish "$state" env PRERELEASE=1 "$response" >/dev/null 2>&1; then
+    printf 'release create %s mismatch was accepted\n' "$field" >&2
+    exit 1
+  fi
+  [ -f "$state/exists" ]
+  [ "$(cat "$state/draft")" = true ]
+  [ ! -f "$state/patch-fields.log" ]
+done
+printf 'PASS create API binds release title and body to the staged notes asset\n'
 
 state_invalid=$scratch/state-invalid
 if run_publish "$state_invalid" env PRERELEASE=true >/dev/null 2>&1; then
@@ -420,7 +473,7 @@ run_publish "$state_annotated" env PRERELEASE=1 GH_ANNOTATED_TAG=1 >/dev/null
 [ "$(cat "$state_annotated/prerelease")" = true ]
 printf 'PASS existing tags fail closed and annotated tags are peeled to the exact commit\n'
 
-for mutation in id draft tag target prerelease extra digest; do
+for mutation in id draft tag target prerelease name body extra digest; do
   state=$scratch/state-mutation-$mutation
   if run_publish "$state" env PRERELEASE=1 \
       GH_MUTATE_SNAPSHOT=3 GH_MUTATE_KIND="$mutation" >/dev/null 2>&1; then
@@ -429,7 +482,7 @@ for mutation in id draft tag target prerelease extra digest; do
   fi
   [ ! -f "$state/patch-fields.log" ]
 done
-printf 'PASS final single-snapshot gate rejects concurrent identity/state/asset changes\n'
+printf 'PASS final single-snapshot gate rejects concurrent identity/title/body/state/asset changes\n'
 
 state_upload_fail=$scratch/state-upload-fail
 if run_publish "$state_upload_fail" env PRERELEASE=1 GH_FAIL_UPLOAD=1 >/dev/null 2>&1; then

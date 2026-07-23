@@ -176,6 +176,29 @@ fi
 y700_validate_kernel_args rootargs "$generated_rootargs"
 y700_validate_kernel_args stableargs "$STABLEARGS"
 
+# A verified template can contain a direct-boot EFI with an embedded or
+# template-owned configuration. Do not report caller-supplied root arguments
+# as effective unless the matching direct EFI/config are replaced together.
+if [ -n "$BOOT_TEMPLATE_IMAGE" ] && [ -z "${QCOMRAMP_EFI:-}" ]; then
+  [ "$ROOT_SELECTOR" = partlabel ] ||
+    ci_die "BOOT_TEMPLATE_IMAGE requires QCOMRAMP_EFI for a non-template ROOT_SELECTOR"
+  [ "$ROOT_PARTLABEL" = userdata ] ||
+    ci_die "BOOT_TEMPLATE_IMAGE requires QCOMRAMP_EFI for a non-template ROOT_PARTLABEL"
+  [ -z "${ROOT_UUID:-}" ] ||
+    ci_die "BOOT_TEMPLATE_IMAGE requires QCOMRAMP_EFI for ROOT_UUID"
+  [ -z "${ROOTARGS:-}" ] ||
+    ci_die "BOOT_TEMPLATE_IMAGE requires QCOMRAMP_EFI for ROOTARGS"
+  [ -z "${ROOTARGS_EXTRA:-}" ] ||
+    ci_die "BOOT_TEMPLATE_IMAGE requires QCOMRAMP_EFI for ROOTARGS_EXTRA"
+  [ "$STABLEARGS" = drm_client_lib.active=none ] ||
+    ci_die "BOOT_TEMPLATE_IMAGE requires QCOMRAMP_EFI for non-template STABLEARGS"
+  direct_boot_config_mode=template-preserved
+elif [ -n "${QCOMRAMP_EFI:-}" ]; then
+  direct_boot_config_mode=external-replaced
+else
+  direct_boot_config_mode=fresh-embedded
+fi
+
 if [ -n "${BOOTAA64_EFI:-}" ] && [ -f "$BOOTAA64_EFI" ]; then
   cp -a "$BOOTAA64_EFI" "$payload_dir/EFI/BOOT/BOOTAA64.EFI"
 fi
@@ -205,8 +228,9 @@ boot_fat_label=$BOOT_FAT_LABEL
 root_selector=$ROOT_SELECTOR
 root_partlabel=$ROOT_PARTLABEL
 root_uuid=${ROOT_UUID:-}
-rootargs=$generated_rootargs
-stableargs=$STABLEARGS
+requested_rootargs=$generated_rootargs
+requested_stableargs=$STABLEARGS
+direct_boot_config_mode=$direct_boot_config_mode
 dtb_name=$DTB_NAME
 kernel_image_source=$KERNEL_IMAGE
 dtb_source=$DTB_FILE
@@ -239,8 +263,9 @@ if [ -n "$BOOT_TEMPLATE_IMAGE" ]; then
     mcopy -o -m -i "$boot_img" "$payload_dir/EFI/BOOT/$QCOMRAMP_CFG_NAME" "::/EFI/BOOT/$QCOMRAMP_CFG_NAME"
     mcopy -o -m -i "$boot_img" "$payload_dir/EFI/BOOT/grub.cfg" ::/EFI/BOOT/grub.cfg
   fi
-  mkdir -p "$payload_dir/boot/grub/arm64-efi"
-  cat > "$payload_dir/boot/grub/arm64-efi/grub.cfg" <<EOF
+  if [ -n "${QCOMRAMP_EFI:-}" ]; then
+    mkdir -p "$payload_dir/boot/grub/arm64-efi"
+    cat > "$payload_dir/boot/grub/arm64-efi/grub.cfg" <<EOF
 set timeout=$GRUB_TIMEOUT
 set default=0
 set gfxpayload=keep
@@ -262,9 +287,10 @@ menuentry "Y700 no-DRM SSH rescue" {
     linux /Image video=efifb:off panic=10 efi=novamap $generated_rootargs init=/sbin/init console=tty1 console=ttyMSM0,115200n8 log_buf_len=64M consoleblank=0 $STABLEARGS msm.fbdev=0 drm_kms_helper.fbdev_emulation=0 -- ignore_loglevel loglevel=8 printk.time=1 systemd.show_status=1
 }
 EOF
-  (cd "$payload_dir" && find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum) > "$payload_dir/SHA256SUMS.txt"
-  ci_normalize_fat_tree "$payload_dir"
-  mcopy -o -m -i "$boot_img" "$payload_dir/boot/grub/arm64-efi/grub.cfg" ::/boot/grub/arm64-efi/grub.cfg
+    (cd "$payload_dir" && find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum) > "$payload_dir/SHA256SUMS.txt"
+    ci_normalize_fat_tree "$payload_dir"
+    mcopy -o -m -i "$boot_img" "$payload_dir/boot/grub/arm64-efi/grub.cfg" ::/boot/grub/arm64-efi/grub.cfg
+  fi
   if [ -f "$payload_dir/kernel.config" ]; then
     mcopy -o -m -i "$boot_img" "$payload_dir/kernel.config" ::/kernel.config
   fi

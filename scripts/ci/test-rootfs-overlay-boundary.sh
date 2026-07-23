@@ -29,6 +29,27 @@ if (ci_validate_rootfs_overlay_tree "$scratch/reject-link") >/dev/null 2>&1; the
   exit 1
 fi
 
+mkdir -p "$scratch/reject-absolute/etc"
+ln -s /etc "$scratch/reject-absolute/etc/host-etc"
+if (ci_validate_rootfs_overlay_tree "$scratch/reject-absolute") >/dev/null 2>&1; then
+  printf 'absolute overlay symlink was accepted\n' >&2
+  exit 1
+fi
+
+mkdir -p "$scratch/reject-escape/etc"
+ln -s ../../outside "$scratch/reject-escape/etc/host-outside"
+if (ci_validate_rootfs_overlay_tree "$scratch/reject-escape") >/dev/null 2>&1; then
+  printf 'escaping relative overlay symlink was accepted\n' >&2
+  exit 1
+fi
+
+mkdir -p "$scratch/contained/lib" "$scratch/contained/etc/systemd/system/multi-user.target.wants"
+touch "$scratch/contained/lib/libcontained.so.1"
+ln -s libcontained.so.1 "$scratch/contained/lib/libcontained.so"
+ln -s ../contained.service \
+  "$scratch/contained/etc/systemd/system/multi-user.target.wants/contained.service"
+ci_validate_rootfs_overlay_tree "$scratch/contained"
+
 case $(basename -- "$SCRIPT_DIR/../../..") in
   ubuntu) rootfs_script="$SCRIPT_DIR/build-rootfs-image.sh" ;;
   arch) rootfs_script="$SCRIPT_DIR/build-arch-rootfs-image.sh" ;;
@@ -39,6 +60,10 @@ esac
 ! grep -Fq 'ci_extract_archive "$tmp_overlay" "$rootfs_dir"' "$rootfs_script"
 unmount_line=$(grep -n '^unmount_chroot_runtime$' "$rootfs_script" | tail -n1 | cut -d: -f1)
 apply_line=$(grep -n 'applying staged overlay archive' "$rootfs_script" | tail -n1 | cut -d: -f1)
+snapshot_line=$(grep -n 'ci_snapshot_local_deb_payload' "$rootfs_script" | tail -n1 | cut -d: -f1)
+verify_line=$(grep -n 'ci_verify_local_deb_payload_snapshot' "$rootfs_script" | tail -n1 | cut -d: -f1)
 [ -n "$unmount_line" ] && [ -n "$apply_line" ] && [ "$unmount_line" -lt "$apply_line" ]
+[ -n "$snapshot_line" ] && [ -n "$verify_line" ] && \
+  [ "$snapshot_line" -lt "$unmount_line" ] && [ "$verify_line" -gt "$apply_line" ]
 
 printf 'rootfs overlay mount boundary: PASS\n'

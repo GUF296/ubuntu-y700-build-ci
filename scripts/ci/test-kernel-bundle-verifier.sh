@@ -13,6 +13,9 @@ trap cleanup EXIT
 
 release=7.1.1-g111111111111
 commit=1111111111111111111111111111111111111111
+kernel_producer_repository=GUF296/ubuntu-y700-build-ci
+kernel_producer_tree=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+kernel_producer_tree_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 sensor_commit=2222222222222222222222222222222222222222
 epoch=1784073600
 haptic_ram_payload='fixture-haptic-ram'
@@ -63,11 +66,12 @@ setup_haptics_producer() {
   local firmware_dir="$producer_root/haptics/rootfs-reference/usr/lib/firmware"
   local helper_dir="$producer_root/haptics/baseline-20260614-daily-clean/testing-tools"
   local builder_dir="$producer_root/scripts/ci"
+  local template_dir="$builder_dir/haptics-control-templates"
 
   git init -q "$producer_root"
   git -C "$producer_root" config user.name 'TB321FU fixture'
   git -C "$producer_root" config user.email 'fixture@example.invalid'
-  mkdir -p "$driver_dir" "$firmware_dir" "$helper_dir" "$builder_dir"
+  mkdir -p "$driver_dir" "$firmware_dir" "$helper_dir" "$builder_dir" "$template_dir"
   cat > "$driver_dir/aw86937-y700.c" <<'EOF_DRIVER'
 /* Lenovo Y700 AW86937 input force-feedback haptics driver */
 static struct i2c_driver fixture = {
@@ -82,16 +86,8 @@ EOF_DRIVER
   printf '%s' "$haptics_helper_source_payload" > "$helper_dir/y700-haptic-test.c"
   cat > "$builder_dir/build-tb321fu-haptics-deb.sh" <<'EOF_BUILDER'
 #!/usr/bin/env bash
-cat > postinst <<'EOF_POSTINST'
-#!/bin/sh
-set -e
-echo fixture-postinst >/dev/null
-EOF_POSTINST
-cat > postrm <<'EOF_POSTRM'
-#!/bin/sh
-set -e
-echo fixture-postrm >/dev/null
-EOF_POSTRM
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+. "$SCRIPT_DIR/haptics-maintainer-scripts.sh"
 cat > bind-aw86937 <<'EOF_BIND'
 #!/bin/sh
 set -eu
@@ -110,6 +106,24 @@ vibrationEnabled=true
 EOF_CONF
 EOF_BUILDER
   chmod 0755 "$builder_dir/build-tb321fu-haptics-deb.sh"
+  cat > "$builder_dir/haptics-maintainer-scripts.sh" <<'EOF_MAINTAINER_HELPER'
+#!/usr/bin/env bash
+# Fixture provenance marker for the dynamic haptics maintainer-script helper.
+haptics_validate_kernel_release() { :; }
+haptics_render_maintainer_template() { :; }
+haptics_write_maintainer_scripts() { :; }
+HAPTICS_MAINTAINER_TEMPLATE_DIR=$(dirname -- "${BASH_SOURCE[0]}")/haptics-control-templates
+EOF_MAINTAINER_HELPER
+  chmod 0644 "$builder_dir/haptics-maintainer-scripts.sh"
+  for script in postinst prerm postrm; do
+    cat > "$template_dir/$script.in" <<EOF_MAINTAINER_TEMPLATE
+#!/bin/sh
+set -eu
+KERNEL_RELEASE=@KERNEL_RELEASE@
+echo fixture-$script >/dev/null
+EOF_MAINTAINER_TEMPLATE
+    chmod 0644 "$template_dir/$script.in"
+  done
   git -C "$producer_root" add .
   env \
     GIT_AUTHOR_DATE="@$epoch +0000" \
@@ -123,6 +137,7 @@ EOF_BUILDER
   producer_click="$firmware_dir/haptic_click.bin"
   producer_helper="$helper_dir/y700-haptic-test.c"
   producer_builder="$builder_dir/build-tb321fu-haptics-deb.sh"
+  producer_maintainer_helper="$builder_dir/haptics-maintainer-scripts.sh"
   producer_build_source="$tmp/producer-aw86937-haptics.c"
   cp "$producer_driver" "$producer_build_source"
   sed -i \
@@ -159,6 +174,13 @@ extract_fixture_heredoc() {
     "$producer_builder" "$1" "$2"
 }
 
+render_fixture_haptics_maintainer_template() {
+  local template_name=$1 destination=$2 kernel_release=${3:-$release}
+  local template="$producer_root/scripts/ci/haptics-control-templates/$template_name"
+
+  sed "s/@KERNEL_RELEASE@/$kernel_release/g" "$template" > "$destination"
+}
+
 setup_haptics_producer
 expected_haptics_module_sha=$haptics_module_sha
 expected_haptics_helper_binary_sha=$haptics_helper_binary_sha
@@ -167,10 +189,21 @@ write_bundle() {
   local file=$1 source_epoch=$2 identity bundle_id
   identity="${file}.identity"
   {
-    printf 'schema\ttb321fu.kernel-bundle/v1\n'
+    printf 'schema\ttb321fu.kernel-bundle/v2\n'
     printf 'kernel-source-commit\t%s\n' "$commit"
     printf 'kernel-release\t%s\n' "$release"
     printf 'kernel-config-sha256\t%s\n' "$config_sha"
+    printf 'kernel-image-sha256\t%s\n' "$(sha "$kernel_root/Image")"
+    printf 'kernel-dtb-name\tsm8650-lenovo-tb321fu.dtb\n'
+    printf 'kernel-dtb-sha256\t%s\n' "$(sha "$kernel_root/sm8650-lenovo-tb321fu.dtb")"
+    printf 'kernel-modules-deb-sha256\t%s\n' "$modules_deb_sha"
+    printf 'kernel-modules-manifest-sha256\t%s\n' "$modules_manifest_sha"
+    printf 'kernel-sdk-archive-sha256\t%s\n' "$sdk_archive_sha"
+    printf 'kernel-sdk-manifest-sha256\t%s\n' "$sdk_manifest_sha"
+    printf 'kernel-toolchain-manifest-sha256\t%s\n' "$toolchain_manifest_sha"
+    printf 'kbuild-flags-sha256\t%s\n' "$kbuild_flags_manifest_sha"
+    printf 'rustc-sha256\t%s\n' "$rustc_sha"
+    printf 'rustc\t%s\n' "$rustc_version"
     printf 'source-date-epoch\t%s\n' "$source_epoch"
     printf 'kbuild-build-timestamp\t2026-07-15 00:00:00 UTC\n'
     printf 'kbuild-build-user\ttb321fu-ci\n'
@@ -182,6 +215,113 @@ write_bundle() {
   printf 'kernel-bundle-id\t%s\n' "$bundle_id" >> "$file"
   rm -f -- "$identity"
   written_bundle_id=$bundle_id
+}
+
+write_kernel_metadata_evidence() {
+  local modules_deb="$device_root/y700-daily-kernel-modules_20260715.1_arm64.deb"
+  local modules_tree="$tmp/modules-manifest"
+  local tool label digest version
+
+  config_sha=$(sha "$kernel_root/kernel.config")
+  modules_deb_sha=$(sha "$modules_deb")
+  rm -rf -- "$modules_tree"
+  dpkg-deb --raw-extract "$modules_deb" "$modules_tree" >/dev/null
+  (
+    cd "$modules_tree"
+    find ./usr/lib/modules -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum --
+  ) > "$tmp/MODULES.sha256"
+  modules_manifest_file_count=$(wc -l < "$tmp/MODULES.sha256")
+  modules_manifest_sha=$(sha "$tmp/MODULES.sha256")
+  module_count=$(find "$modules_tree/usr/lib/modules" -type f -name '*.ko*' | wc -l)
+  rm -rf -- "$modules_tree"
+
+  printf 'fixture-sdk-archive\n' > "$tmp/kernel-sdk-fixture.tar.gz"
+  sdk_archive_sha=$(sha "$tmp/kernel-sdk-fixture.tar.gz")
+  {
+    printf 'schema\ttb321fu.kernel-sdk-manifest/v1\n'
+    printf 'file\t%s\t644\t./.config\n' "$config_sha"
+    printf 'file\t%s\t644\t./Module.symvers\n' "$(printf 'a%.0s' {1..64})"
+    printf 'file\t%s\t644\t./include/config/kernel.release\n' "$(printf 'b%.0s' {1..64})"
+    printf 'file\t%s\t644\t./include/generated/autoconf.h\n' "$(printf 'c%.0s' {1..64})"
+    printf 'file\t%s\t644\t./include/generated/utsrelease.h\n' "$(printf 'd%.0s' {1..64})"
+  } > "$tmp/KERNEL-SDK-MANIFEST.tsv"
+  sdk_manifest_sha=$(sha "$tmp/KERNEL-SDK-MANIFEST.tsv")
+
+  rustc_sha=$(printf 'a%.0s' {1..64})
+  rustc_version='fixture rustc 1.0'
+  compiler_sha=$(printf '3%.0s' {1..64})
+  compiler_version='fixture gcc 1.0'
+  make_sha=$(printf 'b%.0s' {1..64})
+  make_version='fixture make 1.0'
+  dpkg_deb_sha=$(printf 'c%.0s' {1..64})
+  dpkg_deb_version='fixture dpkg-deb 1.0'
+  {
+    printf 'schema\ttb321fu.kernel-toolchain/v1\n'
+    printf 'cross-compile\taarch64-linux-gnu-\n'
+    for tool in gcc as ld ar nm objcopy strip rustc make dpkg-deb; do
+      case "$tool" in
+        gcc) digest=$compiler_sha; version=$compiler_version ;;
+        rustc) digest=$rustc_sha; version=$rustc_version ;;
+        make) digest=$make_sha; version=$make_version ;;
+        dpkg-deb) digest=$dpkg_deb_sha; version=$dpkg_deb_version ;;
+        as) digest=$(printf '4%.0s' {1..64}); version='fixture as 1.0' ;;
+        ld) digest=$(printf '5%.0s' {1..64}); version='fixture ld 1.0' ;;
+        ar) digest=$(printf '6%.0s' {1..64}); version='fixture ar 1.0' ;;
+        nm) digest=$(printf '7%.0s' {1..64}); version='fixture nm 1.0' ;;
+        objcopy) digest=$(printf '8%.0s' {1..64}); version='fixture objcopy 1.0' ;;
+        strip) digest=$(printf '9%.0s' {1..64}); version='fixture strip 1.0' ;;
+      esac
+      printf '%s-sha256\t%s\n' "$tool" "$digest"
+      printf '%s-version\t%s\n' "$tool" "$version"
+    done
+  } > "$tmp/KERNEL-TOOLCHAIN.tsv"
+  toolchain_manifest_sha=$(sha "$tmp/KERNEL-TOOLCHAIN.tsv")
+  {
+    printf 'schema\ttb321fu.kbuild-flags/v1\n'
+    printf 'arch\tarm64\n'
+    printf 'cross-compile\taarch64-linux-gnu-\n'
+    printf 'kconfig-notimestamp\t1\n'
+    printf 'kcflags\tunset\n'
+    printf 'kaflags\tunset\n'
+    printf 'kcppflags\tunset\n'
+    printf 'krustflags\tunset\n'
+    printf 'kbuild-cflags\tunset\n'
+    printf 'kbuild-aflags\tunset\n'
+    printf 'kbuild-cppflags\tunset\n'
+    printf 'kbuild-rustflags\tunset\n'
+    printf 'cflags\tunset\n'
+    printf 'cxxflags\tunset\n'
+    printf 'cppflags\tunset\n'
+    printf 'asflags\tunset\n'
+    printf 'ldflags\tunset\n'
+    printf 'cflags-kernel\tunset\n'
+    printf 'cflags-module\tunset\n'
+    printf 'aflags-kernel\tunset\n'
+    printf 'aflags-module\tunset\n'
+    printf 'ldflags-vmlinux\tunset\n'
+    printf 'ldflags-module\tunset\n'
+    printf 'hostcflags\tunset\n'
+    printf 'hostcxxflags\tunset\n'
+    printf 'hostldflags\tunset\n'
+    printf 'usercflags\tunset\n'
+    printf 'userldflags\tunset\n'
+    printf 'makeflags\tunset\n'
+    printf 'makeoverrides\tunset\n'
+    printf 'source-date-epoch\t%s\n' "$epoch"
+    printf 'kbuild-build-timestamp\t2026-07-15 00:00:00 UTC\n'
+    printf 'kbuild-build-user\ttb321fu-ci\n'
+    printf 'kbuild-build-host\ttb321fu-builder\n'
+    printf 'kbuild-build-version\t1\n'
+  } > "$tmp/KBUILD-FLAGS.tsv"
+  kbuild_flags_manifest_sha=$(sha "$tmp/KBUILD-FLAGS.tsv")
+
+  for label in KERNEL-SDK-MANIFEST.tsv KERNEL-TOOLCHAIN.tsv KBUILD-FLAGS.tsv; do
+    cp "$tmp/$label" "$kernel_root/$label"
+    cp "$tmp/$label" "$device_root/$label"
+    chmod 0644 "$kernel_root/$label" "$device_root/$label"
+  done
+  cp "$tmp/MODULES.sha256" "$kernel_root/MODULES.sha256"
+  chmod 0644 "$kernel_root/MODULES.sha256"
 }
 
 write_sensor_fixture_payload() {
@@ -502,8 +642,9 @@ EOF
     printf '%s' "$haptic_ram_payload" > "$root/usr/lib/firmware/haptic_ram.bin"
     printf '%s' "$haptic_click_payload" > "$root/usr/lib/firmware/haptic_click.bin"
     cp "$haptics_helper_binary" "$root/usr/bin/tb321fu-haptic-test"
-    extract_fixture_heredoc EOF_POSTINST "$root/DEBIAN/postinst"
-    extract_fixture_heredoc EOF_POSTRM "$root/DEBIAN/postrm"
+    render_fixture_haptics_maintainer_template postinst.in "$root/DEBIAN/postinst"
+    render_fixture_haptics_maintainer_template prerm.in "$root/DEBIAN/prerm"
+    render_fixture_haptics_maintainer_template postrm.in "$root/DEBIAN/postrm"
     extract_fixture_heredoc EOF_BIND "$root/usr/libexec/tb321fu-haptics/bind-aw86937"
     extract_fixture_heredoc EOF_SERVICE "$root/usr/lib/systemd/system/tb321fu-haptics.service"
     extract_fixture_heredoc EOF_UDEV "$root/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
@@ -515,6 +656,7 @@ EOF
       "$root/etc/skel/.config/plasmakeyboardrc"
     chmod 0755 \
       "$root/DEBIAN/postinst" \
+      "$root/DEBIAN/prerm" \
       "$root/DEBIAN/postrm" \
       "$root/usr/bin/tb321fu-haptic-test" \
       "$root/usr/libexec/tb321fu-haptics/bind-aw86937"
@@ -654,6 +796,24 @@ tamper_haptics_postinst() {
   chmod 0755 "$1/DEBIAN/postinst"
 }
 
+mismatched_haptics_postinst_release() {
+  render_fixture_haptics_maintainer_template \
+    postinst.in "$1/DEBIAN/postinst" "${release}-mismatched"
+  chmod 0755 "$1/DEBIAN/postinst"
+}
+
+mismatched_haptics_prerm_release() {
+  render_fixture_haptics_maintainer_template \
+    prerm.in "$1/DEBIAN/prerm" "${release}-mismatched"
+  chmod 0755 "$1/DEBIAN/prerm"
+}
+
+mismatched_haptics_postrm_release() {
+  render_fixture_haptics_maintainer_template \
+    postrm.in "$1/DEBIAN/postrm" "${release}-mismatched"
+  chmod 0755 "$1/DEBIAN/postrm"
+}
+
 tamper_haptics_control() {
   sed -i 's/^Depends:.*/Depends: bash/' "$1/DEBIAN/control"
 }
@@ -701,7 +861,8 @@ write_haptics_lock() {
   local producer_commit=${2:-$haptics_commit}
   local producer_state=${3:-clean}
   {
-    printf 'schema\ttb321fu.haptics-source-lock/v1\n'
+    printf 'schema\ttb321fu.haptics-source-lock/v2\n'
+    printf 'haptics-output-mode\trelease-candidate\n'
     printf 'haptics-producer-commit\t%s\n' "$producer_commit"
     printf 'haptics-producer-state\t%s\n' "$producer_state"
     printf 'aw86937-driver-sha256\t%s\n' "$haptics_driver_sha"
@@ -715,7 +876,8 @@ write_haptics_lock() {
     printf 'kernel-release\t%s\n' "$release"
     printf 'kernel-source-commit\t%s\n' "$commit"
     printf 'kernel-config-sha256\t%s\n' "$config_sha"
-    printf 'kernel-build-archive-sha256\t%s\n' "$(printf 'd%.0s' {1..64})"
+    printf 'kernel-build-input\tkernel-sdk-archive\n'
+    printf 'kernel-build-archive-sha256\t%s\n' "$sdk_archive_sha"
     printf 'source-date-epoch\t%s\n' "$epoch"
   } > "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
 }
@@ -758,18 +920,56 @@ write_haptics_checksum_manifest() {
 }
 
 write_kernel_source_lock() {
-  modules_deb_sha=$(sha "$device_root/y700-daily-kernel-modules_20260715.1_arm64.deb")
+  write_kernel_metadata_evidence
+  write_bundle "$kernel_root/KERNEL-BUNDLE.tsv" "$epoch"
+  kernel_bundle_id=$written_bundle_id
+  write_bundle "$device_root/KERNEL-BUNDLE.tsv" "$epoch"
+  [ "$kernel_bundle_id" = "$written_bundle_id" ] ||
+    { printf 'fixture kernel bundle IDs diverged\n' >&2; exit 1; }
   {
-    printf 'schema\ttb321fu.kernel-bootstrap/v2\n'
+    printf 'schema\ttb321fu.kernel-bootstrap/v3\n'
     printf 'kernel_bundle_id\t%s\n' "$kernel_bundle_id"
     printf 'kernel_commit\t%s\n' "$commit"
     printf 'kernel_release\t%s\n' "$release"
+    printf 'source_date_epoch\t%s\n' "$epoch"
     printf 'config_sha256\t%s\n' "$config_sha"
     printf 'image_sha256\t%s\n' "$(sha "$kernel_root/Image")"
+    printf 'dtb_name\tsm8650-lenovo-tb321fu.dtb\n'
     printf 'dtb_sha256\t%s\n' "$(sha "$kernel_root/sm8650-lenovo-tb321fu.dtb")"
     printf 'modules_deb_sha256\t%s\n' "$modules_deb_sha"
+    printf 'modules_manifest_sha256\t%s\n' "$modules_manifest_sha"
+    printf 'modules_manifest_file_count\t%s\n' "$modules_manifest_file_count"
+    printf 'kernel_sdk_archive_sha256\t%s\n' "$sdk_archive_sha"
+    printf 'kernel_sdk_manifest_sha256\t%s\n' "$sdk_manifest_sha"
+    printf 'kernel_toolchain_manifest_sha256\t%s\n' "$toolchain_manifest_sha"
+    printf 'kbuild_flags_sha256\t%s\n' "$kbuild_flags_manifest_sha"
+    printf 'baseline_archive_sha256\t%s\n' "$(printf 'd%.0s' {1..64})"
+    printf 'baseline_rootfs_sha256\t%s\n' "$(sha "$device_root/y700-daily-rootfs-overlay_20260715.1_arm64.deb")"
+    printf 'baseline_compat_sha256\t%s\n' "$(sha "$device_root/y700-compat1-extra-rootfs-overlay.tar.gz")"
+    printf 'producer_repository\t%s\n' "$kernel_producer_repository"
+    printf 'producer_commit\t%s\n' "$commit"
+    printf 'producer_tree\t%s\n' "$kernel_producer_tree"
+    printf 'producer_tree_sha256\t%s\n' "$kernel_producer_tree_sha256"
+    printf 'producer_state\tclean\n'
+    printf 'packager_sha256\t%s\n' "$(printf 'e%.0s' {1..64})"
+    printf 'common_sh_sha256\t%s\n' "$(printf 'f%.0s' {1..64})"
+    printf 'compiler_sha256\t%s\n' "$compiler_sha"
+    printf 'compiler\t%s\n' "$compiler_version"
+    printf 'rustc_sha256\t%s\n' "$rustc_sha"
+    printf 'rustc\t%s\n' "$rustc_version"
+    printf 'kbuild_build_timestamp\t2026-07-15 00:00:00 UTC\n'
+    printf 'kbuild_build_user\ttb321fu-ci\n'
+    printf 'kbuild_build_host\ttb321fu-builder\n'
+    printf 'kbuild_build_version\t1\n'
+    printf 'make_sha256\t%s\n' "$make_sha"
+    printf 'make\t%s\n' "$make_version"
+    printf 'dpkg_deb_sha256\t%s\n' "$dpkg_deb_sha"
+    printf 'dpkg_deb\t%s\n' "$dpkg_deb_version"
+    printf 'module_count\t%s\n' "$module_count"
   } > "$kernel_root/SOURCE-LOCK.tsv"
   cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+  chmod 0644 "$kernel_root/KERNEL-BUNDLE.tsv" "$device_root/KERNEL-BUNDLE.tsv" \
+    "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
 }
 
 write_sensor_metadata() {
@@ -857,11 +1057,9 @@ chmod 0755 "$tmp/modinfo"
 printf 'fixture-kernel-config\n' > "$kernel_root/kernel.config"
 printf 'fixture-image\n' > "$kernel_root/Image"
 printf 'fixture-dtb\n' > "$kernel_root/sm8650-lenovo-tb321fu.dtb"
-config_sha=$(sha "$kernel_root/kernel.config")
-write_bundle "$kernel_root/KERNEL-BUNDLE.tsv" "$epoch"
-kernel_bundle_id=$written_bundle_id
-cp "$kernel_root/KERNEL-BUNDLE.tsv" "$device_root/KERNEL-BUNDLE.tsv"
-
+make_deb y700-daily-rootfs-overlay \
+  "$device_root/y700-daily-rootfs-overlay_20260715.1_arm64.deb"
+printf 'fixture compat overlay\n' > "$device_root/y700-compat1-extra-rootfs-overlay.tar.gz"
 make_deb y700-daily-kernel-modules \
   "$device_root/y700-daily-kernel-modules_20260715.1_arm64.deb" \
   "usr/lib/modules/$release/kernel/fixture.ko" "$release"
@@ -894,6 +1092,12 @@ grep -Fxq $'haptics-module-sha256\t'"$expected_haptics_module_sha" \
   "$success_dir/VERIFIED-INPUTS.tsv"
 grep -Fxq $'haptics-helper-binary-sha256\t'"$expected_haptics_helper_binary_sha" \
   "$success_dir/VERIFIED-INPUTS.tsv"
+grep -Fxq $'producer_repository\t'"$kernel_producer_repository" \
+  "$success_dir/KERNEL-SOURCE-LOCK.tsv"
+grep -Fxq $'producer_tree\t'"$kernel_producer_tree" \
+  "$success_dir/KERNEL-SOURCE-LOCK.tsv"
+grep -Fxq $'producer_tree_sha256\t'"$kernel_producer_tree_sha256" \
+  "$success_dir/KERNEL-SOURCE-LOCK.tsv"
 
 make_deb tb321fu-sensors \
   "$device_root/tb321fu-sensors_injected_arm64.deb"
@@ -1151,7 +1355,74 @@ write_kernel_source_lock
 printf '\0' >> "$kernel_root/SOURCE-LOCK.tsv"
 printf '\0' >> "$device_root/SOURCE-LOCK.tsv"
 pack_archives
-require_failure kernel-source-lock-nul 'TSV contains NUL'
+require_failure kernel-source-lock-nul 'kernel bundle metadata contains NUL'
+write_kernel_source_lock
+
+mapfile -t kernel_lock_lines < "$kernel_root/SOURCE-LOCK.tsv"
+{
+  printf '%s\n' "${kernel_lock_lines[0]}" "${kernel_lock_lines[2]}" "${kernel_lock_lines[1]}"
+  printf '%s\n' "${kernel_lock_lines[@]:3}"
+} > "$kernel_root/SOURCE-LOCK.tsv"
+cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+pack_archives
+require_failure kernel-source-lock-order 'unexpected TSV field order'
+write_kernel_source_lock
+
+printf 'unexpected_field\tvalue\n' >> "$kernel_root/SOURCE-LOCK.tsv"
+cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+pack_archives
+require_failure kernel-source-lock-extra 'unexpected TSV field count'
+write_kernel_source_lock
+
+mapfile -t kernel_lock_lines < "$kernel_root/SOURCE-LOCK.tsv"
+printf '%s\n' "${kernel_lock_lines[@]:0:${#kernel_lock_lines[@]}-1}" > "$kernel_root/SOURCE-LOCK.tsv"
+cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+pack_archives
+require_failure kernel-source-lock-missing 'unexpected TSV field count'
+write_kernel_source_lock
+
+sed -i 's/^producer_state\tclean$/producer_state\tdirty/' "$kernel_root/SOURCE-LOCK.tsv"
+cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+pack_archives
+require_failure kernel-source-lock-producer-state 'kernel source-lock producer state is not clean'
+write_kernel_source_lock
+
+sed -i 's|^producer_repository\t.*|producer_repository\tGUF296/untrusted-producer|' \
+  "$kernel_root/SOURCE-LOCK.tsv"
+cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+pack_archives
+require_failure kernel-source-lock-producer-repository 'invalid kernel source-lock producer repository'
+write_kernel_source_lock
+
+sed -i 's/^producer_tree\t.*/producer_tree\tAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/' \
+  "$kernel_root/SOURCE-LOCK.tsv"
+cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+pack_archives
+require_failure kernel-source-lock-producer-tree 'invalid kernel source-lock producer tree'
+write_kernel_source_lock
+
+sed -i 's/^producer_tree_sha256\t.*/producer_tree_sha256\tCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC/' \
+  "$kernel_root/SOURCE-LOCK.tsv"
+cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+pack_archives
+require_failure kernel-source-lock-producer-tree-sha256 'invalid kernel source-lock producer tree SHA-256'
+write_kernel_source_lock
+
+sed -i 's/^modules_manifest_file_count\t.*/modules_manifest_file_count\t0/' \
+  "$kernel_root/SOURCE-LOCK.tsv"
+cp "$kernel_root/SOURCE-LOCK.tsv" "$device_root/SOURCE-LOCK.tsv"
+pack_archives
+require_failure kernel-source-lock-manifest-count 'invalid kernel source-lock modules manifest file count'
+write_kernel_source_lock
+
+printf 'tampered manifest\n' >> "$kernel_root/MODULES.sha256"
+pack_archives
+require_failure kernel-modules-manifest-bytes 'kernel MODULES.sha256 SHA-256 mismatch'
+write_kernel_source_lock
+
+printf 'kcflags\t-hostile\n' >> "$kernel_root/KBUILD-FLAGS.tsv"
+pack_archives
+require_failure kernel-kbuild-flags-tamper 'kernel and device Kbuild flags differ'
 write_kernel_source_lock
 
 kernel_module_mutation="$tmp/kernel-module-vermagic-mutation"
@@ -1185,6 +1456,25 @@ pack_archives
 require_failure haptics-bundle-mismatch 'haptics kernel-bundle-id mismatch'
 write_haptics_lock "$kernel_bundle_id"
 
+sed -i 's/^haptics-output-mode\trelease-candidate$/haptics-output-mode\tlocal/' \
+  "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
+pack_archives
+require_failure haptics-local-output-mode 'haptics source lock is not a release candidate'
+write_haptics_lock "$kernel_bundle_id"
+
+sed -i 's/^kernel-build-input\tkernel-sdk-archive$/kernel-build-input\tlocal-directory/' \
+  "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
+pack_archives
+require_failure haptics-local-kernel-input \
+  'haptics kernel build input is not the verified SDK archive'
+write_haptics_lock "$kernel_bundle_id"
+
+sed -i "s/^kernel-build-archive-sha256.*/kernel-build-archive-sha256\\t$(printf '0%.0s' {1..64})/" \
+  "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
+pack_archives
+require_failure haptics-sdk-archive-mismatch 'haptics kernel build archive SHA-256 mismatch'
+write_haptics_lock "$kernel_bundle_id"
+
 write_haptics_lock "$kernel_bundle_id" 3333333333333333333333333333333333333333
 pack_archives
 require_failure haptics-producer-mismatch 'haptics producer commit mismatch'
@@ -1195,7 +1485,7 @@ write_haptics_lock "$kernel_bundle_id"
 
 printf '\0' >> "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
 pack_archives
-require_failure haptics-lock-nul 'TSV contains NUL'
+require_failure haptics-lock-nul 'haptics source lock contains NUL'
 write_haptics_lock "$kernel_bundle_id"
 
 haptics_lock="$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
@@ -1330,6 +1620,53 @@ write_haptics_producer_bundle
 pack_archives
 require_failure haptics-bundle-tip 'haptics producer Git bundle commit mismatch'
 git -C "$producer_root" branch -f tb321fu-haptics-producer "$haptics_commit"
+write_haptics_producer_bundle
+
+original_haptics_commit=$haptics_commit
+sed -i \
+  's|^HAPTICS_MAINTAINER_TEMPLATE_DIR=.*|HAPTICS_MAINTAINER_TEMPLATE_DIR=${HAPTICS_MAINTAINER_TEMPLATE_DIR:-/tmp/hostile-templates}|' \
+  "$producer_maintainer_helper"
+git -C "$producer_root" add scripts/ci/haptics-maintainer-scripts.sh
+hostile_helper_tree=$(git -C "$producer_root" write-tree)
+hostile_helper_commit=$(env \
+  GIT_AUTHOR_DATE="@$epoch +0000" \
+  GIT_COMMITTER_DATE="@$epoch +0000" \
+  git -C "$producer_root" commit-tree "$hostile_helper_tree" \
+    -p "$original_haptics_commit" -m hostile-template-override)
+git -C "$producer_root" reset --hard -q "$original_haptics_commit"
+git -C "$producer_root" branch -f tb321fu-haptics-producer "$hostile_helper_commit"
+haptics_commit=$hostile_helper_commit
+write_haptics_lock "$kernel_bundle_id"
+write_haptics_producer_bundle
+pack_archives
+require_failure haptics-helper-environment-override \
+  'haptics producer maintainer helper must not allow an environment template override'
+haptics_commit=$original_haptics_commit
+git -C "$producer_root" branch -f tb321fu-haptics-producer "$haptics_commit"
+write_haptics_lock "$kernel_bundle_id"
+write_haptics_producer_bundle
+
+sed -i \
+  's|^HAPTICS_MAINTAINER_TEMPLATE_DIR=.*|HAPTICS_MAINTAINER_TEMPLATE_DIR=/tmp/hostile-templates|' \
+  "$producer_maintainer_helper"
+git -C "$producer_root" add scripts/ci/haptics-maintainer-scripts.sh
+hostile_helper_tree=$(git -C "$producer_root" write-tree)
+hostile_helper_commit=$(env \
+  GIT_AUTHOR_DATE="@$epoch +0000" \
+  GIT_COMMITTER_DATE="@$epoch +0000" \
+  git -C "$producer_root" commit-tree "$hostile_helper_tree" \
+    -p "$original_haptics_commit" -m hostile-template-location)
+git -C "$producer_root" reset --hard -q "$original_haptics_commit"
+git -C "$producer_root" branch -f tb321fu-haptics-producer "$hostile_helper_commit"
+haptics_commit=$hostile_helper_commit
+write_haptics_lock "$kernel_bundle_id"
+write_haptics_producer_bundle
+pack_archives
+require_failure haptics-helper-untracked-template-location \
+  'haptics producer maintainer helper must derive templates from its committed location'
+haptics_commit=$original_haptics_commit
+git -C "$producer_root" branch -f tb321fu-haptics-producer "$haptics_commit"
+write_haptics_lock "$kernel_bundle_id"
 write_haptics_producer_bundle
 
 GIT_NO_REPLACE_OBJECTS=1 git -C "$producer_root" update-ref \
@@ -1491,7 +1828,25 @@ write_baseline_haptics_deb
 mutate_haptics_deb tamper_haptics_postinst
 pack_archives
 require_failure malicious-haptics-postinst \
-  'haptics DEB payload differs from committed template: EOF_POSTINST'
+  'haptics DEB postinst differs from the producer template'
+write_baseline_haptics_deb
+
+mutate_haptics_deb mismatched_haptics_postinst_release
+pack_archives
+require_failure haptics-postinst-dynamic-release-mismatch \
+  'haptics DEB postinst differs from the producer template'
+write_baseline_haptics_deb
+
+mutate_haptics_deb mismatched_haptics_prerm_release
+pack_archives
+require_failure haptics-prerm-dynamic-release-mismatch \
+  'haptics DEB prerm differs from the producer template'
+write_baseline_haptics_deb
+
+mutate_haptics_deb mismatched_haptics_postrm_release
+pack_archives
+require_failure haptics-postrm-dynamic-release-mismatch \
+  'haptics DEB postrm differs from the producer template'
 write_baseline_haptics_deb
 
 mutate_haptics_deb tamper_haptics_control

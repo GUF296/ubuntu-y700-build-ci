@@ -153,6 +153,7 @@ def expected_control_members() -> dict[str, tuple[str, int]]:
         "": ("dir", 0o755),
         "control": ("file", 0o644),
         "postinst": ("file", 0o755),
+        "prerm": ("file", 0o755),
         "postrm": ("file", 0o755),
     }
 

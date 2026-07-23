@@ -130,6 +130,76 @@ def run_verified_rootfs_fixtures(rootfs_run: str) -> None:
             fail("missing verified haptics input reached sudo/rootfs execution")
 
 
+def run_tagged_haptics_policy_fixtures(handoff_run: str) -> None:
+    guard_prefix, separator, _ = handoff_run.partition("verified_dir=")
+    if not separator:
+        fail("kernel bundle handoff has no verified directory assignment")
+
+    base_env = {
+        "PATH": "/usr/bin:/bin",
+        "RELEASE_TAG": "",
+        "PRERELEASE": "1",
+        "HAPTICS_DEB_ARCHIVE": "",
+        "HAPTICS_DEB_ARCHIVE_SHA256": "",
+        "HAPTICS_DEB_DIR": "",
+    }
+    archive = "https://example.invalid/haptics.tar.gz"
+    digest = "a" * 64
+    cases = (
+        (
+            "tagged archive",
+            {
+                "RELEASE_TAG": "test-20260723",
+                "HAPTICS_DEB_ARCHIVE": archive,
+                "HAPTICS_DEB_ARCHIVE_SHA256": digest,
+            },
+            True,
+        ),
+        (
+            "tagged directory",
+            {
+                "RELEASE_TAG": "test-20260723",
+                "HAPTICS_DEB_ARCHIVE": archive,
+                "HAPTICS_DEB_ARCHIVE_SHA256": digest,
+                "HAPTICS_DEB_DIR": "/verified/haptics-dir",
+            },
+            False,
+        ),
+        (
+            "tagged missing archive",
+            {"RELEASE_TAG": "test-20260723"},
+            False,
+        ),
+        (
+            "tagged missing archive digest",
+            {
+                "RELEASE_TAG": "test-20260723",
+                "HAPTICS_DEB_ARCHIVE": archive,
+            },
+            False,
+        ),
+        (
+            "artifact-only directory",
+            {"HAPTICS_DEB_DIR": "/verified/haptics-dir", "PRERELEASE": "0"},
+            True,
+        ),
+    )
+    for label, updates, should_pass in cases:
+        result = subprocess.run(
+            ["bash", "-c", guard_prefix],
+            env={**base_env, **updates},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if (result.returncode == 0) != should_pass:
+            fail(
+                f"{label} tagged-release haptics policy result was "
+                f"{result.returncode}: {result.stderr}"
+            )
+
+
 def validate_structure(workflow: pathlib.Path, data: dict) -> None:
     dispatch = require_mapping(
         require_mapping(data.get("on"), "on").get("workflow_dispatch"),
@@ -141,6 +211,14 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
             fail("dispatch input names must be strings")
         if FORBIDDEN_INPUT.search(name):
             fail(f"credential material must not be a dispatch input: {name}")
+    ubuntu_mirror = require_mapping(
+        inputs.get("ubuntu_mirror"), "workflow_dispatch.inputs.ubuntu_mirror"
+    )
+    expected_mirror = "https://ports.ubuntu.com/ubuntu-ports"
+    if ubuntu_mirror.get("default") != expected_mirror:
+        fail("ubuntu_mirror must default to the pinned HTTPS ports mirror")
+    if ubuntu_mirror.get("options") != [expected_mirror]:
+        fail("ubuntu_mirror may offer only the pinned HTTPS ports mirror")
 
     jobs = require_mapping(data.get("jobs"), "jobs")
     build = require_mapping(jobs.get("build"), "jobs.build")
@@ -210,19 +288,98 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         fail("verified package isolation runs after the rootfs builder")
     run_verified_rootfs_fixtures(rootfs_run)
 
+    handoff_run = step_scripts.get("Verify kernel bundle handoff")
+    if handoff_run is None:
+        fail("kernel bundle handoff step is missing")
+    tagged_haptics_guard = (
+        'if [ -n "$RELEASE_TAG" ] && { [ -n "${HAPTICS_DEB_DIR:-}" ] || '
+        '[ -z "${HAPTICS_DEB_ARCHIVE:-}" ] || '
+        '[ -z "${HAPTICS_DEB_ARCHIVE_SHA256:-}" ]; }; then'
+    )
+    haptics_policy_message = (
+        "Tagged releases require HAPTICS_DEB_ARCHIVE and "
+        "HAPTICS_DEB_ARCHIVE_SHA256; HAPTICS_DEB_DIR is artifact-only."
+    )
+    handoff_call = "bash scripts/ci/verify-kernel-bundle.sh"
+    release_provenance_call = "bash scripts/ci/validate-release-input-provenance.sh"
+    for token in (tagged_haptics_guard, haptics_policy_message):
+        if token not in handoff_run:
+            fail(f"tagged release haptics policy is missing: {token}")
+    if handoff_run.index(tagged_haptics_guard) > handoff_run.index(handoff_call):
+        fail("tagged release haptics policy runs after bundle verification")
+    if release_provenance_call not in handoff_run:
+        fail("tagged release input provenance gate is missing")
+    if handoff_run.index(release_provenance_call) > handoff_run.index(handoff_call):
+        fail("tagged release input provenance gate runs after bundle verification")
+    run_tagged_haptics_policy_fixtures(handoff_run)
+
     release_run = step_scripts.get("Upload release assets")
     if release_run is None:
         fail("release asset staging step is missing")
     package_inventory = (
-        'install -m 0644 "$OUTPUT_DIR_ROOTFS/'
+        'stage_release_file "$OUTPUT_DIR_ROOTFS/'
         '${OUTPUT_PREFIX}-rootfs.packages.tsv"'
     )
-    release_checksums = '(cd "$release_dir" && sha256sum * > SHA256SUMS.txt)'
-    for token in (package_inventory, '"$release_dir/ROOTFS-PACKAGES.tsv"'):
+    release_notes = 'notes="$release_dir/BUILD-PARAMETERS.md"'
+    release_staging_validator = 'bash scripts/ci/validate-release-staging.sh "$release_stage"'
+    release_checksums = 'bash scripts/ci/write-release-manifest.sh "$release_stage"'
+    apt_provenance = (
+        'stage_release_file "$OUTPUT_DIR_ROOTFS/'
+        '${OUTPUT_PREFIX}-rootfs.apt-provenance.tsv"'
+    )
+    apt_bootstrap = (
+        'stage_release_file "$OUTPUT_DIR_ROOTFS/'
+        '${OUTPUT_PREFIX}-rootfs.apt-bootstrap.tsv"'
+    )
+    apt_sources = (
+        'stage_release_file "$OUTPUT_DIR_ROOTFS/'
+        '${OUTPUT_PREFIX}-rootfs.apt-sources.txt"'
+    )
+    kernel_evidence = (
+        'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KERNEL-SOURCE-LOCK.tsv"',
+        '"$release_dir/KERNEL-SOURCE-LOCK.tsv"',
+        'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/SENSOR-SOURCE-LOCK.tsv"',
+        '"$release_dir/SENSOR-SOURCE-LOCK.tsv"',
+        'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/HAPTICS-SOURCE-LOCK.tsv"',
+        '"$release_dir/HAPTICS-SOURCE-LOCK.tsv"',
+        'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/MODULES.sha256"',
+        '"$release_dir/MODULES.sha256"',
+        'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KERNEL-SDK-MANIFEST.tsv"',
+        '"$release_dir/KERNEL-SDK-MANIFEST.tsv"',
+        'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KERNEL-TOOLCHAIN.tsv"',
+        '"$release_dir/KERNEL-TOOLCHAIN.tsv"',
+        'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KBUILD-FLAGS.tsv"',
+        '"$release_dir/KBUILD-FLAGS.tsv"',
+    )
+    for token in (
+        package_inventory,
+        '"$release_dir/ROOTFS-PACKAGES.tsv"',
+        apt_provenance,
+        '"$release_dir/APT-PROVENANCE.tsv"',
+        apt_bootstrap,
+        '"$release_dir/APT-BOOTSTRAP.tsv"',
+        apt_sources,
+        '"$release_dir/APT-SOURCES.txt"',
+        release_notes,
+        release_staging_validator,
+        release_checksums,
+        *kernel_evidence,
+    ):
         if token not in release_run:
-            fail(f"release staging is missing the rootfs package inventory: {token}")
-    if release_run.index(package_inventory) > release_run.index(release_checksums):
-        fail("rootfs package inventory is staged after release checksums")
+            fail(f"release staging is missing rooted provenance evidence: {token}")
+    for token in (package_inventory, apt_provenance, apt_bootstrap, apt_sources, *kernel_evidence):
+        if release_run.index(token) > release_run.index(release_checksums):
+            fail("rootfs provenance evidence is staged after release checksums")
+    if release_run.index(release_notes) > release_run.index(release_checksums):
+        fail("release notes are staged after release checksums")
+    if release_run.count(release_staging_validator) != 2:
+        fail("release staging must be validated before and after manifest generation")
+
+    combined_checksums_run = step_scripts.get("Write combined checksums")
+    if combined_checksums_run is None:
+        fail("combined checksum step is missing")
+    if "out/ci-release/APT-BOOTSTRAP.tsv" not in combined_checksums_run:
+        fail("combined checksum manifest omits APT bootstrap evidence")
 
     secret_paths: list[tuple[tuple[object, ...], str]] = []
     for path, value in scalar_nodes(data):
@@ -268,16 +425,78 @@ def validate_rootfs_contract(rootfs: pathlib.Path) -> None:
         '${db:Status-Abbrev}',
         '$1 == "ii "',
         '"$(basename "$package_inventory")"',
+        '"$(basename "$apt_provenance")"',
+        '"$(basename "$apt_sources")"',
+        '"$(basename "$apt_bootstrap")"',
+        'ci_validate_https_apt_uri "$MIRROR"',
+        'ci_validate_https_apt_sources_list "$APT_SOURCES_LIST"',
+        'install -m 0755 "$SCRIPT_DIR/apt-transaction-provenance.sh"',
+        'APT_PROVENANCE_PHASE=rootfs-provision',
+        'APT_PROVENANCE_PHASE=gpu-build',
+        '/root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build install -y -- "$package_deb"',
+        '/root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build autoremove -y --purge',
+        'bash "$SCRIPT_DIR/write-apt-provenance.sh"',
         'ci_e2fsck_repair "$rootfs_img" 0',
     )
     for token in required:
         if token not in text:
             fail(f"{rootfs}: missing locked absent-secret default: {token}")
+
+    password_sudo_guard = (
+        'ci_require_sudo_password_hash "$USER_SUDO_MODE" '
+        '"$DEFAULT_USER_PASSWORD_HASH"'
+    )
+    if password_sudo_guard not in text:
+        fail(f"{rootfs}: password sudo hash validation is missing")
+    if text.index(password_sudo_guard) > text.index('mkdir -p "$OUTPUT_DIR"'):
+        fail(f"{rootfs}: password sudo hash validation runs after image work")
+
+
+def run_builtin_config_fixtures(
+    workflow: pathlib.Path, apply_config: pathlib.Path
+) -> None:
+    workflow_text = workflow.read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="tb321fu-workflow-default-config.") as temp:
+        root = pathlib.Path(temp)
+        for domain in ("rootfs", "boot", "source"):
+            opening = f'cat > "$RUNNER_TEMP/{domain}.env" <<\'CONFIG_EOF\''
+            start = workflow_text.find(opening)
+            if start < 0:
+                fail(f"{workflow}: missing built-in {domain} config block")
+            start = workflow_text.find("\n", start)
+            if start < 0:
+                fail(f"{workflow}: malformed built-in {domain} config block")
+            start += 1
+            end = workflow_text.find("\n          CONFIG_EOF", start)
+            if end < 0:
+                fail(f"{workflow}: unterminated built-in {domain} config block")
+            config_text = "\n".join(
+                line.removeprefix("          ")
+                for line in workflow_text[start:end].splitlines()
+            )
+            config = root / f"{domain}.env"
+            github_env = root / f"{domain}.github.env"
+            config.write_text(f"{config_text}\n", encoding="utf-8")
+            result = subprocess.run(
+                ["bash", str(apply_config), str(config)],
+                env={"PATH": "/usr/bin:/bin", "GITHUB_ENV": str(github_env)},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if result.returncode:
+                fail(
+                    f"built-in {domain} config no longer matches its allowlist: "
+                    f"{result.stderr}"
+                )
+
+
 def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="tb321fu-workflow-fixture.") as temp:
         root = pathlib.Path(temp)
         marker = root / "executed"
-        config = root / "hostile.env"
+        config = root / "rootfs.env"
         github_env = root / "github.env"
         literal = f"$(touch {marker})"
         config.write_text(f"OUTPUT_PREFIX={literal}\n", encoding="utf-8")
@@ -296,7 +515,7 @@ def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
         if literal not in github_env.read_text(encoding="utf-8"):
             fail("hostile value was not preserved literally in GITHUB_ENV")
 
-        secret_config = root / "secret.env"
+        secret_config = root / "rootfs.env"
         secret_output = root / "secret-github.env"
         secret_config.write_text(
             "DEFAULT_USER_PASSWORD_HASH=$6$forbidden$hash\n", encoding="utf-8"
@@ -314,7 +533,7 @@ def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
         if secret_output.exists() and secret_output.stat().st_size:
             fail("rejected password hash was partially serialized")
 
-        proxy_config = root / "credentialed-proxy.env"
+        proxy_config = root / "rootfs.env"
         proxy_output = root / "credentialed-proxy-github.env"
         proxy_config.write_text(
             "APT_HTTP_PROXY=http://user:password@proxy.invalid:8080\n",
@@ -341,7 +560,7 @@ def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
             "HAPTICS_SOURCE_DIR",
             "KERNEL_SOURCE_DIR",
         ):
-            deprecated_config = root / f"deprecated-{key}.env"
+            deprecated_config = root / "rootfs.env"
             deprecated_output = root / f"deprecated-{key}-github.env"
             deprecated_config.write_text(f"{key}=unused\n", encoding="utf-8")
             result = subprocess.run(
@@ -356,6 +575,161 @@ def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
                 fail(f"workflow config accepted dead inline-producer key: {key}")
             if deprecated_output.exists() and deprecated_output.stat().st_size:
                 fail(f"rejected inline-producer key was partially serialized: {key}")
+
+        allowed_configs = (
+            (
+                "rootfs.env",
+                "DEFAULT_USER_NAME=GUF296\n"
+                "USER_SUDO_MODE=password\n"
+                "SDDM_AUTOLOGIN=1\n"
+                "DESKTOP_ENV=kubuntu-desktop\n"
+                "PACKAGE_LIST=\n",
+                (
+                    "DEFAULT_USER_NAME",
+                    "USER_SUDO_MODE",
+                    "SDDM_AUTOLOGIN",
+                    "DESKTOP_ENV",
+                    "PACKAGE_LIST",
+                ),
+            ),
+            (
+                "boot.env",
+                "BOOT_IMAGE_SIZE=256M\n",
+                ("BOOT_IMAGE_SIZE",),
+            ),
+            (
+                "source.env",
+                "KERNEL_ARTIFACT_ARCHIVE=https://example.invalid/kernel.tar.gz\n",
+                ("KERNEL_ARTIFACT_ARCHIVE",),
+            ),
+        )
+        for config_name, content, expected_keys in allowed_configs:
+            allowed_config = root / config_name
+            allowed_output = root / f"{config_name}.github.env"
+            allowed_config.write_text(content, encoding="utf-8")
+            result = subprocess.run(
+                ["bash", str(apply_config), str(allowed_config)],
+                env={"PATH": "/usr/bin:/bin", "GITHUB_ENV": str(allowed_output)},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if result.returncode:
+                fail(
+                    f"legal {config_name} values were rejected: {result.stderr}"
+                )
+            exported = allowed_output.read_text(encoding="utf-8")
+            for key in expected_keys:
+                if f"{key}<<" not in exported:
+                    fail(f"legal {config_name} value was not exported: {key}")
+
+        # The workflow concatenates built-in defaults, an advanced config
+        # block, and dedicated UI controls before this parser sees the file.
+        # Repeated keys are therefore intentional: the final declaration
+        # must win and each key must be emitted exactly once.
+        precedence_configs = (
+            (
+                "rootfs.env",
+                "MIRROR=https://mirror.example.invalid/ubuntu\n"
+                "ROOTFS_IMAGE_SIZE=99G\n"
+                "ROOTFS_LABEL=Other\n"
+                "HOSTNAME_NAME=custom\n"
+                "MIRROR=https://ports.ubuntu.com/ubuntu-ports\n"
+                "ROOTFS_IMAGE_SIZE=20G\n"
+                "ROOTFS_LABEL=Ubuntu\n"
+                "HOSTNAME_NAME=y700\n",
+                {
+                    "MIRROR": "https://ports.ubuntu.com/ubuntu-ports",
+                    "ROOTFS_IMAGE_SIZE": "20G",
+                    "ROOTFS_LABEL": "Ubuntu",
+                    "HOSTNAME_NAME": "y700",
+                },
+            ),
+            (
+                "boot.env",
+                "BOOT_IMAGE_SIZE=256M\n"
+                "BOOT_COMPRESS=7z\n"
+                "BOOT_IMAGE_SIZE=512M\n",
+                {"BOOT_IMAGE_SIZE": "512M"},
+            ),
+            (
+                "source.env",
+                "DTB_NAME=sm8650-lenovo-tb321fu.dtb\n"
+                "DTB_NAME=alternate.dtb\n",
+                {"DTB_NAME": "alternate.dtb"},
+            ),
+        )
+        for config_name, content, expected_values in precedence_configs:
+            precedence_config = root / config_name
+            precedence_output = root / f"precedence-{config_name}.github.env"
+            precedence_config.write_text(content, encoding="utf-8")
+            result = subprocess.run(
+                ["bash", str(apply_config), str(precedence_config)],
+                env={"PATH": "/usr/bin:/bin", "GITHUB_ENV": str(precedence_output)},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if result.returncode:
+                fail(
+                    f"documented {config_name} override precedence was rejected: "
+                    f"{result.stderr}"
+                )
+            exported = precedence_output.read_text(encoding="utf-8")
+            for key, expected_value in expected_values.items():
+                if exported.count(f"{key}<<") != 1:
+                    fail(
+                        f"{config_name} did not export exactly one final value "
+                        f"for repeated key: {key}"
+                    )
+                if f"\n{expected_value}\n" not in exported:
+                    fail(
+                        f"{config_name} did not preserve the final override "
+                        f"for {key}"
+                    )
+
+        rootfs_ui_controls = {
+            "DEFAULT_USER_NAME": "outside",
+            "USER_SUDO_MODE": "nopasswd",
+            "SDDM_AUTOLOGIN": "1",
+            "SDDM_AUTOLOGIN_SESSION": "plasma",
+            "DESKTOP_ENV": "plasma-desktop",
+            "PACKAGE_LIST": "unexpected-package",
+        }
+        for config_name, legal_line in (
+            ("boot.env", "BOOT_IMAGE_SIZE=256M"),
+            (
+                "source.env",
+                "KERNEL_ARTIFACT_ARCHIVE=https://example.invalid/kernel.tar.gz",
+            ),
+        ):
+            for key, value in rootfs_ui_controls.items():
+                cross_domain_config = root / config_name
+                cross_domain_output = root / f"{config_name}-{key}.github.env"
+                cross_domain_config.write_text(
+                    f"{legal_line}\n{key}={value}\n", encoding="utf-8"
+                )
+                result = subprocess.run(
+                    ["bash", str(apply_config), str(cross_domain_config)],
+                    env={
+                        "PATH": "/usr/bin:/bin",
+                        "GITHUB_ENV": str(cross_domain_output),
+                    },
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    fail(
+                        f"{config_name} accepted a rootfs UI/profile override: {key}"
+                    )
+                if cross_domain_output.exists() and cross_domain_output.stat().st_size:
+                    fail(
+                        f"rejected {config_name} override partially serialized: {key}"
+                    )
 
 
 def self_test() -> None:
@@ -385,6 +759,7 @@ def main() -> None:
     workflow, rootfs, apply_config = map(pathlib.Path, sys.argv[1:])
     validate_structure(workflow, load_workflow(workflow))
     validate_rootfs_contract(rootfs)
+    run_builtin_config_fixtures(workflow, apply_config)
     run_hostile_config_fixtures(apply_config)
     print("WORKFLOW_SEMANTICS=PASS")
 

@@ -30,7 +30,7 @@ Optional override example:
 ```text
 DISTRO=noble
 ARCH=arm64
-MIRROR=http://ports.ubuntu.com/ubuntu-ports
+MIRROR=https://ports.ubuntu.com/ubuntu-ports
 ROOTFS_IMAGE_SIZE=14G
 ROOTFS_UUID=
 ROOTFS_LABEL=Ubuntu
@@ -119,7 +119,7 @@ The rootfs builder does not hardcode one historical verified Y700 state. Use `OV
 
 ## Release Assets
 
-When `release_tag` is set, the release uploads the user-facing boot/rootfs artifacts plus the small audit metadata that binds their kernel inputs:
+When `release_tag` is set, the build job stages the user-facing boot/rootfs artifacts plus the small audit metadata that binds their kernel inputs. The write-scoped job creates and verifies a prerelease draft; it does not automatically make that draft public.
 
 - `boot.img.7z`
 - `grub.img.7z`
@@ -128,11 +128,14 @@ When `release_tag` is set, the release uploads the user-facing boot/rootfs artif
 - `KERNEL-BUNDLE.tsv`
 - `VERIFIED-BUNDLE.tsv`
 - `VERIFIED-INPUTS.tsv`
+- `KERNEL-SOURCE-LOCK.tsv`, `SENSOR-SOURCE-LOCK.tsv`, and `HAPTICS-SOURCE-LOCK.tsv`
+- `MODULES.sha256`, `KERNEL-SDK-MANIFEST.tsv`, `KERNEL-TOOLCHAIN.tsv`, and `KBUILD-FLAGS.tsv`
 - `ROOTFS-PACKAGES.tsv`, the sorted installed package/version/architecture inventory
+- `APT-PROVENANCE.tsv`, `APT-BOOTSTRAP.tsv`, and `APT-SOURCES.txt`, sanitized APT transaction, debootstrap bootstrap, and source evidence
 
 The release notes include the rootfs, boot and source config used for that build. Password and password-hash assignments are rejected during config parsing and are never serialized into the notes. Release uploads require single-file archives; leave `CHUNK_SIZE` and `BOOT_CHUNK_SIZE` empty when creating a release. The UEFI `boot.img.7z` asset is committed under `source/boot-image/` so release builds do not depend on a previous release to supply it.
 
-When `release_tag` is non-empty on the remediation branch, `prerelease=true` is mandatory. The tested 2026-06-29 release and its assets are never replaced.
+When `release_tag` is non-empty on the remediation branch, `prerelease=true` is mandatory. Every kernel/device/sensor/haptics input, optional external overlay/camera input, and the effective GRUB/template input must then be an HTTPS URL with a lowercase SHA-256 pin; local directories remain available only to untagged artifact builds. The tested 2026-06-29 release and its assets are never replaced.
 
 ## Chinese Input
 
@@ -166,9 +169,9 @@ The historical defaults remain visible for baseline provenance only. They do not
 
 ## Remediation Bootstrap Handoff
 
-The release is intentionally a two-stage handoff. First commit the final kernel changes, approve the post-`olddefconfig` configuration digest, and run `package-kernel-bootstrap.sh` from the clean commit-bound source/build. It emits a kernel archive and replacement device-DEB archive with byte-identical `KERNEL-BUNDLE.tsv` and `SOURCE-LOCK.tsv` files. It does not emit or duplicate a kernel SDK.
+The release is intentionally a two-stage handoff. First commit the final kernel changes, approve the post-`olddefconfig` configuration digest, and run `package-kernel-bootstrap.sh` from the clean commit-bound source/build. It emits a kernel archive, replacement device-DEB archive, and one deterministic compressed kernel SDK archive, with byte-identical `KERNEL-BUNDLE.tsv` and `SOURCE-LOCK.tsv` files. The SDK archive is a producer handoff for the haptics build; it does not duplicate an unpacked SDK tree and is not an end-user rootfs release asset.
 
-Build haptics from the same clean kernel source/build and pass that small `KERNEL-BUNDLE.tsv` to the haptics producer. Build sensors from the clean sensor producer, publish that exact producer commit, and record the authenticated producer run used to approve the sensor archive digest. Publish only these bounded bootstrap archives as prerelease inputs, then dispatch this workflow from the exact remediation branch with `prerelease=true`.
+Build haptics only from that matching SDK archive and exact `KERNEL-BUNDLE.tsv`, not from a mutable local kernel directory. Build sensors from the clean sensor producer, publish that exact producer commit, and record the authenticated producer run used to approve the sensor archive digest. Publish only these bounded bootstrap archives as prerelease inputs, then dispatch this workflow from the exact remediation branch with `prerelease=true`.
 
 Once the four-input verifier succeeds, the staged sensor archive and verified haptics archive or directory take exclusive precedence. The device archive may not carry reserved sensor or haptics package names, and the rootfs builder rejects duplicate package identities, colliding DEB basenames, or an archive plus a same-component DEB directory instead of allowing one input bucket to replace another.
 

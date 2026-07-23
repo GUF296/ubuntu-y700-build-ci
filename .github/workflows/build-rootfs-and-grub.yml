@@ -18,12 +18,12 @@ on:
         default: y700-kubuntu2604-arm64
         type: string
       ubuntu_mirror:
-        description: Ubuntu 软件源地址；arm64 设备应使用 ports.ubuntu.com/ubuntu-ports。
+        description: Ubuntu 软件源地址；arm64 设备应使用 HTTPS 的 ports.ubuntu.com/ubuntu-ports。
         required: true
-        default: http://ports.ubuntu.com/ubuntu-ports
+        default: https://ports.ubuntu.com/ubuntu-ports
         type: choice
         options:
-          - http://ports.ubuntu.com/ubuntu-ports
+          - https://ports.ubuntu.com/ubuntu-ports
       rootfs_image_size:
         description: rootfs ext4 镜像大小；可手填如 20G、24G、32768M，过小可能导致桌面环境安装失败。
         required: true
@@ -79,21 +79,28 @@ jobs:
             .github/workflows/build-rootfs-and-grub.yml \
             scripts/ci/build-rootfs-image.sh \
             scripts/ci/apply-workflow-config.sh
+          python3 scripts/ci/test-release-job-isolation.py --self-test
+          python3 scripts/ci/test-release-job-isolation.py \
+            .github/workflows/build-rootfs-and-grub.yml
           python3 scripts/ci/check-workflow-input-boundaries.py --self-test
           python3 scripts/ci/check-workflow-input-boundaries.py .github/workflows/build-rootfs-and-grub.yml
           python3 scripts/ci/check-action-pins.py --self-test
           python3 scripts/ci/check-action-pins.py .github/workflows/build-rootfs-and-grub.yml
           python3 scripts/ci/check-service-enable-policy.py --self-test
-          python3 scripts/ci/check-service-enable-policy.py scripts/ci/build-rootfs-image.sh scripts/ci/build-y700-sensor-debs.sh scripts/ci/build-tb321fu-haptics-deb.sh
+          python3 scripts/ci/check-service-enable-policy.py scripts/ci/build-rootfs-image.sh scripts/ci/build-y700-sensor-debs.sh
           python3 scripts/ci/test-safe-extract-archive.py
           bash scripts/ci/test-input-and-path-boundaries.sh
           bash scripts/ci/test-system-payload-policy.sh
-          bash scripts/ci/test-audio-haptics-lifecycle.sh
+          bash scripts/ci/test-audio-route-lifecycle.sh
           bash scripts/ci/test-qcom-sns-lifecycle.sh
           bash scripts/ci/test-gpu-deb-lifecycle.sh
           bash scripts/ci/test-openpgp-pin.sh
           bash scripts/ci/test-rootfs-overlay-boundary.sh
+          bash scripts/ci/test-apt-provenance.sh
+          bash scripts/ci/test-grub-template-policy.sh
           bash scripts/ci/test-release-publication.sh
+          bash scripts/ci/test-release-manifest.sh
+          bash scripts/ci/test-release-input-provenance.sh
 
       - name: Install dependencies
         run: |
@@ -241,7 +248,13 @@ jobs:
             echo 'Remediation releases must set prerelease=true.' >&2
             exit 1
           fi
+          if [ -n "$RELEASE_TAG" ] && { [ -n "${HAPTICS_DEB_DIR:-}" ] || [ -z "${HAPTICS_DEB_ARCHIVE:-}" ] || [ -z "${HAPTICS_DEB_ARCHIVE_SHA256:-}" ]; }; then
+            echo 'Tagged releases require HAPTICS_DEB_ARCHIVE and HAPTICS_DEB_ARCHIVE_SHA256; HAPTICS_DEB_DIR is artifact-only.' >&2
+            exit 1
+          fi
           verified_dir="$RUNNER_TEMP/tb321fu-verified-kernel-bundle"
+          RELEASE_TAG="$RELEASE_TAG" \
+            bash scripts/ci/validate-release-input-provenance.sh
           env \
             OUTPUT_DIR="$verified_dir" \
             KERNEL_ARTIFACT_ARCHIVE="$KERNEL_ARTIFACT_ARCHIVE" \
@@ -272,8 +285,18 @@ jobs:
               "${GRUB_BUILD_ARCHIVE_SHA256:-}"
             python3 scripts/ci/safe-extract-archive.py \
               "$RUNNER_TEMP/grub-build.tar" "$RUNNER_TEMP/grub-build"
-            found=$(find "$RUNNER_TEMP/grub-build" -type f -name grub-mkstandalone -perm -111 | head -n1)
-            test -n "$found"
+            mapfile -d '' -t grub_candidates < <(
+              find "$RUNNER_TEMP/grub-build" -xdev -type f -name grub-mkstandalone -perm -u+x -print0 | sort -z
+            )
+            [ "${#grub_candidates[@]}" -eq 1 ] || {
+              echo 'GRUB build archive must contain exactly one executable grub-mkstandalone.' >&2
+              exit 1
+            }
+            found=${grub_candidates[0]}
+            [ -x "$found" ] || {
+              echo "GRUB build candidate is not executable: $found" >&2
+              exit 1
+            }
             echo "Y700_GRUB_BUILD_DIR=$(dirname "$found")" >> "$GITHUB_ENV"
           elif [ -n "${QCOMRAMP_EFI_URL:-}" ]; then
             echo 'Y700_GRUB_BUILD_DIR=' >> "$GITHUB_ENV"
@@ -374,6 +397,8 @@ jobs:
             out/ci-release/VERIFIED-BUNDLE.tsv
           install -m 0644 "$VERIFIED_KERNEL_BUNDLE_DIR/VERIFIED-INPUTS.tsv" \
             out/ci-release/VERIFIED-INPUTS.tsv
+          install -m 0644 "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.apt-bootstrap.tsv" \
+            out/ci-release/APT-BOOTSTRAP.tsv
           checksum_dirs=("$OUTPUT_DIR_ROOTFS" "$OUTPUT_DIR_GRUB")
           if [ -d out/y700-sensor-debs ]; then
             checksum_dirs+=(out/y700-sensor-debs)
@@ -388,7 +413,8 @@ jobs:
             out/ci-release/SHA256SUMS.txt "${checksum_dirs[@]}" \
             out/ci-release/KERNEL-BUNDLE.tsv \
             out/ci-release/VERIFIED-BUNDLE.tsv \
-            out/ci-release/VERIFIED-INPUTS.tsv
+            out/ci-release/VERIFIED-INPUTS.tsv \
+            out/ci-release/APT-BOOTSTRAP.tsv
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -405,19 +431,31 @@ jobs:
 
       - name: Upload release assets
         if: ${{ inputs.release_tag != '' }}
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          PRERELEASE: ${{ inputs.prerelease && '1' || '0' }}
         run: |
           set -euo pipefail
-          release_dir=out/ci-release/assets
-          [ "$release_dir" = out/ci-release/assets ] || {
+          release_stage=out/ci-release/release-staging
+          release_dir="$release_stage/assets"
+          [ "$release_stage" = out/ci-release/release-staging ] || {
             echo "refusing unbounded release staging cleanup: $release_dir" >&2
             exit 1
           }
-          rm -rf "$release_dir"
+          rm -rf "$release_stage"
           mkdir -p "$release_dir"
+
+          stage_release_file() {
+            local source=$1
+            local destination=$2
+
+            [ ! -L "$source" ] || {
+              echo "release staging source must not be a symlink: $source" >&2
+              exit 1
+            }
+            [ -f "$source" ] || {
+              echo "release staging source is not a regular file: $source" >&2
+              exit 1
+            }
+            install -m 0644 -- "$source" "$destination"
+          }
 
           select_release_asset() {
             local source_dir=$1
@@ -442,22 +480,41 @@ jobs:
               *) echo "unsupported $release_name compression: $compress" >&2; exit 1 ;;
             esac
 
-            [ -f "$src" ] || { echo "missing release $release_name asset: $src" >&2; exit 1; }
             dest="$release_dir/${release_name}${suffix}"
-            cp -a "$src" "$dest"
+            stage_release_file "$src" "$dest"
           }
 
           select_release_asset "$OUTPUT_DIR_ROOTFS" "${OUTPUT_PREFIX}-rootfs.img" rootfs "${COMPRESS:-7z}" "${CHUNK_SIZE:-}"
           select_release_asset "$OUTPUT_DIR_GRUB" "${OUTPUT_PREFIX}-grub-fat.img" grub "${BOOT_COMPRESS:-7z}" "${BOOT_CHUNK_SIZE:-}"
-          install -m 0644 source/boot-image/boot.img.7z "$release_dir/boot.img.7z"
-          install -m 0644 "${VERIFIED_KERNEL_BUNDLE_DIR:?}/KERNEL-BUNDLE.tsv" \
+          stage_release_file source/boot-image/boot.img.7z "$release_dir/boot.img.7z"
+          stage_release_file "${VERIFIED_KERNEL_BUNDLE_DIR:?}/KERNEL-BUNDLE.tsv" \
             "$release_dir/KERNEL-BUNDLE.tsv"
-          install -m 0644 "$VERIFIED_KERNEL_BUNDLE_DIR/VERIFIED-BUNDLE.tsv" \
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/VERIFIED-BUNDLE.tsv" \
             "$release_dir/VERIFIED-BUNDLE.tsv"
-          install -m 0644 "$VERIFIED_KERNEL_BUNDLE_DIR/VERIFIED-INPUTS.tsv" \
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/VERIFIED-INPUTS.tsv" \
             "$release_dir/VERIFIED-INPUTS.tsv"
-          install -m 0644 "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.packages.tsv" \
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KERNEL-SOURCE-LOCK.tsv" \
+            "$release_dir/KERNEL-SOURCE-LOCK.tsv"
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/SENSOR-SOURCE-LOCK.tsv" \
+            "$release_dir/SENSOR-SOURCE-LOCK.tsv"
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/HAPTICS-SOURCE-LOCK.tsv" \
+            "$release_dir/HAPTICS-SOURCE-LOCK.tsv"
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/MODULES.sha256" \
+            "$release_dir/MODULES.sha256"
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KERNEL-SDK-MANIFEST.tsv" \
+            "$release_dir/KERNEL-SDK-MANIFEST.tsv"
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KERNEL-TOOLCHAIN.tsv" \
+            "$release_dir/KERNEL-TOOLCHAIN.tsv"
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KBUILD-FLAGS.tsv" \
+            "$release_dir/KBUILD-FLAGS.tsv"
+          stage_release_file "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.packages.tsv" \
             "$release_dir/ROOTFS-PACKAGES.tsv"
+          stage_release_file "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.apt-provenance.tsv" \
+            "$release_dir/APT-PROVENANCE.tsv"
+          stage_release_file "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.apt-bootstrap.tsv" \
+            "$release_dir/APT-BOOTSTRAP.tsv"
+          stage_release_file "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.apt-sources.txt" \
+            "$release_dir/APT-SOURCES.txt"
 
           split_large_release_assets() {
             local max_bytes=1992294400
@@ -474,10 +531,7 @@ jobs:
             done < <(find "$release_dir" -maxdepth 1 -type f -print0)
           }
 
-          split_large_release_assets
-          (cd "$release_dir" && sha256sum * > SHA256SUMS.txt)
-
-          notes=out/ci-release/BUILD-PARAMETERS.md
+          notes="$release_dir/BUILD-PARAMETERS.md"
           rootfs_notes=out/ci-release/rootfs-config-for-notes.txt
           boot_notes=out/ci-release/boot-config-for-notes.txt
           source_notes=out/ci-release/source-config-for-notes.txt
@@ -519,4 +573,62 @@ jobs:
             echo '```'
           } > "$notes"
 
-          bash scripts/ci/publish-release.sh "$RELEASE_TAG" "$release_dir" "$notes"
+          split_large_release_assets
+          bash scripts/ci/validate-release-staging.sh "$release_stage"
+          bash scripts/ci/write-release-manifest.sh "$release_stage"
+          bash scripts/ci/validate-release-staging.sh "$release_stage"
+
+      - name: Upload staged release payload
+        if: ${{ inputs.release_tag != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-staging-${{ github.run_id }}-${{ github.run_attempt }}
+          path: out/ci-release/release-staging
+          if-no-files-found: error
+
+  publish:
+    if: ${{ inputs.release_tag != '' }}
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download staged release payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-staging-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-staging
+
+      - name: Create verified prerelease draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PRERELEASE: ${{ inputs.prerelease && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || {
+            echo 'checked-out source does not match the workflow commit' >&2
+            exit 1
+          }
+          release_stage=$(pwd -P)/release-staging
+          [ ! -L "$release_stage" ] || {
+            echo 'downloaded release staging root must not be a symlink' >&2
+            exit 1
+          }
+          [ -d "$release_stage" ] || {
+            echo 'downloaded release staging root is missing' >&2
+            exit 1
+          }
+          [ "$(realpath -e -- "$release_stage")" = "$release_stage" ] || {
+            echo 'downloaded release staging root escaped the workspace' >&2
+            exit 1
+          }
+          bash scripts/ci/validate-release-staging.sh "$release_stage"
+          bash scripts/ci/publish-release.sh "$RELEASE_TAG" "$release_stage"

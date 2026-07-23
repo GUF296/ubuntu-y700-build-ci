@@ -6,6 +6,8 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=common.sh
 . "$SCRIPT_DIR/common.sh"
 
+readonly CANONICAL_KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY=GUF296/ubuntu-y700-build-ci
+
 usage() {
   cat <<'EOF'
 Usage: verify-kernel-bundle.sh
@@ -39,7 +41,7 @@ case "${1:-}" in
 esac
 [ "$#" -eq 0 ] || { usage >&2; exit 2; }
 
-for command in sha256sum find sort cmp dpkg dpkg-deb realpath install awk python3 head grep stat git sed tr; do
+for command in bash dash env sha256sum find sort cmp dpkg dpkg-deb realpath install awk python3 head grep stat git sed tr; do
   ci_require_cmd "$command"
 done
 
@@ -206,10 +208,77 @@ require_tsv_key() {
   [ -n "${values[$key]:-}" ] || ci_die "missing TSV key $key: $file"
 }
 
+require_bounded_metadata_file() {
+  local file=$1 label=$2 maximum=$3 size
+
+  [ -f "$file" ] && [ ! -L "$file" ] ||
+    ci_die "$label must be a regular file: $file"
+  size=$(stat -c '%s' "$file")
+  [[ $size =~ ^[0-9]+$ ]] && [ "$size" -le "$maximum" ] ||
+    ci_die "$label exceeds size limit: $file"
+  reject_nul_bytes "$file" "$label"
+}
+
+require_tsv_printable_scalar() {
+  local value=$1 label=$2
+
+  [ -n "$value" ] && [ "${#value}" -le 512 ] ||
+    ci_die "invalid $label"
+  [[ $value != *$'\t'* && $value != *$'\r'* && $value != *$'\n'* ]] ||
+    ci_die "invalid $label"
+  LC_ALL=C grep -Eq '^[ -~]+$' <<<"$value" || ci_die "invalid $label"
+}
+
 check_sha() {
   local file=$1 expected=$2 label=$3 actual
   actual=$(sha256sum "$file" | awk '{print $1}')
   [ "$actual" = "$expected" ] || ci_die "$label SHA-256 mismatch: expected $expected, got $actual"
+}
+
+verify_modules_manifest() {
+  local manifest=$1 data_root=$2 expected_sha=$3 expected_count=$4 expected actual_count
+
+  require_bounded_metadata_file "$manifest" 'kernel MODULES.sha256' 16777216
+  require_regular_mode "$manifest" 644 'kernel MODULES.sha256'
+  check_sha "$manifest" "$expected_sha" 'kernel MODULES.sha256'
+  [[ $expected_count =~ ^[1-9][0-9]{0,8}$ ]] ||
+    ci_die 'invalid modules manifest file count'
+  expected="$work/MODULES.expected.sha256"
+  (
+    cd "$data_root"
+    find ./usr/lib/modules -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum --
+  ) > "$expected"
+  actual_count=$(wc -l < "$expected")
+  [ "$actual_count" = "$expected_count" ] ||
+    ci_die "kernel MODULES.sha256 file count mismatch: expected $expected_count, got $actual_count"
+  cmp -s "$manifest" "$expected" ||
+    ci_die 'kernel MODULES.sha256 does not cover the exact modules DEB payload'
+}
+
+validate_root_file_set() {
+  local root=$1 label=$2 member
+  shift 2
+  local -A expected=()
+
+  for member in "$@"; do
+    [ -n "$member" ] && [ -z "${expected[$member]+x}" ] ||
+      ci_die "internal duplicate expected $label archive member"
+    expected[$member]=1
+  done
+  while IFS= read -r -d '' member; do
+    member=${member#"$root"/}
+    [ -n "${expected[$member]+x}" ] ||
+      ci_die "$label archive contains an unexpected root member: $member"
+    [ -f "$root/$member" ] && [ ! -L "$root/$member" ] ||
+      ci_die "$label archive member is not a regular file: $member"
+    [ "$(stat -c '%a' "$root/$member")" = 644 ] ||
+      ci_die "$label archive member is not mode 0644: $member"
+    expected[$member]=0
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -print0)
+  for member in "${!expected[@]}"; do
+    [ "${expected[$member]}" -eq 0 ] ||
+      ci_die "$label archive is missing a required root member: $member"
+  done
 }
 
 require_regular_mode() {
@@ -290,6 +359,56 @@ extract_haptics_heredoc() {
   python3 "$SCRIPT_DIR/extract-shell-heredoc.py" \
     "$builder" "$marker" "$destination" ||
     ci_die "cannot derive committed haptics payload template: $marker"
+}
+
+render_haptics_maintainer_template() {
+  local template=$1 destination=$2 kernel_release=$3 placeholders placeholder_count
+
+  [ -f "$template" ] && [ ! -L "$template" ] ||
+    ci_die "haptics maintainer template is not a regular file: $template"
+  [[ $kernel_release =~ ^[0-9A-Za-z][0-9A-Za-z._+~-]{0,127}$ ]] ||
+    ci_die "unsafe kernel release for haptics maintainer template"
+  reject_nul_bytes "$template" 'haptics maintainer template'
+  if LC_ALL=C grep -aq $'\r' "$template"; then
+    ci_die "haptics maintainer template contains CR: $template"
+  fi
+  placeholders=$(LC_ALL=C grep -aoE '@[A-Z0-9_]+@' "$template" | sort -u || true)
+  [ "$placeholders" = '@KERNEL_RELEASE@' ] ||
+    ci_die "haptics maintainer template has unsupported placeholders: $template"
+  placeholder_count=$(LC_ALL=C grep -aoF '@KERNEL_RELEASE@' "$template" | wc -l)
+  [ "$placeholder_count" -eq 1 ] ||
+    ci_die "haptics maintainer template must contain exactly one kernel-release placeholder: $template"
+  sed "s/@KERNEL_RELEASE@/$kernel_release/g" "$template" > "$destination"
+  grep -Fq '@KERNEL_RELEASE@' "$destination" &&
+    ci_die "haptics maintainer template render left a placeholder: $template"
+  dash -n "$destination" ||
+    ci_die "rendered haptics maintainer template is not POSIX shell: $template"
+  chmod 0755 "$destination"
+}
+
+validate_haptics_maintainer_helper_contract() {
+  local helper=$1 token
+
+  require_regular_mode "$helper" 644 'committed haptics maintainer-script helper'
+  reject_nul_bytes "$helper" 'haptics maintainer-script helper'
+  if LC_ALL=C grep -aq $'\r' "$helper"; then
+    ci_die "haptics maintainer-script helper contains CR: $helper"
+  fi
+  bash -n "$helper" ||
+    ci_die "haptics maintainer-script helper has invalid Bash syntax: $helper"
+  if grep -Fq 'HAPTICS_MAINTAINER_TEMPLATE_DIR=${' "$helper"; then
+    ci_die "haptics producer maintainer helper must not allow an environment template override"
+  fi
+  grep -Fq '$(dirname -- "${BASH_SOURCE[0]}")/haptics-control-templates' "$helper" ||
+    ci_die "haptics producer maintainer helper must derive templates from its committed location"
+  for token in \
+    haptics_validate_kernel_release \
+    haptics_render_maintainer_template \
+    haptics_write_maintainer_scripts \
+    HAPTICS_MAINTAINER_TEMPLATE_DIR; do
+    grep -Fq -- "$token" "$helper" ||
+      ci_die "haptics producer maintainer helper lacks required contract token: $token"
+  done
 }
 
 reject_nul_bytes() {
@@ -523,35 +642,161 @@ validate_sensor_archive() {
 validate_device_package_namespace
 find_unique_file kernel_bundle "$kernel_root" KERNEL-BUNDLE.tsv 'kernel KERNEL-BUNDLE.tsv'
 find_unique_file device_bundle "$device_root" KERNEL-BUNDLE.tsv 'device KERNEL-BUNDLE.tsv'
-validated_bundle="$work/KERNEL-BUNDLE.validated.tsv"
-python3 "$SCRIPT_DIR/verify-kernel-bundle.py" \
-  "$kernel_bundle" --identical "$device_bundle" --emit-tsv > "$validated_bundle" ||
-  ci_die "kernel and device bundle metadata verification failed"
-declare -A kernel_meta=()
-load_tsv "$validated_bundle" kernel_meta
-
 find_unique_file kernel_source_lock "$kernel_root" SOURCE-LOCK.tsv 'kernel SOURCE-LOCK.tsv'
 find_unique_file device_source_lock "$device_root" SOURCE-LOCK.tsv 'device SOURCE-LOCK.tsv'
-cmp -s "$kernel_source_lock" "$device_source_lock" || ci_die "kernel and device source locks differ"
-declare -A source_lock=()
-load_tsv "$kernel_source_lock" source_lock
-for key in schema kernel_bundle_id kernel_commit kernel_release config_sha256 image_sha256 dtb_sha256 modules_deb_sha256; do
-  require_tsv_key source_lock "$key" "$kernel_source_lock"
-done
-[ "${source_lock[schema]}" = tb321fu.kernel-bootstrap/v2 ] || ci_die "unsupported kernel source-lock schema"
-[ "${source_lock[kernel_bundle_id]}" = "${kernel_meta[kernel-bundle-id]}" ] || ci_die "source lock kernel bundle ID mismatch"
-[ "${source_lock[kernel_commit]}" = "${kernel_meta[kernel-source-commit]}" ] || ci_die "source lock kernel commit mismatch"
-[ "${source_lock[kernel_release]}" = "${kernel_meta[kernel-release]}" ] || ci_die "source lock kernel release mismatch"
-[ "${source_lock[config_sha256]}" = "${kernel_meta[kernel-config-sha256]}" ] || ci_die "source lock kernel config mismatch"
-
+find_unique_file kernel_modules_manifest "$kernel_root" MODULES.sha256 'kernel MODULES.sha256'
+find_unique_file kernel_sdk_manifest "$kernel_root" KERNEL-SDK-MANIFEST.tsv 'kernel SDK manifest'
+find_unique_file device_sdk_manifest "$device_root" KERNEL-SDK-MANIFEST.tsv 'device SDK manifest'
+find_unique_file kernel_toolchain_manifest "$kernel_root" KERNEL-TOOLCHAIN.tsv 'kernel toolchain manifest'
+find_unique_file device_toolchain_manifest "$device_root" KERNEL-TOOLCHAIN.tsv 'device toolchain manifest'
+find_unique_file kernel_kbuild_flags "$kernel_root" KBUILD-FLAGS.tsv 'kernel Kbuild flags'
+find_unique_file device_kbuild_flags "$device_root" KBUILD-FLAGS.tsv 'device Kbuild flags'
 find_unique_file kernel_image "$kernel_root" Image 'kernel Image'
 find_unique_file kernel_dtb "$kernel_root" "$DTB_NAME" "kernel $DTB_NAME"
 find_unique_file kernel_config "$kernel_root" kernel.config 'kernel config'
 find_unique_file modules_deb "$device_root" 'y700-daily-kernel-modules_*.deb' 'kernel modules DEB'
+find_unique_file baseline_rootfs_deb "$device_root" 'y700-daily-rootfs-overlay_*.deb' 'baseline rootfs DEB'
+find_unique_file baseline_compat_archive "$device_root" 'y700-compat1-extra-rootfs-overlay.tar.gz' 'baseline compat archive'
+validate_root_file_set "$kernel_root" kernel \
+  Image "$DTB_NAME" kernel.config KERNEL-BUNDLE.tsv SOURCE-LOCK.tsv MODULES.sha256 \
+  KERNEL-SDK-MANIFEST.tsv KERNEL-TOOLCHAIN.tsv KBUILD-FLAGS.tsv
+validate_root_file_set "$device_root" device \
+  "$(basename -- "$modules_deb")" "$(basename -- "$baseline_rootfs_deb")" \
+  "$(basename -- "$baseline_compat_archive")" KERNEL-BUNDLE.tsv SOURCE-LOCK.tsv \
+  KERNEL-SDK-MANIFEST.tsv KERNEL-TOOLCHAIN.tsv KBUILD-FLAGS.tsv
+for metadata_file in \
+  "$kernel_bundle" "$device_bundle" "$kernel_source_lock" "$device_source_lock" \
+  "$kernel_sdk_manifest" "$device_sdk_manifest" \
+  "$kernel_toolchain_manifest" "$device_toolchain_manifest" \
+  "$kernel_kbuild_flags" "$device_kbuild_flags" "$kernel_modules_manifest"; do
+  require_bounded_metadata_file "$metadata_file" 'kernel bundle metadata' 33554432
+  require_regular_mode "$metadata_file" 644 'kernel bundle metadata'
+done
+cmp -s "$kernel_source_lock" "$device_source_lock" || ci_die "kernel and device source locks differ"
+cmp -s "$kernel_sdk_manifest" "$device_sdk_manifest" || ci_die "kernel and device SDK manifests differ"
+cmp -s "$kernel_toolchain_manifest" "$device_toolchain_manifest" || ci_die "kernel and device toolchain manifests differ"
+cmp -s "$kernel_kbuild_flags" "$device_kbuild_flags" || ci_die "kernel and device Kbuild flags differ"
+validated_bundle="$work/KERNEL-BUNDLE.validated.tsv"
+python3 "$SCRIPT_DIR/verify-kernel-bundle.py" \
+  "$kernel_bundle" --identical "$device_bundle" \
+  --kbuild-flags "$kernel_kbuild_flags" \
+  --toolchain "$kernel_toolchain_manifest" \
+  --sdk-manifest "$kernel_sdk_manifest" --emit-tsv > "$validated_bundle" ||
+  ci_die "kernel and device bundle metadata verification failed"
+declare -A kernel_meta=()
+load_tsv "$validated_bundle" kernel_meta
+declare -A kbuild_flags_meta=()
+declare -A toolchain_meta=()
+load_tsv "$kernel_kbuild_flags" kbuild_flags_meta
+load_tsv "$kernel_toolchain_manifest" toolchain_meta
+[ "$DTB_NAME" = "${kernel_meta[kernel-dtb-name]}" ] ||
+  ci_die "kernel DTB input does not match bundle metadata"
+
+declare -a kernel_source_lock_fields=(
+  schema
+  kernel_bundle_id
+  kernel_commit
+  kernel_release
+  source_date_epoch
+  config_sha256
+  image_sha256
+  dtb_name
+  dtb_sha256
+  modules_deb_sha256
+  modules_manifest_sha256
+  modules_manifest_file_count
+  kernel_sdk_archive_sha256
+  kernel_sdk_manifest_sha256
+  kernel_toolchain_manifest_sha256
+  kbuild_flags_sha256
+  baseline_archive_sha256
+  baseline_rootfs_sha256
+  baseline_compat_sha256
+  producer_repository
+  producer_commit
+  producer_tree
+  producer_tree_sha256
+  producer_state
+  packager_sha256
+  common_sh_sha256
+  compiler_sha256
+  compiler
+  rustc_sha256
+  rustc
+  kbuild_build_timestamp
+  kbuild_build_user
+  kbuild_build_host
+  kbuild_build_version
+  make_sha256
+  make
+  dpkg_deb_sha256
+  dpkg_deb
+  module_count
+)
+require_bounded_metadata_file "$kernel_source_lock" 'kernel source lock' 65536
+require_exact_tsv_order "$kernel_source_lock" "${kernel_source_lock_fields[@]}"
+declare -A source_lock=()
+load_tsv "$kernel_source_lock" source_lock
+[ "${source_lock[schema]}" = tb321fu.kernel-bootstrap/v3 ] || ci_die "unsupported kernel source-lock schema"
+[ "${source_lock[kernel_bundle_id]}" = "${kernel_meta[kernel-bundle-id]}" ] || ci_die "source lock kernel bundle ID mismatch"
+[ "${source_lock[kernel_commit]}" = "${kernel_meta[kernel-source-commit]}" ] || ci_die "source lock kernel commit mismatch"
+[ "${source_lock[kernel_release]}" = "${kernel_meta[kernel-release]}" ] || ci_die "source lock kernel release mismatch"
+[ "${source_lock[config_sha256]}" = "${kernel_meta[kernel-config-sha256]}" ] || ci_die "source lock kernel config mismatch"
+[ "${source_lock[source_date_epoch]}" = "${kernel_meta[source-date-epoch]}" ] || ci_die "source lock source-date-epoch mismatch"
+[ "${source_lock[image_sha256]}" = "${kernel_meta[kernel-image-sha256]}" ] || ci_die "source lock kernel Image mismatch"
+[ "${source_lock[dtb_name]}" = "${kernel_meta[kernel-dtb-name]}" ] || ci_die "source lock kernel DTB name mismatch"
+[ "${source_lock[dtb_sha256]}" = "${kernel_meta[kernel-dtb-sha256]}" ] || ci_die "source lock kernel DTB mismatch"
+[ "${source_lock[modules_deb_sha256]}" = "${kernel_meta[kernel-modules-deb-sha256]}" ] || ci_die "source lock modules DEB mismatch"
+[ "${source_lock[modules_manifest_sha256]}" = "${kernel_meta[kernel-modules-manifest-sha256]}" ] || ci_die "source lock modules manifest mismatch"
+[ "${source_lock[kernel_sdk_archive_sha256]}" = "${kernel_meta[kernel-sdk-archive-sha256]}" ] || ci_die "source lock kernel SDK archive mismatch"
+[ "${source_lock[kernel_sdk_manifest_sha256]}" = "${kernel_meta[kernel-sdk-manifest-sha256]}" ] || ci_die "source lock kernel SDK manifest mismatch"
+[ "${source_lock[kernel_toolchain_manifest_sha256]}" = "${kernel_meta[kernel-toolchain-manifest-sha256]}" ] || ci_die "source lock kernel toolchain manifest mismatch"
+[ "${source_lock[kbuild_flags_sha256]}" = "${kernel_meta[kbuild-flags-sha256]}" ] || ci_die "source lock Kbuild flags mismatch"
+for key in \
+  baseline_archive_sha256 baseline_rootfs_sha256 baseline_compat_sha256 \
+  packager_sha256 common_sh_sha256 compiler_sha256 rustc_sha256 make_sha256 dpkg_deb_sha256; do
+  [[ ${source_lock[$key]} =~ ^[0-9a-f]{64}$ ]] || ci_die "invalid kernel source-lock SHA-256: $key"
+done
+[ "${source_lock[producer_repository]}" = "$CANONICAL_KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY" ] ||
+  ci_die 'invalid kernel source-lock producer repository'
+[[ ${source_lock[producer_commit]} =~ ^[0-9a-f]{40}$ ]] || ci_die 'invalid kernel source-lock producer commit'
+[[ ${source_lock[producer_tree]} =~ ^[0-9a-f]{40}$ ]] || ci_die 'invalid kernel source-lock producer tree'
+[[ ${source_lock[producer_tree_sha256]} =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die 'invalid kernel source-lock producer tree SHA-256'
+[ "${source_lock[producer_state]}" = clean ] || ci_die 'kernel source-lock producer state is not clean'
+[[ ${source_lock[modules_manifest_file_count]} =~ ^[1-9][0-9]{0,8}$ ]] ||
+  ci_die 'invalid kernel source-lock modules manifest file count'
+[[ ${source_lock[module_count]} =~ ^[1-9][0-9]{0,8}$ ]] ||
+  ci_die 'invalid kernel source-lock module count'
+for key in compiler rustc make dpkg_deb; do
+  require_tsv_printable_scalar "${source_lock[$key]}" "kernel source-lock $key"
+done
+[ "${source_lock[compiler_sha256]}" = "${toolchain_meta[gcc-sha256]}" ] || ci_die 'source lock compiler SHA-256 mismatch'
+[ "${source_lock[compiler]}" = "${toolchain_meta[gcc-version]}" ] || ci_die 'source lock compiler version mismatch'
+[ "${source_lock[rustc_sha256]}" = "${toolchain_meta[rustc-sha256]}" ] || ci_die 'source lock rustc SHA-256 mismatch'
+[ "${source_lock[rustc]}" = "${toolchain_meta[rustc-version]}" ] || ci_die 'source lock rustc version mismatch'
+[ "${source_lock[rustc_sha256]}" = "${kernel_meta[rustc-sha256]}" ] || ci_die 'source lock rustc differs from bundle'
+[ "${source_lock[rustc]}" = "${kernel_meta[rustc]}" ] || ci_die 'source lock rustc version differs from bundle'
+[ "${source_lock[make_sha256]}" = "${toolchain_meta[make-sha256]}" ] || ci_die 'source lock make SHA-256 mismatch'
+[ "${source_lock[make]}" = "${toolchain_meta[make-version]}" ] || ci_die 'source lock make version mismatch'
+[ "${source_lock[dpkg_deb_sha256]}" = "${toolchain_meta[dpkg-deb-sha256]}" ] || ci_die 'source lock dpkg-deb SHA-256 mismatch'
+[ "${source_lock[dpkg_deb]}" = "${toolchain_meta[dpkg-deb-version]}" ] || ci_die 'source lock dpkg-deb version mismatch'
+for key in source_date_epoch kbuild_build_timestamp kbuild_build_user kbuild_build_host kbuild_build_version; do
+  bundle_key=${key//_/-}
+  [ "${source_lock[$key]}" = "${kernel_meta[$bundle_key]}" ] ||
+    ci_die "source lock $key differs from bundle"
+done
+[ "${source_lock[source_date_epoch]}" = "${kbuild_flags_meta[source-date-epoch]}" ] || ci_die 'source lock source-date-epoch differs from Kbuild flags'
+[ "${source_lock[kbuild_build_timestamp]}" = "${kbuild_flags_meta[kbuild-build-timestamp]}" ] || ci_die 'source lock Kbuild timestamp differs from Kbuild flags'
+[ "${source_lock[kbuild_build_user]}" = "${kbuild_flags_meta[kbuild-build-user]}" ] || ci_die 'source lock Kbuild user differs from Kbuild flags'
+[ "${source_lock[kbuild_build_host]}" = "${kbuild_flags_meta[kbuild-build-host]}" ] || ci_die 'source lock Kbuild host differs from Kbuild flags'
+[ "${source_lock[kbuild_build_version]}" = "${kbuild_flags_meta[kbuild-build-version]}" ] || ci_die 'source lock Kbuild version differs from Kbuild flags'
 check_sha "$kernel_image" "${source_lock[image_sha256]}" 'kernel Image'
 check_sha "$kernel_dtb" "${source_lock[dtb_sha256]}" 'kernel DTB'
 check_sha "$kernel_config" "${source_lock[config_sha256]}" 'kernel config'
 check_sha "$modules_deb" "${source_lock[modules_deb_sha256]}" 'kernel modules DEB'
+check_sha "$baseline_rootfs_deb" "${source_lock[baseline_rootfs_sha256]}" 'baseline rootfs DEB'
+check_sha "$baseline_compat_archive" "${source_lock[baseline_compat_sha256]}" 'baseline compat archive'
 
 sensor_source_lock=
 sensor_package_version=
@@ -616,6 +861,12 @@ while IFS= read -r -d '' module; do
 done < <(find "${module_dirs[0]}" -type f -name '*.ko*' -print0)
 [ "$module_count" -gt 0 ] || ci_die "kernel modules DEB contains no modules"
 [ -n "$kernel_vermagic" ] || ci_die "kernel modules DEB has no canonical vermagic"
+verify_modules_manifest \
+  "$kernel_modules_manifest" "$device_data" \
+  "${source_lock[modules_manifest_sha256]}" \
+  "${source_lock[modules_manifest_file_count]}"
+[ "$module_count" = "${source_lock[module_count]}" ] ||
+  ci_die "kernel module count differs from the source lock: expected ${source_lock[module_count]}, got $module_count"
 
 find_unique_file haptics_deb "$haptics_root" 'tb321fu-haptics_*.deb' 'haptics DEB'
 find_unique_file haptics_lock "$haptics_root" HAPTICS-SOURCE-LOCK.tsv 'HAPTICS-SOURCE-LOCK.tsv'
@@ -634,8 +885,11 @@ find_unique_file haptics_producer_bundle "$haptics_root" \
 require_regular_mode "$haptics_lock" 644 'HAPTICS-SOURCE-LOCK.tsv'
 require_regular_mode "$haptics_checksum_manifest" 644 'haptics checksum manifest'
 require_regular_mode "$haptics_producer_bundle" 644 'haptics producer Git bundle'
+require_bounded_metadata_file "$haptics_lock" 'haptics source lock' 65536
+require_bounded_metadata_file "$haptics_checksum_manifest" 'haptics checksum manifest' 1048576
 declare -a haptics_lock_fields=(
   schema
+  haptics-output-mode
   haptics-producer-commit
   haptics-producer-state
   aw86937-driver-sha256
@@ -649,14 +903,17 @@ declare -a haptics_lock_fields=(
   kernel-release
   kernel-source-commit
   kernel-config-sha256
+  kernel-build-input
   kernel-build-archive-sha256
   source-date-epoch
 )
 require_exact_tsv_order "$haptics_lock" "${haptics_lock_fields[@]}"
 declare -A haptics_meta=()
 load_tsv "$haptics_lock" haptics_meta
-[ "${haptics_meta[schema]}" = tb321fu.haptics-source-lock/v1 ] ||
+[ "${haptics_meta[schema]}" = tb321fu.haptics-source-lock/v2 ] ||
   ci_die "unsupported haptics source-lock schema"
+[ "${haptics_meta[haptics-output-mode]}" = release-candidate ] ||
+  ci_die 'haptics source lock is not a release candidate'
 [ "${haptics_meta[haptics-producer-commit]}" = "$EXPECTED_HAPTICS_PRODUCER_COMMIT" ] ||
   ci_die "haptics producer commit mismatch"
 [ "${haptics_meta[haptics-producer-state]}" = clean ] ||
@@ -681,13 +938,12 @@ done
 [ "${haptics_meta[kernel-release]}" = "${kernel_meta[kernel-release]}" ] || ci_die "haptics kernel-release mismatch"
 [ "${haptics_meta[kernel-source-commit]}" = "${kernel_meta[kernel-source-commit]}" ] || ci_die "haptics kernel-source-commit mismatch"
 [ "${haptics_meta[kernel-config-sha256]}" = "${kernel_meta[kernel-config-sha256]}" ] || ci_die "haptics kernel-config-sha256 mismatch"
-case "${haptics_meta[kernel-build-archive-sha256]}" in
-  local-build-directory) ;;
-  *)
-    [[ ${haptics_meta[kernel-build-archive-sha256]} =~ ^[0-9a-f]{64}$ ]] ||
-      ci_die "invalid haptics kernel build archive SHA-256"
-    ;;
-esac
+[ "${haptics_meta[kernel-build-input]}" = kernel-sdk-archive ] ||
+  ci_die 'haptics kernel build input is not the verified SDK archive'
+[[ ${haptics_meta[kernel-build-archive-sha256]} =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die "invalid haptics kernel build archive SHA-256"
+[ "${haptics_meta[kernel-build-archive-sha256]}" = "${kernel_meta[kernel-sdk-archive-sha256]}" ] ||
+  ci_die 'haptics kernel build archive SHA-256 mismatch'
 [[ ${haptics_meta[source-date-epoch]} =~ ^[0-9]{1,10}$ ]] ||
   ci_die "invalid haptics source-date-epoch"
 [ "${haptics_meta[source-date-epoch]}" = "${kernel_meta[source-date-epoch]}" ] ||
@@ -819,6 +1075,10 @@ haptics_committed_ram="$haptics_committed/haptic_ram.bin"
 haptics_committed_click="$haptics_committed/haptic_click.bin"
 haptics_committed_helper="$haptics_committed/y700-haptic-test.c"
 haptics_committed_builder="$haptics_committed/build-tb321fu-haptics-deb.sh"
+haptics_committed_maintainer_helper="$haptics_committed/haptics-maintainer-scripts.sh"
+haptics_committed_postinst_template="$haptics_committed/postinst.in"
+haptics_committed_prerm_template="$haptics_committed/prerm.in"
+haptics_committed_postrm_template="$haptics_committed/postrm.in"
 extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
   haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c "$haptics_committed_driver"
 extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
@@ -829,6 +1089,16 @@ extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMM
   haptics/baseline-20260614-daily-clean/testing-tools/y700-haptic-test.c "$haptics_committed_helper"
 extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
   scripts/ci/build-tb321fu-haptics-deb.sh "$haptics_committed_builder" 100755
+extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
+  scripts/ci/haptics-maintainer-scripts.sh "$haptics_committed_maintainer_helper" 100644
+for haptics_template in postinst prerm postrm; do
+  extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
+    "scripts/ci/haptics-control-templates/$haptics_template.in" \
+    "$haptics_committed/$haptics_template.in" 100644
+done
+validate_haptics_maintainer_helper_contract "$haptics_committed_maintainer_helper"
+grep -Fq -- '. "$SCRIPT_DIR/haptics-maintainer-scripts.sh"' "$haptics_committed_builder" ||
+  ci_die "haptics producer builder does not source the committed maintainer helper"
 cmp -s "$haptics_committed_driver" "$haptics_snapshot_driver" ||
   ci_die "AW86937 source snapshot does not match the producer commit"
 cmp -s "$haptics_committed_ram" "$haptics_snapshot_ram" ||
@@ -876,15 +1146,21 @@ Description: AW86937 haptics support for Lenovo Legion Y700 TB321FU
 EOF_HAPTICS_CONTROL
 cmp -s "$haptics_expected_control" "$haptics_control/control" ||
   ci_die "haptics DEB control metadata differs from the producer contract"
+for haptics_template in postinst prerm postrm; do
+  render_haptics_maintainer_template \
+    "$haptics_committed/$haptics_template.in" \
+    "$work/haptics-template-$haptics_template" "${kernel_meta[kernel-release]}"
+  cmp -s "$work/haptics-template-$haptics_template" \
+    "$haptics_control/$haptics_template" ||
+    ci_die "haptics DEB $haptics_template differs from the producer template"
+done
 declare -A haptics_template_targets=(
-  [EOF_POSTINST]="$haptics_control/postinst"
-  [EOF_POSTRM]="$haptics_control/postrm"
   [EOF_BIND]="$haptics_data/usr/libexec/tb321fu-haptics/bind-aw86937"
   [EOF_SERVICE]="$haptics_data/usr/lib/systemd/system/tb321fu-haptics.service"
   [EOF_UDEV]="$haptics_data/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
   [EOF_CONF]="$haptics_data/etc/skel/.config/plasmakeyboardrc"
 )
-for haptics_template in EOF_POSTINST EOF_POSTRM EOF_BIND EOF_SERVICE EOF_UDEV EOF_CONF; do
+for haptics_template in EOF_BIND EOF_SERVICE EOF_UDEV EOF_CONF; do
   haptics_expected_template="$work/haptics-template-$haptics_template"
   extract_haptics_heredoc \
     "$haptics_committed_builder" "$haptics_template" "$haptics_expected_template"
@@ -939,6 +1215,10 @@ install -m 0644 "$kernel_bundle" "$stage/KERNEL-BUNDLE.tsv"
 install -m 0644 "$kernel_source_lock" "$stage/KERNEL-SOURCE-LOCK.tsv"
 install -m 0644 "$sensor_source_lock" "$stage/SENSOR-SOURCE-LOCK.tsv"
 install -m 0644 "$haptics_lock" "$stage/HAPTICS-SOURCE-LOCK.tsv"
+install -m 0644 "$kernel_modules_manifest" "$stage/MODULES.sha256"
+install -m 0644 "$kernel_sdk_manifest" "$stage/KERNEL-SDK-MANIFEST.tsv"
+install -m 0644 "$kernel_toolchain_manifest" "$stage/KERNEL-TOOLCHAIN.tsv"
+install -m 0644 "$kernel_kbuild_flags" "$stage/KBUILD-FLAGS.tsv"
 if [ -n "$HAPTICS_DEB_ARCHIVE" ]; then
   install -m 0644 "$haptics_archive" "$stage/haptics-debs.archive"
 else
@@ -954,11 +1234,22 @@ if [ -n "$HAPTICS_DEB_ARCHIVE" ]; then
   haptics_archive_sha=$(sha256sum "$stage/haptics-debs.archive" | awk '{print $1}')
 fi
 {
-  printf 'schema\ttb321fu.verified-kernel-bundle/v1\n'
+  printf 'schema\ttb321fu.verified-kernel-bundle/v2\n'
   printf 'kernel-bundle-id\t%s\n' "${kernel_meta[kernel-bundle-id]}"
   printf 'kernel-release\t%s\n' "${kernel_meta[kernel-release]}"
   printf 'kernel-source-commit\t%s\n' "${kernel_meta[kernel-source-commit]}"
   printf 'kernel-config-sha256\t%s\n' "${kernel_meta[kernel-config-sha256]}"
+  printf 'kernel-image-sha256\t%s\n' "${kernel_meta[kernel-image-sha256]}"
+  printf 'kernel-dtb-name\t%s\n' "${kernel_meta[kernel-dtb-name]}"
+  printf 'kernel-dtb-sha256\t%s\n' "${kernel_meta[kernel-dtb-sha256]}"
+  printf 'kernel-modules-deb-sha256\t%s\n' "${kernel_meta[kernel-modules-deb-sha256]}"
+  printf 'kernel-modules-manifest-sha256\t%s\n' "${kernel_meta[kernel-modules-manifest-sha256]}"
+  printf 'kernel-sdk-archive-sha256\t%s\n' "${kernel_meta[kernel-sdk-archive-sha256]}"
+  printf 'kernel-sdk-manifest-sha256\t%s\n' "${kernel_meta[kernel-sdk-manifest-sha256]}"
+  printf 'kernel-toolchain-manifest-sha256\t%s\n' "${kernel_meta[kernel-toolchain-manifest-sha256]}"
+  printf 'kbuild-flags-sha256\t%s\n' "${kernel_meta[kbuild-flags-sha256]}"
+  printf 'rustc-sha256\t%s\n' "${kernel_meta[rustc-sha256]}"
+  printf 'rustc\t%s\n' "${kernel_meta[rustc]}"
   printf 'kernel-archive-sha256\t%s\n' "$kernel_archive_sha"
   printf 'device-archive-sha256\t%s\n' "$device_archive_sha"
   printf 'sensor-archive-sha256\t%s\n' "$sensor_archive_sha"

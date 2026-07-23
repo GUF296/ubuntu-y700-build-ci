@@ -19,7 +19,7 @@ Environment inputs:
   OUTPUT_PREFIX              default: <DISTRO>-<ARCH>
   DISTRO                     default: noble
   ARCH                       default: arm64
-  MIRROR                     default: http://ports.ubuntu.com/ubuntu-ports
+  MIRROR                     default: https://ports.ubuntu.com/ubuntu-ports
   DEBOOTSTRAP_VARIANT        default: minbase; set empty for debootstrap default
   RESOLV_CONF_CONTENT        optional /etc/resolv.conf contents for chroot
   APT_HTTP_PROXY             optional apt proxy used only during provisioning
@@ -87,10 +87,11 @@ ci_require_cmd dpkg-deb
 ci_require_cmd e2fsck
 ci_require_cmd rsync
 ci_require_cmd sha256sum
+ci_require_cmd dpkg-query
 
 DISTRO=${DISTRO:-noble}
 ARCH=${ARCH:-arm64}
-MIRROR=${MIRROR:-http://ports.ubuntu.com/ubuntu-ports}
+MIRROR=${MIRROR:-https://ports.ubuntu.com/ubuntu-ports}
 DEBOOTSTRAP_VARIANT=${DEBOOTSTRAP_VARIANT-minbase}
 RESOLV_CONF_CONTENT=${RESOLV_CONF_CONTENT:-}
 APT_HTTP_PROXY=${APT_HTTP_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}
@@ -131,6 +132,11 @@ DEB_ARCHIVE_SHA256=${DEB_ARCHIVE_SHA256:-}
 SENSOR_DEB_ARCHIVE_SHA256=${SENSOR_DEB_ARCHIVE_SHA256:-}
 HAPTICS_DEB_ARCHIVE_SHA256=${HAPTICS_DEB_ARCHIVE_SHA256:-}
 OVERLAY_ARCHIVE_SHA256=${OVERLAY_ARCHIVE_SHA256:-}
+ci_require_sudo_password_hash "$USER_SUDO_MODE" "$DEFAULT_USER_PASSWORD_HASH"
+ci_validate_https_apt_uri "$MIRROR"
+if [ -n "${APT_SOURCES_LIST:-}" ]; then
+  ci_validate_https_apt_sources_list "$APT_SOURCES_LIST"
+fi
 [ -z "${SENSOR_DEB_ARCHIVE:-}" ] || [ -z "${SENSOR_DEB_DIR:-}" ] ||
   ci_die "set only one of SENSOR_DEB_ARCHIVE and SENSOR_DEB_DIR"
 [ -z "${HAPTICS_DEB_ARCHIVE:-}" ] || [ -z "${HAPTICS_DEB_DIR:-}" ] ||
@@ -220,6 +226,9 @@ rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
 build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
 manifest="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.manifest"
 package_inventory="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.packages.tsv"
+apt_provenance="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.apt-provenance.tsv"
+apt_sources="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.apt-sources.txt"
+apt_bootstrap="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.apt-bootstrap.tsv"
 mounted=0
 
 unmount_chroot_runtime() {
@@ -450,8 +459,8 @@ CONTROL
 apply_tb321fu_legacy_cleanup() {
   local root=$1
 
-  ci_log "removing legacy y700 sensor and haptics glue that conflicts with TB321FU packages"
-  ci_remove_tb321fu_legacy_sensor_haptics "$root"
+  ci_log "verifying migrated legacy y700 sensor and haptics glue is absent"
+  ci_assert_no_tb321fu_legacy_payload "$root"
   rm -f \
     "$root/etc/systemd/system/smartmontools.service" \
     "$root/etc/systemd/system/sddm.service.d/10-y700-audio-card-guard.conf"
@@ -496,10 +505,12 @@ apply_tb321fu_gpu_sensor() {
   local package_deb=/tmp/tb321fu-ksystemstats-gpu.deb
   local runtime_deps_file=/tmp/tb321fu-ksystemstats-gpu.runtime-depends
   local new_build_deps_file=/tmp/tb321fu-ksystemstats-gpu.new-build-deps
+  local apt_transaction_dir=/var/lib/tb321fu-build-provenance/apt-transactions
   local plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_tb321fu_gpu.so
   local stock_plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so
   local disabled_stock_plugin_rel=$stock_plugin_rel.disabled-tb321fu-adreno
   local package_hash package_version package_arch runtime_deps package_output
+  local apt_recorder_sha256 apt_common_sha256
 
   ci_log "building TB321FU KSystemStats Adreno GPU frequency plugin"
 
@@ -512,11 +523,40 @@ apply_tb321fu_gpu_sensor() {
   install -d -m 0755 "$root$rootfs_src"
   rsync -a --delete "$source_dir"/ "$root$rootfs_src"/
 
-  cat > "$root/root/ci-build-tb321fu-gpu-sensor.sh" <<'GPU_SENSOR_BUILD'
+cat > "$root/root/ci-build-tb321fu-gpu-sensor.sh" <<'GPU_SENSOR_BUILD'
 #!/usr/bin/env bash
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
+
+apt_secure()
+{
+  assert_apt_recorder_integrity
+  /root/ci-apt-transaction.sh "$APT_PROVENANCE_DIR" "$APT_PROVENANCE_PHASE" "$@"
+}
+
+assert_apt_recorder_integrity()
+{
+  local actual
+  [[ ${CI_APT_RECORDER_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
+    echo 'missing trusted APT recorder digest' >&2
+    exit 1
+  }
+  [[ ${CI_APT_COMMON_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
+    echo 'missing trusted APT validation helper digest' >&2
+    exit 1
+  }
+  actual=$(sha256sum /root/ci-apt-transaction.sh | awk '{print $1}')
+  [ "$actual" = "$CI_APT_RECORDER_SHA256" ] || {
+    echo 'trusted APT recorder integrity check failed' >&2
+    exit 1
+  }
+  actual=$(sha256sum /root/ci-apt-common.sh | awk '{print $1}')
+  [ "$actual" = "$CI_APT_COMMON_SHA256" ] || {
+    echo 'trusted APT validation helper integrity check failed' >&2
+    exit 1
+  }
+}
 
 ci_bool_chroot()
 {
@@ -555,8 +595,8 @@ for pkg in $build_deps; do
   fi
 done
 
-apt-get update
-apt-get install -y --no-install-recommends $build_deps
+apt_secure update
+apt_secure install -y --no-install-recommends $build_deps
 
 cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build "$build" -j"${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}"
@@ -605,6 +645,9 @@ GPU_SENSOR_BUILD
     cp /etc/resolv.conf "$root/etc/resolv.conf"
   fi
 
+  apt_recorder_sha256=$(sha256sum "$root/root/ci-apt-transaction.sh" | awk '{print $1}')
+  apt_common_sha256=$(sha256sum "$root/root/ci-apt-common.sh" | awk '{print $1}')
+
   chroot "$root" env -i \
     PATH=/usr/sbin:/usr/bin:/sbin:/bin \
     HOME=/root \
@@ -615,6 +658,12 @@ GPU_SENSOR_BUILD
     https_proxy="$APT_HTTPS_PROXY" \
     HTTP_PROXY="$APT_HTTP_PROXY" \
     HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+    CI_APT_COMMON_SH=/root/ci-apt-common.sh \
+    CI_APT_RECORDER_SHA256="$apt_recorder_sha256" \
+    CI_APT_COMMON_SHA256="$apt_common_sha256" \
+    APT_PROVENANCE_DIR="$apt_transaction_dir" \
+    APT_PROVENANCE_PHASE=gpu-build \
     TB321FU_GPU_SENSOR_BUILD_JOBS="${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}" \
     bash /root/ci-build-tb321fu-gpu-sensor.sh
 
@@ -641,7 +690,25 @@ GPU_SENSOR_BUILD
   chmod 0644 "$root$package_stage/DEBIAN/control" "$root$package_stage/DEBIAN/md5sums"
   dpkg-deb --root-owner-group --build "$root$package_stage" "$root$package_deb"
   package_output="$OUTPUT_DIR/${OUTPUT_PREFIX}-tb321fu-ksystemstats-gpu_${package_version}_${package_arch}.deb"
-  chroot "$root" dpkg --install "$package_deb"
+  # Install through the same attested apt wrapper as every other package
+  # transaction so the locally built GPU DEB and its SHA-256 enter the final
+  # provenance record.
+  chroot "$root" env -i \
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+    HOME=/root \
+    LANG=C.UTF-8 \
+    APT_HTTP_PROXY="$APT_HTTP_PROXY" \
+    APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    http_proxy="$APT_HTTP_PROXY" \
+    https_proxy="$APT_HTTPS_PROXY" \
+    HTTP_PROXY="$APT_HTTP_PROXY" \
+    HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+    CI_APT_COMMON_SH=/root/ci-apt-common.sh \
+    CI_APT_RECORDER_SHA256="$apt_recorder_sha256" \
+    CI_APT_COMMON_SHA256="$apt_common_sha256" \
+    APT_PROVENANCE_DIR="$apt_transaction_dir" \
+    /root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build install -y -- "$package_deb"
 
   chroot "$root" dpkg-query -W -f='${Status}\n' tb321fu-ksystemstats-gpu | \
     grep -Fx 'install ok installed' >/dev/null || ci_die "TB321FU GPU package is not installed"
@@ -664,12 +731,44 @@ GPU_SENSOR_BUILD
     for dependency in "${new_build_deps[@]}"; do
       [[ $dependency =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || ci_die "unsafe GPU build dependency: $dependency"
     done
-    chroot "$root" apt-mark auto "${new_build_deps[@]}"
-    chroot "$root" apt-get autoremove -y --purge
+    install -m 0755 "$SCRIPT_DIR/apt-transaction-provenance.sh" \
+      "$root/root/ci-apt-transaction.sh"
+    install -m 0644 "$SCRIPT_DIR/common.sh" "$root/root/ci-apt-common.sh"
+    apt_recorder_sha256=$(sha256sum "$root/root/ci-apt-transaction.sh" | awk '{print $1}')
+    apt_common_sha256=$(sha256sum "$root/root/ci-apt-common.sh" | awk '{print $1}')
+    chroot "$root" env -i \
+      PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+      HOME=/root \
+      LANG=C.UTF-8 \
+      APT_HTTP_PROXY="$APT_HTTP_PROXY" \
+      APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
+      http_proxy="$APT_HTTP_PROXY" \
+      https_proxy="$APT_HTTPS_PROXY" \
+      HTTP_PROXY="$APT_HTTP_PROXY" \
+      HTTPS_PROXY="$APT_HTTPS_PROXY" \
+      SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+      CI_APT_COMMON_SH=/root/ci-apt-common.sh \
+      CI_APT_RECORDER_SHA256="$apt_recorder_sha256" \
+      CI_APT_COMMON_SHA256="$apt_common_sha256" \
+      /root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build mark-auto "${new_build_deps[@]}"
+    chroot "$root" env -i \
+      PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+      HOME=/root \
+      LANG=C.UTF-8 \
+      APT_HTTP_PROXY="$APT_HTTP_PROXY" \
+      APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
+      http_proxy="$APT_HTTP_PROXY" \
+      https_proxy="$APT_HTTPS_PROXY" \
+      HTTP_PROXY="$APT_HTTP_PROXY" \
+      HTTPS_PROXY="$APT_HTTPS_PROXY" \
+      SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+      CI_APT_COMMON_SH=/root/ci-apt-common.sh \
+      CI_APT_RECORDER_SHA256="$apt_recorder_sha256" \
+      CI_APT_COMMON_SHA256="$apt_common_sha256" \
+      /root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build autoremove -y --purge
   fi
   chroot "$root" apt-get clean
-  rm -rf "$root/var/lib/apt/lists"/* \
-    "$root$rootfs_src" "$root$rootfs_build" "$root$package_stage"
+  rm -rf "$root$rootfs_src" "$root$rootfs_build" "$root$package_stage"
   rm -f "$root$package_deb" "$root$runtime_deps_file" "$root$new_build_deps_file" \
     "$root/etc/apt/apt.conf.d/99ci-proxy"
 
@@ -721,6 +820,22 @@ if [ -n "$DEBOOTSTRAP_VARIANT" ]; then
   debootstrap_args+=(--variant="$DEBOOTSTRAP_VARIANT")
 fi
 debootstrap "${debootstrap_args[@]}" "$DISTRO" "$rootfs_dir" "$MIRROR"
+
+# Record the seed rootfs before replacing its APT sources or installing the
+# transaction recorder. This captures bootstrap provenance without claiming a
+# rolling mirror is an immutable package snapshot.
+bootstrap_provenance="$work_dir/apt-bootstrap.tsv"
+debootstrap_binary=$(realpath -e -- "$(command -v debootstrap)")
+[ -f "$debootstrap_binary" ] && [ -x "$debootstrap_binary" ] ||
+  ci_die 'debootstrap binary is not a regular executable'
+debootstrap_version=$(dpkg-query -W -f='${Version}' debootstrap) ||
+  ci_die 'cannot determine the installed debootstrap package version'
+bootstrap_variant=${DEBOOTSTRAP_VARIANT:-default}
+SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+  bash "$SCRIPT_DIR/write-apt-provenance.sh" capture-bootstrap \
+    "$rootfs_dir" "$bootstrap_provenance" "$debootstrap_version" \
+    "$(sha256sum "$debootstrap_binary" | awk '{print $1}')" \
+    "$DISTRO" "$ARCH" "$bootstrap_variant" "$MIRROR"
 
 if [ -n "${APT_SOURCES_LIST:-}" ]; then
   printf '%s\n' "$APT_SOURCES_LIST" > "$rootfs_dir/etc/apt/sources.list"
@@ -774,6 +889,35 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+apt_secure()
+{
+  assert_apt_recorder_integrity
+  /root/ci-apt-transaction.sh "$APT_PROVENANCE_DIR" "$APT_PROVENANCE_PHASE" "$@"
+}
+
+assert_apt_recorder_integrity()
+{
+  local actual
+  [[ ${CI_APT_RECORDER_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
+    echo 'missing trusted APT recorder digest' >&2
+    exit 1
+  }
+  [[ ${CI_APT_COMMON_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
+    echo 'missing trusted APT validation helper digest' >&2
+    exit 1
+  }
+  actual=$(sha256sum /root/ci-apt-transaction.sh | awk '{print $1}')
+  [ "$actual" = "$CI_APT_RECORDER_SHA256" ] || {
+    echo 'trusted APT recorder integrity check failed' >&2
+    exit 1
+  }
+  actual=$(sha256sum /root/ci-apt-common.sh | awk '{print $1}')
+  [ "$actual" = "$CI_APT_COMMON_SHA256" ] || {
+    echo 'trusted APT validation helper integrity check failed' >&2
+    exit 1
+  }
+}
+
 ci_bool_chroot()
 {
   case "${1:-}" in
@@ -793,9 +937,9 @@ if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
   fi
 fi
 
-apt-get update
+apt_secure update
 mapfile -t requested_packages <<< "$PACKAGE_LIST"
-apt-get install -y -- "${requested_packages[@]}"
+apt_secure install -y -- "${requested_packages[@]}"
 
 if ci_bool_chroot "$INSTALL_FIREFOX"; then
   firefox_version=$(dpkg-query -W -f='${Version}' firefox 2>/dev/null || true)
@@ -883,14 +1027,6 @@ FCITX5_PROFILE
 fi
 
 install -d -m 0755 /etc/xdg /etc/skel/.config
-cat > /etc/skel/.config/plasmakeyboardrc <<'PLASMAKEYBOARDRC'
-[General]
-enabledLocales=en_US
-soundEnabled=true
-vibrationEnabled=true
-vibrationMs=20
-PLASMAKEYBOARDRC
-chmod 0644 /etc/skel/.config/plasmakeyboardrc
 
 cat > /etc/xdg/kwinrc <<'KWINRC'
 [Wayland]
@@ -973,7 +1109,7 @@ if [ -n "$DEFAULT_USER_AUTHORIZED_KEYS" ]; then
 fi
 if [ -d "/home/$DEFAULT_USER_NAME" ]; then
   install -d -m 0755 "/home/$DEFAULT_USER_NAME/.config"
-  for skel_config in kwinrc plasmakeyboardrc kwinoutputconfig.json; do
+  for skel_config in kwinrc kwinoutputconfig.json; do
     cp -a "/etc/skel/.config/$skel_config" "/home/$DEFAULT_USER_NAME/.config/$skel_config"
     chown "$DEFAULT_USER_NAME:$default_user_group" "/home/$DEFAULT_USER_NAME/.config/$skel_config"
   done
@@ -1052,7 +1188,7 @@ locale-gen || true
 update-locale LANG="$LANG_NAME" || true
 
 if compgen -G "/var/tmp/ci-debs/*.deb" >/dev/null; then
-  apt-get install -y --no-install-recommends /var/tmp/ci-debs/*.deb
+  apt_secure install -y --no-install-recommends /var/tmp/ci-debs/*.deb
 fi
 
 if compgen -G "/var/tmp/ci-debs/*.tar*" >/dev/null; then
@@ -1061,8 +1197,16 @@ if compgen -G "/var/tmp/ci-debs/*.tar*" >/dev/null; then
 fi
 
 if ci_bool_chroot "$DISABLE_SNAPD"; then
-  apt-get purge -y snapd plasma-discover-backend-snap || true
-  apt-get autoremove -y --purge || true
+  purge_candidates=()
+  for purge_candidate in snapd plasma-discover-backend-snap; do
+    if dpkg-query -W -f='${db:Status-Status}' "$purge_candidate" 2>/dev/null | grep -Fxq installed; then
+      purge_candidates+=("$purge_candidate")
+    fi
+  done
+  if [ "${#purge_candidates[@]}" -gt 0 ]; then
+    apt_secure purge -y "${purge_candidates[@]}"
+  fi
+  apt_secure autoremove -y --purge
   rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd
   if dpkg-query -W -f='${Status}' snapd 2>/dev/null | grep -q 'install ok installed'; then
     echo 'snapd is still installed despite DISABLE_SNAPD=1' >&2
@@ -1072,14 +1216,13 @@ fi
 
 if [ "$CLEAN_APT_CACHE" = 1 ]; then
   apt-get clean
-  rm -rf /var/lib/apt/lists/*
 fi
 rm -f /etc/apt/apt.conf.d/99ci-proxy
 
 rm -f /etc/machine-id
 touch /etc/machine-id
 rm -f /root/.bash_history "/home/${DEFAULT_USER_NAME}/.bash_history"
-rm -rf /tmp/* /var/tmp/ci-debs /root/ci-provision.sh
+rm -rf /tmp/* /root/ci-provision.sh
 PROVISION
 chmod +x "$rootfs_dir/root/ci-provision.sh"
 
@@ -1132,6 +1275,14 @@ if ci_bool "$INSTALL_FIREFOX"; then
   configure_mozilla_firefox_repo "$rootfs_dir"
 fi
 
+apt_transaction_dir=/var/lib/tb321fu-build-provenance/apt-transactions
+install -d -m 0700 "$rootfs_dir$apt_transaction_dir"
+install -m 0755 "$SCRIPT_DIR/apt-transaction-provenance.sh" \
+  "$rootfs_dir/root/ci-apt-transaction.sh"
+install -m 0644 "$SCRIPT_DIR/common.sh" "$rootfs_dir/root/ci-apt-common.sh"
+apt_recorder_sha256=$(sha256sum "$rootfs_dir/root/ci-apt-transaction.sh" | awk '{print $1}')
+apt_common_sha256=$(sha256sum "$rootfs_dir/root/ci-apt-common.sh" | awk '{print $1}')
+
 ci_log "provisioning rootfs"
 chroot "$rootfs_dir" env -i \
   PATH=/usr/sbin:/usr/bin:/sbin:/bin \
@@ -1156,8 +1307,19 @@ chroot "$rootfs_dir" env -i \
   https_proxy="$APT_HTTPS_PROXY" \
   HTTP_PROXY="$APT_HTTP_PROXY" \
   HTTPS_PROXY="$APT_HTTPS_PROXY" \
+  SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+  CI_APT_COMMON_SH=/root/ci-apt-common.sh \
+  CI_APT_RECORDER_SHA256="$apt_recorder_sha256" \
+  CI_APT_COMMON_SHA256="$apt_common_sha256" \
+  APT_PROVENANCE_DIR="$apt_transaction_dir" \
+  APT_PROVENANCE_PHASE=rootfs-provision \
   CLEAN_APT_CACHE="$CLEAN_APT_CACHE" \
   bash /root/ci-provision.sh
+
+device_payload_snapshot="$work_dir/local-device-payload-before-overlay.tsv"
+ci_snapshot_local_deb_payload \
+  "$rootfs_dir" "$rootfs_dir/var/tmp/ci-debs" \
+  "$work_dir/local-device-payload-before-overlay-stage" "$device_payload_snapshot"
 
 rm -f "$rootfs_dir/etc/resolv.conf"
 if [ -f "$original_resolv_link" ]; then
@@ -1192,6 +1354,10 @@ if [ -n "${OVERLAY_DIR:-}" ]; then
   ci_log "applying validated overlay directory: $OVERLAY_DIR"
   rsync -aH --numeric-ids "$OVERLAY_DIR"/ "$rootfs_dir"/
 fi
+if [ -f "$device_payload_snapshot" ]; then
+  ci_verify_local_deb_payload_snapshot "$rootfs_dir" "$device_payload_snapshot"
+fi
+rm -rf -- "$rootfs_dir/var/tmp/ci-debs"
 
 apply_sddm_autologin "$rootfs_dir"
 apply_tb321fu_legacy_cleanup "$rootfs_dir"
@@ -1203,7 +1369,27 @@ if ci_bool "$APPLY_Y700_AUDIO_POLICY_FIXES"; then
   apply_y700_audio_policy_fixes "$rootfs_dir"
 fi
 if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
+  # An optional overlay is not allowed to replace the trusted recorder used
+  # for the later GPU-build APT transactions.
+  install -m 0755 "$SCRIPT_DIR/apt-transaction-provenance.sh" \
+    "$rootfs_dir/root/ci-apt-transaction.sh"
+  install -m 0644 "$SCRIPT_DIR/common.sh" "$rootfs_dir/root/ci-apt-common.sh"
   apply_tb321fu_gpu_sensor "$rootfs_dir"
+fi
+
+# Run this after all optional overlay content has been applied. Existing user
+# settings are retained; only an absent file receives the package-owned
+# default from /etc/skel.
+ci_seed_default_user_keyboard_config "$rootfs_dir" "$DEFAULT_USER_NAME"
+
+ci_log "writing transaction-scoped APT provenance"
+bash "$SCRIPT_DIR/write-apt-provenance.sh" finalize \
+  "$rootfs_dir" "$bootstrap_provenance" "$apt_provenance" "$apt_sources"
+install -m 0644 "$bootstrap_provenance" "$apt_bootstrap"
+rm -rf "$rootfs_dir/var/lib/tb321fu-build-provenance"
+rm -f "$rootfs_dir/root/ci-apt-transaction.sh" "$rootfs_dir/root/ci-apt-common.sh"
+if [ "$CLEAN_APT_CACHE" = 1 ]; then
+  rm -rf "$rootfs_dir/var/lib/apt/lists"/*
 fi
 
 ci_assert_privileged_payload_security "$rootfs_dir" \
@@ -1239,6 +1425,9 @@ sensor_deb_dir=${SENSOR_DEB_DIR:-}
 haptics_deb_archive=${HAPTICS_DEB_ARCHIVE:-}
 haptics_deb_dir=${HAPTICS_DEB_DIR:-}
 camera_stack_deb_dir=${CAMERA_STACK_DEB_DIR:-}
+apt_provenance_sha256=$(sha256sum "$apt_provenance" | awk '{print $1}')
+apt_sources_sha256=$(sha256sum "$apt_sources" | awk '{print $1}')
+apt_bootstrap_sha256=$(sha256sum "$apt_bootstrap" | awk '{print $1}')
 build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
@@ -1279,6 +1468,9 @@ rm -f "$checksum_file"
   "$(basename "$build_info")" \
   "$(basename "$manifest")" \
   "$(basename "$package_inventory")" \
+  "$(basename "$apt_provenance")" \
+  "$(basename "$apt_sources")" \
+  "$(basename "$apt_bootstrap")" \
   "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
 
 case "$COMPRESS" in

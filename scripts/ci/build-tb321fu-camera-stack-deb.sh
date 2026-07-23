@@ -169,6 +169,9 @@ write_control() {
   local pkgdir=$1
 
   mkdir -p "$pkgdir/DEBIAN"
+  # The daily overlay keeps unrelated device payload. Its rewritten package
+  # explicitly provides the migration capability before this package can be
+  # unpacked, while distro-owned camera plugins are replaced as a unit.
   cat > "$pkgdir/DEBIAN/control" <<EOF_CONTROL
 Package: tb321fu-camera-stack
 Version: $CAMERA_STACK_DEB_VERSION
@@ -178,7 +181,9 @@ Architecture: $ARCH
 Maintainer: GUF296 <guf296@users.noreply.github.com>
 Depends: libc6, libstdc++6, libgcc-s1, pipewire, wireplumber, udev, libspa-0.2-modules, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, libglib2.0-0t64, libyaml-0-2, libudev1, libegl1, libgles2, libevent-2.1-7t64, libevent-pthreads-2.1-7t64, libunwind8
 Recommends: gnome-snapshot
+Pre-Depends: tb321fu-camera-payload-migrated (>= $TB321FU_CAMERA_PAYLOAD_MIGRATION_ABI)
 Replaces: y700-daily-rootfs-overlay, libspa-0.2-libcamera, gstreamer1.0-libcamera
+Conflicts: libspa-0.2-libcamera, gstreamer1.0-libcamera
 Provides: y700-camera-stack
 Description: Lenovo TB321FU verified camera userspace stack
  Source-built libcamera and the live-verified PipeWire libcamera integration used by the non-GitHub rootfs.
@@ -187,6 +192,8 @@ EOF_CONTROL
 
 write_maintainer_scripts() {
   local pkgdir=$1
+
+  ci_write_tb321fu_camera_preinst "$pkgdir"
 
   cat > "$pkgdir/DEBIAN/postinst" <<'EOF_POSTINST'
 #!/bin/sh
@@ -218,7 +225,7 @@ fi
 exit 0
 EOF_POSTRM
 
-  chmod 0755 "$pkgdir/DEBIAN/postinst" "$pkgdir/DEBIAN/postrm"
+  chmod 0755 "$pkgdir/DEBIAN/preinst" "$pkgdir/DEBIAN/postinst" "$pkgdir/DEBIAN/postrm"
 }
 
 build_camera_package() {
@@ -270,6 +277,7 @@ build_camera_package() {
     usr/local/bin/y700-camera-preview
   ci_normalize_package_tree "$pkg"
   dpkg-deb --build --root-owner-group "$pkg" "$deb" >/dev/null
+  ci_assert_tb321fu_camera_stack_deb "$deb" "$work_dir/camera-package-policy-check"
 
   {
     echo "TB321FU_CAMERA_STACK_DEB_BUILD=PASS"
