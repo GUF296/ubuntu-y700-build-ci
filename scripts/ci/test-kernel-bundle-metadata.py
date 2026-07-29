@@ -66,8 +66,8 @@ def make_flags(
             ("aflags-module", "unset"),
             ("ldflags-vmlinux", "unset"),
             ("ldflags-module", "unset"),
-            ("hostcflags", "unset"),
-            ("hostcxxflags", "unset"),
+            ("hostcflags", "file-prefix-map-source-and-build-v1"),
+            ("hostcxxflags", "file-prefix-map-source-and-build-v1"),
             ("hostldflags", "unset"),
             ("usercflags", "unset"),
             ("userldflags", "unset"),
@@ -445,6 +445,19 @@ def main() -> None:
         result = run(bundle, flags, toolchain, sdk_manifest)
         if result.returncode == 0 or b"invalid Kbuild flags kcflags" not in result.stderr:
             raise SystemExit("hostile inherited Kbuild flag was accepted")
+        flags.write_bytes(flags_bytes)
+
+        for host_field in ("hostcflags", "hostcxxflags"):
+            flags.write_bytes(
+                flags_bytes.replace(
+                    f"{host_field}\tfile-prefix-map-source-and-build-v1".encode(),
+                    f"{host_field}\tunset".encode(),
+                )
+            )
+            result = run(bundle, flags, toolchain, sdk_manifest)
+            expected = f"invalid Kbuild flags {host_field}".encode()
+            if result.returncode == 0 or expected not in result.stderr:
+                raise SystemExit(f"missing {host_field} policy was accepted")
         flags.write_bytes(flags_bytes)
 
         flags.write_bytes(

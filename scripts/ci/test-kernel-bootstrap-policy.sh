@@ -93,6 +93,7 @@ for token in \
   'absolute-locked-sh-v1' \
   'deterministic-input-key-v1' \
   'debug-prefix-map-source-and-build-v1' \
+  'file-prefix-map-source-and-build-v1' \
   'prepare_kernel_locked_path "$kernel_locked_path"' \
   'build_identity_key="$actual_commit-$expected_config_sha"' \
   'kernel_build_candidate="$output_parent_candidate/.tb321fu-kernel-build-$build_identity_key"' \
@@ -1110,6 +1111,30 @@ expected_kernel_env_sorted=$(LC_ALL=C sort <<<"$expected_kernel_env")
 
 kernel_make_function=$(sed -n '/^kernel_make() {$/,/^}$/p' "$packager")
 [ -n "$kernel_make_function" ] || fail "unable to extract kernel_make"
+prefix_map_function=$(sed -n '/^initialize_kernel_prefix_maps() {$/,/^}$/p' "$packager")
+[ -n "$prefix_map_function" ] || fail "unable to extract kernel prefix-map initialization"
+prefix_map_function_file="$fixture/prefix-map-function.sh"
+printf '%s\n' "$prefix_map_function" > "$prefix_map_function_file"
+actual_prefix_maps=$(
+  (
+    # shellcheck source=/dev/null
+    . "$prefix_map_function_file"
+    kernel_source="$fixture/prefix-map-source"
+    kernel_build="$fixture/prefix-map-build"
+    initialize_kernel_prefix_maps
+    printf 'KCFLAGS=%s\nKAFLAGS=%s\nHOSTCFLAGS=%s\nHOSTCXXFLAGS=%s\n' \
+      "$kernel_kcflags" "$kernel_kaflags" "$kernel_hostcflags" "$kernel_hostcxxflags"
+  )
+)
+expected_prefix_maps=$(cat <<EOF
+KCFLAGS=-fdebug-prefix-map=$fixture/prefix-map-source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$fixture/prefix-map-build=/usr/src/tb321fu-linux-build
+KAFLAGS=-fdebug-prefix-map=$fixture/prefix-map-source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$fixture/prefix-map-build=/usr/src/tb321fu-linux-build
+HOSTCFLAGS=-ffile-prefix-map=$fixture/prefix-map-source=/usr/src/tb321fu-linux-source -ffile-prefix-map=$fixture/prefix-map-build=/usr/src/tb321fu-linux-build
+HOSTCXXFLAGS=-ffile-prefix-map=$fixture/prefix-map-source=/usr/src/tb321fu-linux-source -ffile-prefix-map=$fixture/prefix-map-build=/usr/src/tb321fu-linux-build
+EOF
+)
+[ "$actual_prefix_maps" = "$expected_prefix_maps" ] ||
+  fail "production kernel prefix-map initialization differs from the exact policy"
 [ "$(grep -Fc 'SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"' <<<"$kernel_make_function")" -eq 2 ] ||
   fail "kernel_make must pass SOURCE_DATE_EPOCH in both the clean environment and make command line"
 [ "$(grep -Fc 'CONFIG_SHELL="$SH_BIN"' <<<"$kernel_make_function")" -eq 2 ] ||
@@ -1120,6 +1145,10 @@ kernel_make_function=$(sed -n '/^kernel_make() {$/,/^}$/p' "$packager")
   fail "kernel_make must fix debug-prefix KCFLAGS in both the clean environment and make command line"
 [ "$(grep -Fc 'KAFLAGS="$kernel_kaflags"' <<<"$kernel_make_function")" -eq 2 ] ||
   fail "kernel_make must fix debug-prefix KAFLAGS in both the clean environment and make command line"
+[ "$(grep -Fc 'HOSTCFLAGS="$kernel_hostcflags"' <<<"$kernel_make_function")" -eq 2 ] ||
+  fail "kernel_make must fix file-prefix HOSTCFLAGS in both the clean environment and make command line"
+[ "$(grep -Fc 'HOSTCXXFLAGS="$kernel_hostcxxflags"' <<<"$kernel_make_function")" -eq 2 ] ||
+  fail "kernel_make must fix file-prefix HOSTCXXFLAGS in both the clean environment and make command line"
 [ "$(grep -Fc 'M4="$M4_BIN"' <<<"$kernel_make_function")" -eq 2 ] ||
   fail "kernel_make must fix M4 in both the clean environment and make command line"
 [ "$(grep -Fc 'BISON_PKGDATADIR="$BISON_DATA_DIR"' <<<"$kernel_make_function")" -eq 2 ] ||
@@ -1208,6 +1237,8 @@ actual_kernel_make_env=$(
     SH_BIN=/fixture/sh
     kernel_kcflags="-fdebug-prefix-map=$fixture/kernel-make-source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$fixture/kernel-make-build=/usr/src/tb321fu-linux-build"
     kernel_kaflags=$kernel_kcflags
+    kernel_hostcflags="-ffile-prefix-map=$fixture/kernel-make-source=/usr/src/tb321fu-linux-source -ffile-prefix-map=$fixture/kernel-make-build=/usr/src/tb321fu-linux-build"
+    kernel_hostcxxflags=$kernel_hostcflags
     MAKE_BIN=/usr/bin/env
     export DTC=/tmp/hostile-dtc DTC_FLAGS=--hostile LOCALVERSION=-hostile
     export DEPMOD=/tmp/hostile-depmod
@@ -1251,6 +1282,8 @@ CONFIG_SHELL=/fixture/sh
 SHELL=/fixture/sh
 KCFLAGS=-fdebug-prefix-map=$fixture/kernel-make-source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$fixture/kernel-make-build=/usr/src/tb321fu-linux-build
 KAFLAGS=-fdebug-prefix-map=$fixture/kernel-make-source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$fixture/kernel-make-build=/usr/src/tb321fu-linux-build
+HOSTCFLAGS=-ffile-prefix-map=$fixture/kernel-make-source=/usr/src/tb321fu-linux-source -ffile-prefix-map=$fixture/kernel-make-build=/usr/src/tb321fu-linux-build
+HOSTCXXFLAGS=-ffile-prefix-map=$fixture/kernel-make-source=/usr/src/tb321fu-linux-source -ffile-prefix-map=$fixture/kernel-make-build=/usr/src/tb321fu-linux-build
 O=$fixture/kernel-make-build
 RUSTC=/bin/false
 CC=/fixture/canonical-cross-gcc
@@ -1304,6 +1337,63 @@ if grep -Eq '(cp[^\n]*[[:space:]]-[^[:space:]]*l|rsync[^\n]*--link-dest|ln[[:spa
   "$packager"; then
   fail "private kernel build setup reuses authoritative files through hardlinks"
 fi
+
+private_path_scan_function=$(sed -n \
+  '/^assert_no_private_paths_in_compiled_objects() {$/,/^}$/p' "$packager")
+[ -n "$private_path_scan_function" ] ||
+  fail "unable to extract compiled-object private-path scanner"
+private_path_scan_function_file="$fixture/private-path-scan-function.sh"
+printf '%s\n' "$private_path_scan_function" > "$private_path_scan_function_file"
+private_path_patterns="$fixture/private-paths.patterns"
+printf '%s\n' /fixture/private-build /fixture/private-source /fixture/private-work \
+  > "$private_path_patterns"
+
+private_path_clean="$fixture/private-path-clean"
+mkdir -p "$private_path_clean/scripts/kconfig"
+printf '%s\n' /usr/src/tb321fu-linux-build/scripts/kconfig/expr.c \
+  > "$private_path_clean/scripts/kconfig/expr.o"
+bash -c 'ci_die() { printf "%s\n" "$*" >&2; exit 1; }; . "$1"; \
+  assert_no_private_paths_in_compiled_objects "$2" "$3" "$4"' \
+  bash "$private_path_scan_function_file" "$private_path_clean" \
+  "$private_path_patterns" "$fixture/private-path-clean.report"
+[ ! -s "$fixture/private-path-clean.report" ] ||
+  fail "clean Kconfig host object was reported as a private-path leak"
+
+private_path_leak="$fixture/private-path-leak"
+mkdir -p "$private_path_leak/scripts/kconfig"
+printf '%s\n' /fixture/private-build/scripts/kconfig/expr.c \
+  > "$private_path_leak/scripts/kconfig/expr.o"
+set +e
+private_path_leak_output=$(bash -c \
+  'ci_die() { printf "%s\n" "$*" >&2; exit 1; }; . "$1"; \
+  assert_no_private_paths_in_compiled_objects "$2" "$3" "$4"' \
+  bash "$private_path_scan_function_file" "$private_path_leak" \
+  "$private_path_patterns" "$fixture/private-path-leak.report" 2>&1)
+private_path_leak_status=$?
+set -e
+[ "$private_path_leak_status" -ne 0 ] ||
+  fail "private path in scripts/kconfig/expr.o was accepted"
+grep -Fq 'compiled kernel object retains a private build/source path:' \
+  <<<"$private_path_leak_output" ||
+  fail "private-path leak failed at the wrong boundary"
+grep -Fq "$private_path_leak/scripts/kconfig/expr.o" \
+  "$fixture/private-path-leak.report" ||
+  fail "private-path report omitted the leaking Kconfig host object"
+
+set +e
+private_path_scan_error_output=$(bash -c \
+  'ci_die() { printf "%s\n" "$*" >&2; exit 1; }; . "$1"; \
+  assert_no_private_paths_in_compiled_objects "$2" "$3" "$4"' \
+  bash "$private_path_scan_function_file" "$private_path_clean" \
+  "$fixture/missing-private-paths.patterns" \
+  "$fixture/private-path-error.report" 2>&1)
+private_path_scan_error_status=$?
+set -e
+[ "$private_path_scan_error_status" -ne 0 ] ||
+  fail "compiled-object scanner error was accepted as a clean result"
+grep -Fq 'cannot scan compiled kernel objects for private path leakage' \
+  <<<"$private_path_scan_error_output" ||
+  fail "compiled-object scanner error failed at the wrong boundary"
 
 cleanup_parent="$fixture/cleanup-parent"
 cleanup_target="$cleanup_parent/.tb321fu-kernel-bootstrap-cleanup-fixture"

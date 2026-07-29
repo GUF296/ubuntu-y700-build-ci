@@ -64,6 +64,7 @@ readonly KBUILD_PATH_POLICY=private-locked-tool-directory-v1
 readonly KBUILD_CONFIG_SHELL_POLICY=absolute-locked-sh-v1
 readonly KBUILD_PATH_IDENTITY_POLICY=deterministic-input-key-v1
 readonly KBUILD_KCFLAGS_POLICY=debug-prefix-map-source-and-build-v1
+readonly KBUILD_HOSTFLAGS_POLICY=file-prefix-map-source-and-build-v1
 readonly -a PRODUCER_INPUT_ENV=(
   KERNEL_SOURCE_DIR
   KERNEL_GIT_DIR
@@ -472,6 +473,15 @@ env() { "${LOCKED_TOOL_COMMAND_PATH[env]}" "$@"; }
 kernel_locked_path=
 kernel_kcflags=
 kernel_kaflags=
+kernel_hostcflags=
+kernel_hostcxxflags=
+initialize_kernel_prefix_maps() {
+  kernel_kcflags="-fdebug-prefix-map=$kernel_source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$kernel_build=/usr/src/tb321fu-linux-build"
+  kernel_kaflags=$kernel_kcflags
+  kernel_hostcflags="-ffile-prefix-map=$kernel_source=/usr/src/tb321fu-linux-source -ffile-prefix-map=$kernel_build=/usr/src/tb321fu-linux-build"
+  kernel_hostcxxflags=$kernel_hostcflags
+}
+
 prepare_kernel_locked_path() {
   local destination=$1 label name link target
   local -A expected_names=()
@@ -722,6 +732,8 @@ kernel_make() {
     SHELL="$SH_BIN"
     KCFLAGS="$kernel_kcflags"
     KAFLAGS="$kernel_kaflags"
+    HOSTCFLAGS="$kernel_hostcflags"
+    HOSTCXXFLAGS="$kernel_hostcxxflags"
   )
   local -a locked_optional_make_arguments=()
   if [ "${LOCKED_TOOL_PATH[pahole]}" != unused ]; then
@@ -772,6 +784,8 @@ kernel_make() {
       SHELL="$SH_BIN" \
       KCFLAGS="$kernel_kcflags" \
       KAFLAGS="$kernel_kaflags" \
+      HOSTCFLAGS="$kernel_hostcflags" \
+      HOSTCXXFLAGS="$kernel_hostcxxflags" \
       "${locked_optional_make_arguments[@]}" \
       "$@"; then
     status=0
@@ -796,6 +810,21 @@ verify_kernel_build_input_state() {
 
   (cd "$kernel_build_input" && sha256sum --strict --check "$state_file" >/dev/null) ||
     ci_die "kernel build input changed while bootstrap packaging ran"
+}
+
+assert_no_private_paths_in_compiled_objects() {
+  local search_root=$1 patterns=$2 report=$3
+  local first_private_path_leak scan_status
+
+  if grep -aFrl -f "$patterns" --include='*.o' --include='*.ko' \
+      "$search_root" > "$report"; then
+    first_private_path_leak=$(sed -n '1p' "$report")
+    ci_die "compiled kernel object retains a private build/source path: $first_private_path_leak"
+  else
+    scan_status=$?
+    [ "$scan_status" -eq 1 ] ||
+      ci_die 'cannot scan compiled kernel objects for private path leakage'
+  fi
 }
 
 ci_require_tsv_scalar() {
@@ -878,8 +907,8 @@ write_kbuild_flags_manifest() {
     printf 'aflags-module\tunset\n'
     printf 'ldflags-vmlinux\tunset\n'
     printf 'ldflags-module\tunset\n'
-    printf 'hostcflags\tunset\n'
-    printf 'hostcxxflags\tunset\n'
+    printf 'hostcflags\t%s\n' "$KBUILD_HOSTFLAGS_POLICY"
+    printf 'hostcxxflags\t%s\n' "$KBUILD_HOSTFLAGS_POLICY"
     printf 'hostldflags\tunset\n'
     printf 'usercflags\tunset\n'
     printf 'userldflags\tunset\n'
@@ -1371,8 +1400,7 @@ approved_config="$work/approved-kernel.config"
 install -m 0644 "$kernel_build_input/.config" "$approved_config"
 mkdir -m 0700 -- "$kernel_build"
 prepare_kernel_locked_path "$kernel_locked_path"
-kernel_kcflags="-fdebug-prefix-map=$kernel_source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$kernel_build=/usr/src/tb321fu-linux-build"
-kernel_kaflags=$kernel_kcflags
+initialize_kernel_prefix_maps
 # Build from a fresh private O= directory. Reject ref-derived ABI drift before
 # acquiring or extracting the baseline archive.
 install -m 0644 "$approved_config" "$kernel_build/.config"
@@ -1451,15 +1479,8 @@ grep -Fxq "#define UTS_RELEASE \"$kernel_release\"" "$kernel_build/include/gener
 private_path_patterns="$work/private-build-paths.patterns"
 private_path_leaks="$work/private-build-path-leaks.list"
 printf '%s\n' "$kernel_build" "$kernel_source" "$work" > "$private_path_patterns"
-if grep -aFrl -f "$private_path_patterns" --include='*.o' --include='*.ko' \
-    "$kernel_build" > "$private_path_leaks"; then
-  first_private_path_leak=$(sed -n '1p' "$private_path_leaks")
-  ci_die "compiled kernel object retains a private build/source path: $first_private_path_leak"
-else
-  private_path_scan_status=$?
-  [ "$private_path_scan_status" -eq 1 ] ||
-    ci_die 'cannot scan compiled kernel objects for private path leakage'
-fi
+assert_no_private_paths_in_compiled_objects \
+  "$kernel_build" "$private_path_patterns" "$private_path_leaks"
 
 image="$kernel_build/arch/arm64/boot/Image"
 dtb="$kernel_build/arch/arm64/boot/dts/qcom/$DTB_NAME"
