@@ -4,11 +4,12 @@ PRODUCER_CANONICAL_PATH=/usr/sbin:/usr/bin:/sbin:/bin
 PRODUCER_ENV_POLICY=isolated-allowlist-v1
 
 # Use a fixed POSIX interpreter for the first instructions: noninteractive
-# Bash would process an inherited BASH_ENV before any script code. This small
-# preamble passes every documented input literally into a new empty environment
-# and only then starts the fixed Bash interpreter used by the producer body.
-if [ "${TB321FU_KERNEL_PRODUCER_ENV_POLICY-}" != "$PRODUCER_ENV_POLICY" ] ||
-   [ -z "${BASH_VERSION-}" ]; then
+# Bash would process an inherited BASH_ENV before any script code. Always
+# re-enter through an empty environment when the file is executed as a script,
+# including when a caller explicitly overrides the shebang with Bash. The
+# clean Bash process sources this file, which is distinguishable from executing
+# it because BASH_SOURCE no longer equals the fixed -c argv0.
+if [ -z "${BASH_VERSION-}" ] || [ "${BASH_SOURCE-}" = "$0" ]; then
   clean_script=$(/usr/bin/realpath -e -- "$0") || {
     printf 'error: cannot resolve kernel bootstrap producer path\n' >&2
     exit 1
@@ -19,7 +20,6 @@ if [ "${TB321FU_KERNEL_PRODUCER_ENV_POLICY-}" != "$PRODUCER_ENV_POLICY" ] ||
     LANG=C \
     LC_ALL=C \
     TZ=UTC \
-    TB321FU_KERNEL_PRODUCER_ENV_POLICY="$PRODUCER_ENV_POLICY" \
     KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR-}" \
     KERNEL_GIT_DIR="${KERNEL_GIT_DIR-}" \
     KERNEL_BUILD_DIR="${KERNEL_BUILD_DIR-}" \
@@ -48,7 +48,11 @@ if [ "${TB321FU_KERNEL_PRODUCER_ENV_POLICY-}" != "$PRODUCER_ENV_POLICY" ] ||
     https_proxy="${https_proxy-}" \
     http_proxy="${http_proxy-}" \
     no_proxy="${no_proxy-}" \
-    /usr/bin/bash --noprofile --norc "$clean_script" "$@"
+    /usr/bin/bash --noprofile --norc -c '
+      producer_script=$1
+      shift
+      . "$producer_script" "$@"
+    ' tb321fu-kernel-producer "$clean_script" "$@"
 fi
 
 set -euo pipefail
@@ -102,7 +106,7 @@ readonly -a PRODUCER_INPUT_ENV=(
 
 while IFS= read -r exported_name; do
   case "$exported_name" in
-    PATH|HOME|LANG|LC_ALL|TZ|PWD|OLDPWD|SHLVL|_|TB321FU_KERNEL_PRODUCER_ENV_POLICY) continue ;;
+    PATH|HOME|LANG|LC_ALL|TZ|PWD|OLDPWD|SHLVL|_) continue ;;
   esac
   exported_allowed=0
   for clean_name in "${PRODUCER_INPUT_ENV[@]}"; do
@@ -206,16 +210,18 @@ resolve_tool_path() {
 }
 
 capture_tool_identity() {
-  local label=$1 mode=${2:---version} path output line digest state
+  local label=$1 mode=${2:---version} path command_path output line digest state
 
   path=${LOCKED_TOOL_PATH[$label]:-}
   [ -n "$path" ] || ci_die "tool path was not locked: $label"
-  digest=$(${LOCKED_TOOL_PATH[sha256sum]} -- "$path")
+  command_path=${LOCKED_TOOL_COMMAND_PATH[$label]:-}
+  [ -n "$command_path" ] || ci_die "tool invocation path was not locked: $label"
+  digest=$(${LOCKED_TOOL_COMMAND_PATH[sha256sum]} -- "$path")
   read -r digest _ <<<"$digest"
   [[ $digest =~ ^[0-9a-f]{64}$ ]] || ci_die "cannot hash locked tool: $label"
   case "$mode" in
-    awk) output=$("$path" -W version 2>&1 || true) ;;
-    *) output=$("$path" "$mode" 2>&1 || true) ;;
+    awk) output=$("$command_path" -W version 2>&1 || true) ;;
+    *) output=$("$command_path" "$mode" 2>&1 || true) ;;
   esac
   line=
   while IFS= read -r state; do
@@ -228,19 +234,19 @@ capture_tool_identity() {
     [[ $line != *$'\t'* && $line != *$'\r'* && $line != *$'\n'* ]] &&
     [[ $line =~ ^[[:print:]]+$ ]] ||
     ci_die "invalid locked tool version: $label"
-  state=$(${LOCKED_TOOL_PATH[stat]} -Lc '%d:%i:%s:%Y' -- "$path") ||
+  state=$(${LOCKED_TOOL_COMMAND_PATH[stat]} -Lc '%d:%i:%s:%Y' -- "$path") ||
     ci_die "cannot stat locked tool: $label"
   LOCKED_TOOL_SHA256["$label"]=$digest
   LOCKED_TOOL_VERSION["$label"]=$line
   LOCKED_TOOL_STATE["$label"]=$state
-  LOCKED_TOOL_COMMAND_STATE["$label"]=$(${LOCKED_TOOL_PATH[stat]} -c '%d:%i:%s:%Y:%F' -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
+  LOCKED_TOOL_COMMAND_STATE["$label"]=$(${LOCKED_TOOL_COMMAND_PATH[stat]} -c '%d:%i:%s:%Y:%F' -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
     ci_die "cannot stat locked tool invocation path: $label"
 }
 
 canonical_data_tree_sha256() {
   local root=$1 output digest
 
-  output=$("${LOCKED_TOOL_PATH[tar]}" \
+  output=$("${LOCKED_TOOL_COMMAND_PATH[tar]}" \
     --sort=name \
     --format=gnu \
     --numeric-owner \
@@ -249,7 +255,7 @@ canonical_data_tree_sha256() {
     --mtime=@0 \
     -C "$root" \
     -cf - \
-    . | "${LOCKED_TOOL_PATH[sha256sum]}") ||
+    . | "${LOCKED_TOOL_COMMAND_PATH[sha256sum]}") ||
     ci_die "cannot hash canonical data tree: $root"
   read -r digest _ <<<"$output"
   [[ $digest =~ ^[0-9a-f]{64}$ ]] ||
@@ -260,41 +266,41 @@ canonical_data_tree_sha256() {
 capture_bison_data_identity() {
   local reported resolved bad_entry bad_mode entry_count total_size
 
-  reported=$("${LOCKED_TOOL_PATH[bison]}" --print-datadir) ||
+  reported=$("${LOCKED_TOOL_COMMAND_PATH[bison]}" --print-datadir) ||
     ci_die 'cannot query the Bison data directory'
   [ -n "$reported" ] && [ "${#reported}" -le 512 ] &&
     [[ $reported = /* && $reported != *$'\t'* && $reported != *$'\r'* &&
        $reported != *$'\n'* && $reported != *\\* ]] ||
     ci_die 'Bison reported an unsafe data directory'
-  resolved=$("${LOCKED_TOOL_PATH[realpath]}" -e -- "$reported") ||
+  resolved=$("${LOCKED_TOOL_COMMAND_PATH[realpath]}" -e -- "$reported") ||
     ci_die 'cannot resolve the Bison data directory'
   [ "$reported" = "$resolved" ] && [ -d "$resolved" ] && [ ! -L "$resolved" ] ||
     ci_die 'Bison data directory is not a canonical real directory'
 
-  bad_entry=$("${LOCKED_TOOL_PATH[find]}" "$resolved" -xdev -mindepth 1 \
+  bad_entry=$("${LOCKED_TOOL_COMMAND_PATH[find]}" "$resolved" -xdev -mindepth 1 \
     ! -type d ! -type f -print -quit) ||
     ci_die 'cannot inspect Bison data-tree entry types'
   [ -z "$bad_entry" ] ||
     ci_die "Bison data tree contains an unsupported entry: $bad_entry"
-  bad_mode=$("${LOCKED_TOOL_PATH[find]}" "$resolved" -xdev \
+  bad_mode=$("${LOCKED_TOOL_COMMAND_PATH[find]}" "$resolved" -xdev \
     \( -type d ! -perm 0755 -o -type f ! -perm 0644 \) -print -quit) ||
     ci_die 'cannot inspect Bison data-tree modes'
   [ -z "$bad_mode" ] ||
     ci_die "Bison data tree contains an unexpected mode: $bad_mode"
-  entry_count=$("${LOCKED_TOOL_PATH[find]}" "$resolved" -xdev -printf '.\n' |
-    "${LOCKED_TOOL_PATH[wc]}" -l) ||
+  entry_count=$("${LOCKED_TOOL_COMMAND_PATH[find]}" "$resolved" -xdev -printf '.\n' |
+    "${LOCKED_TOOL_COMMAND_PATH[wc]}" -l) ||
     ci_die 'cannot count Bison data-tree entries'
   [ "$entry_count" -ge 2 ] && [ "$entry_count" -le 4096 ] ||
     ci_die 'Bison data tree has an unsafe entry count'
-  total_size=$("${LOCKED_TOOL_PATH[find]}" "$resolved" -xdev -type f -printf '%s\n' |
-    "${LOCKED_TOOL_PATH[awk]}" '{ total += $1 } END { print total + 0 }') ||
+  total_size=$("${LOCKED_TOOL_COMMAND_PATH[find]}" "$resolved" -xdev -type f -printf '%s\n' |
+    "${LOCKED_TOOL_COMMAND_PATH[awk]}" '{ total += $1 } END { print total + 0 }') ||
     ci_die 'cannot measure the Bison data tree'
   [ "$total_size" -gt 0 ] && [ "$total_size" -le 16777216 ] ||
     ci_die 'Bison data tree has an unsafe logical size'
 
   BISON_DATA_DIR=$resolved
   BISON_DATA_SHA256=$(canonical_data_tree_sha256 "$resolved")
-  BISON_DATA_STATE=$("${LOCKED_TOOL_PATH[stat]}" -Lc '%d:%i:%s:%Y' -- "$resolved") ||
+  BISON_DATA_STATE=$("${LOCKED_TOOL_COMMAND_PATH[stat]}" -Lc '%d:%i:%s:%Y' -- "$resolved") ||
     ci_die 'cannot stat the Bison data directory'
 }
 
@@ -304,15 +310,15 @@ verify_bison_data_identity() {
   [ -n "$BISON_DATA_DIR" ] && [ -n "$BISON_DATA_SHA256" ] &&
     [ -n "$BISON_DATA_STATE" ] ||
     ci_die "Bison data identity was not captured $phase"
-  reported=$("${LOCKED_TOOL_PATH[bison]}" --print-datadir) ||
+  reported=$("${LOCKED_TOOL_COMMAND_PATH[bison]}" --print-datadir) ||
     ci_die "cannot query the Bison data directory $phase"
   [ "$reported" = "$BISON_DATA_DIR" ] ||
     ci_die "Bison data directory changed $phase"
-  resolved=$("${LOCKED_TOOL_PATH[realpath]}" -e -- "$reported") ||
+  resolved=$("${LOCKED_TOOL_COMMAND_PATH[realpath]}" -e -- "$reported") ||
     ci_die "Bison data directory disappeared $phase"
   [ "$resolved" = "$BISON_DATA_DIR" ] && [ -d "$resolved" ] && [ ! -L "$resolved" ] ||
     ci_die "Bison data directory identity changed $phase"
-  state=$("${LOCKED_TOOL_PATH[stat]}" -Lc '%d:%i:%s:%Y' -- "$resolved") ||
+  state=$("${LOCKED_TOOL_COMMAND_PATH[stat]}" -Lc '%d:%i:%s:%Y' -- "$resolved") ||
     ci_die "cannot stat the Bison data directory $phase"
   [ "$state" = "$BISON_DATA_STATE" ] ||
     ci_die "Bison data directory state changed $phase"
@@ -339,21 +345,21 @@ verify_locked_tools() {
   for label in "${!LOCKED_TOOL_SHA256[@]}"; do
     [ "${LOCKED_TOOL_SHA256[$label]}" != unused ] || continue
     path=${LOCKED_TOOL_PATH[$label]}
-    resolved=$(${LOCKED_TOOL_PATH[realpath]} -e -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
+    resolved=$(${LOCKED_TOOL_COMMAND_PATH[realpath]} -e -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
       ci_die "locked tool invocation path disappeared $phase: $label"
     [ "$resolved" = "$path" ] ||
       ci_die "locked tool invocation target changed $phase: $label"
-    command_state=$(${LOCKED_TOOL_PATH[stat]} -c '%d:%i:%s:%Y:%F' -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
+    command_state=$(${LOCKED_TOOL_COMMAND_PATH[stat]} -c '%d:%i:%s:%Y:%F' -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
       ci_die "cannot stat locked tool invocation path $phase: $label"
     [ "$command_state" = "${LOCKED_TOOL_COMMAND_STATE[$label]}" ] ||
       ci_die "locked tool invocation path changed $phase: $label"
     [ -f "$path" ] && [ -x "$path" ] ||
       ci_die "locked tool disappeared $phase: $label"
-    state=$(${LOCKED_TOOL_PATH[stat]} -Lc '%d:%i:%s:%Y' -- "$path") ||
+    state=$(${LOCKED_TOOL_COMMAND_PATH[stat]} -Lc '%d:%i:%s:%Y' -- "$path") ||
       ci_die "cannot stat locked tool $phase: $label"
     [ "$state" = "${LOCKED_TOOL_STATE[$label]}" ] ||
       ci_die "locked tool identity changed $phase: $label"
-    digest=$(${LOCKED_TOOL_PATH[sha256sum]} -- "$path")
+    digest=$(${LOCKED_TOOL_COMMAND_PATH[sha256sum]} -- "$path")
     read -r digest _ <<<"$digest"
     [ "$digest" = "${LOCKED_TOOL_SHA256[$label]}" ] ||
       ci_die "locked tool bytes changed $phase: $label"
@@ -388,80 +394,80 @@ for tool_label in \
 done
 capture_tool_identity awk awk
 
-readonly BASH_BIN=${LOCKED_TOOL_PATH[bash]}
-readonly GIT_BIN=${LOCKED_TOOL_PATH[git]}
-readonly MAKE_BIN=${LOCKED_TOOL_PATH[make]}
-readonly SHA256SUM_BIN=${LOCKED_TOOL_PATH[sha256sum]}
-readonly FIND_BIN=${LOCKED_TOOL_PATH[find]}
-readonly SORT_BIN=${LOCKED_TOOL_PATH[sort]}
-readonly XARGS_BIN=${LOCKED_TOOL_PATH[xargs]}
-readonly RSYNC_BIN=${LOCKED_TOOL_PATH[rsync]}
-readonly CP_BIN=${LOCKED_TOOL_PATH[cp]}
-readonly DPKG_BIN=${LOCKED_TOOL_PATH[dpkg]}
-readonly DPKG_DEB_BIN=${LOCKED_TOOL_PATH[dpkg-deb]}
-readonly DEPMOD_BIN=${LOCKED_TOOL_PATH[depmod]}
-readonly MODINFO_BIN=${LOCKED_TOOL_PATH[modinfo]}
-readonly TAR_BIN=${LOCKED_TOOL_PATH[tar]}
-readonly GZIP_BIN=${LOCKED_TOOL_PATH[gzip]}
-readonly XZ_BIN=${LOCKED_TOOL_PATH[xz]}
-readonly FDTGET_BIN=${LOCKED_TOOL_PATH[fdtget]}
-readonly FLOCK_BIN=${LOCKED_TOOL_PATH[flock]}
-readonly MV_BIN=${LOCKED_TOOL_PATH[mv]}
-readonly READLINK_BIN=${LOCKED_TOOL_PATH[readlink]}
-readonly LN_BIN=${LOCKED_TOOL_PATH[ln]}
-readonly SH_BIN=${LOCKED_TOOL_PATH[sh]}
-readonly HOST_GCC_BIN=${LOCKED_TOOL_PATH[host-gcc]}
-readonly HOST_GXX_BIN=${LOCKED_TOOL_PATH[host-gxx]}
-readonly HOST_AS_BIN=${LOCKED_TOOL_PATH[host-as]}
-readonly HOST_LD_BIN=${LOCKED_TOOL_PATH[host-ld]}
-readonly HOST_AR_BIN=${LOCKED_TOOL_PATH[host-ar]}
-readonly FLEX_BIN=${LOCKED_TOOL_PATH[flex]}
-readonly BISON_BIN=${LOCKED_TOOL_PATH[bison]}
-readonly M4_BIN=${LOCKED_TOOL_PATH[m4]}
+readonly BASH_BIN=${LOCKED_TOOL_COMMAND_PATH[bash]}
+readonly GIT_BIN=${LOCKED_TOOL_COMMAND_PATH[git]}
+readonly MAKE_BIN=${LOCKED_TOOL_COMMAND_PATH[make]}
+readonly SHA256SUM_BIN=${LOCKED_TOOL_COMMAND_PATH[sha256sum]}
+readonly FIND_BIN=${LOCKED_TOOL_COMMAND_PATH[find]}
+readonly SORT_BIN=${LOCKED_TOOL_COMMAND_PATH[sort]}
+readonly XARGS_BIN=${LOCKED_TOOL_COMMAND_PATH[xargs]}
+readonly RSYNC_BIN=${LOCKED_TOOL_COMMAND_PATH[rsync]}
+readonly CP_BIN=${LOCKED_TOOL_COMMAND_PATH[cp]}
+readonly DPKG_BIN=${LOCKED_TOOL_COMMAND_PATH[dpkg]}
+readonly DPKG_DEB_BIN=${LOCKED_TOOL_COMMAND_PATH[dpkg-deb]}
+readonly DEPMOD_BIN=${LOCKED_TOOL_COMMAND_PATH[depmod]}
+readonly MODINFO_BIN=${LOCKED_TOOL_COMMAND_PATH[modinfo]}
+readonly TAR_BIN=${LOCKED_TOOL_COMMAND_PATH[tar]}
+readonly GZIP_BIN=${LOCKED_TOOL_COMMAND_PATH[gzip]}
+readonly XZ_BIN=${LOCKED_TOOL_COMMAND_PATH[xz]}
+readonly FDTGET_BIN=${LOCKED_TOOL_COMMAND_PATH[fdtget]}
+readonly FLOCK_BIN=${LOCKED_TOOL_COMMAND_PATH[flock]}
+readonly MV_BIN=${LOCKED_TOOL_COMMAND_PATH[mv]}
+readonly READLINK_BIN=${LOCKED_TOOL_COMMAND_PATH[readlink]}
+readonly LN_BIN=${LOCKED_TOOL_COMMAND_PATH[ln]}
+readonly SH_BIN=${LOCKED_TOOL_COMMAND_PATH[sh]}
+readonly HOST_GCC_BIN=${LOCKED_TOOL_COMMAND_PATH[host-gcc]}
+readonly HOST_GXX_BIN=${LOCKED_TOOL_COMMAND_PATH[host-gxx]}
+readonly HOST_AS_BIN=${LOCKED_TOOL_COMMAND_PATH[host-as]}
+readonly HOST_LD_BIN=${LOCKED_TOOL_COMMAND_PATH[host-ld]}
+readonly HOST_AR_BIN=${LOCKED_TOOL_COMMAND_PATH[host-ar]}
+readonly FLEX_BIN=${LOCKED_TOOL_COMMAND_PATH[flex]}
+readonly BISON_BIN=${LOCKED_TOOL_COMMAND_PATH[bison]}
+readonly M4_BIN=${LOCKED_TOOL_COMMAND_PATH[m4]}
 [ "${LOCKED_TOOL_COMMAND_PATH[m4]}" = /usr/bin/m4 ] ||
   ci_die 'Bison/Flex require the canonical absolute /usr/bin/m4 invocation path'
-readonly AWK_BIN=${LOCKED_TOOL_PATH[awk]}
-readonly PERL_BIN=${LOCKED_TOOL_PATH[perl]}
-readonly PYTHON3_BIN=${LOCKED_TOOL_PATH[python3]}
-readonly PKG_CONFIG_BIN=${LOCKED_TOOL_PATH[pkg-config]}
-readonly TRUE_BIN=${LOCKED_TOOL_PATH[true]}
+readonly AWK_BIN=${LOCKED_TOOL_COMMAND_PATH[awk]}
+readonly PERL_BIN=${LOCKED_TOOL_COMMAND_PATH[perl]}
+readonly PYTHON3_BIN=${LOCKED_TOOL_COMMAND_PATH[python3]}
+readonly PKG_CONFIG_BIN=${LOCKED_TOOL_COMMAND_PATH[pkg-config]}
+readonly TRUE_BIN=${LOCKED_TOOL_COMMAND_PATH[true]}
 capture_bison_data_identity
 readonly BISON_DATA_DIR BISON_DATA_SHA256 BISON_DATA_STATE
 
 # Common helpers call these names directly. Keep their existing interfaces but
 # bind every invocation in this producer process to the path captured above.
 sha256sum() { "$SHA256SUM_BIN" "$@"; }
-find() { "${LOCKED_TOOL_PATH[find]}" "$@"; }
+find() { "${LOCKED_TOOL_COMMAND_PATH[find]}" "$@"; }
 sort() { "$SORT_BIN" "$@"; }
 xargs() { "$XARGS_BIN" "$@"; }
 rsync() { "$RSYNC_BIN" "$@"; }
 cp() { "$CP_BIN" "$@"; }
 dpkg() { "$DPKG_BIN" "$@"; }
-touch() { "${LOCKED_TOOL_PATH[touch]}" "$@"; }
-realpath() { "${LOCKED_TOOL_PATH[realpath]}" "$@"; }
-nproc() { "${LOCKED_TOOL_PATH[nproc]}" "$@"; }
-date() { "${LOCKED_TOOL_PATH[date]}" "$@"; }
-install() { "${LOCKED_TOOL_PATH[install]}" "$@"; }
+touch() { "${LOCKED_TOOL_COMMAND_PATH[touch]}" "$@"; }
+realpath() { "${LOCKED_TOOL_COMMAND_PATH[realpath]}" "$@"; }
+nproc() { "${LOCKED_TOOL_COMMAND_PATH[nproc]}" "$@"; }
+date() { "${LOCKED_TOOL_COMMAND_PATH[date]}" "$@"; }
+install() { "${LOCKED_TOOL_COMMAND_PATH[install]}" "$@"; }
 awk() { "$AWK_BIN" "$@"; }
-stat() { "${LOCKED_TOOL_PATH[stat]}" "$@"; }
-grep() { "${LOCKED_TOOL_PATH[grep]}" "$@"; }
-sed() { "${LOCKED_TOOL_PATH[sed]}" "$@"; }
-readlink() { "${LOCKED_TOOL_PATH[readlink]}" "$@"; }
-wc() { "${LOCKED_TOOL_PATH[wc]}" "$@"; }
-tr() { "${LOCKED_TOOL_PATH[tr]}" "$@"; }
-cut() { "${LOCKED_TOOL_PATH[cut]}" "$@"; }
-findmnt() { "${LOCKED_TOOL_PATH[findmnt]}" "$@"; }
-curl() { "${LOCKED_TOOL_PATH[curl]}" "$@"; }
+stat() { "${LOCKED_TOOL_COMMAND_PATH[stat]}" "$@"; }
+grep() { "${LOCKED_TOOL_COMMAND_PATH[grep]}" "$@"; }
+sed() { "${LOCKED_TOOL_COMMAND_PATH[sed]}" "$@"; }
+readlink() { "${LOCKED_TOOL_COMMAND_PATH[readlink]}" "$@"; }
+wc() { "${LOCKED_TOOL_COMMAND_PATH[wc]}" "$@"; }
+tr() { "${LOCKED_TOOL_COMMAND_PATH[tr]}" "$@"; }
+cut() { "${LOCKED_TOOL_COMMAND_PATH[cut]}" "$@"; }
+findmnt() { "${LOCKED_TOOL_COMMAND_PATH[findmnt]}" "$@"; }
+curl() { "${LOCKED_TOOL_COMMAND_PATH[curl]}" "$@"; }
 python3() { "$PYTHON3_BIN" "$@"; }
 mv() { "$MV_BIN" "$@"; }
-chmod() { "${LOCKED_TOOL_PATH[chmod]}" "$@"; }
-mkdir() { "${LOCKED_TOOL_PATH[mkdir]}" "$@"; }
-mktemp() { "${LOCKED_TOOL_PATH[mktemp]}" "$@"; }
-rm() { "${LOCKED_TOOL_PATH[rm]}" "$@"; }
-cat() { "${LOCKED_TOOL_PATH[cat]}" "$@"; }
-dirname() { "${LOCKED_TOOL_PATH[dirname]}" "$@"; }
-basename() { "${LOCKED_TOOL_PATH[basename]}" "$@"; }
-env() { "${LOCKED_TOOL_PATH[env]}" "$@"; }
+chmod() { "${LOCKED_TOOL_COMMAND_PATH[chmod]}" "$@"; }
+mkdir() { "${LOCKED_TOOL_COMMAND_PATH[mkdir]}" "$@"; }
+mktemp() { "${LOCKED_TOOL_COMMAND_PATH[mktemp]}" "$@"; }
+rm() { "${LOCKED_TOOL_COMMAND_PATH[rm]}" "$@"; }
+cat() { "${LOCKED_TOOL_COMMAND_PATH[cat]}" "$@"; }
+dirname() { "${LOCKED_TOOL_COMMAND_PATH[dirname]}" "$@"; }
+basename() { "${LOCKED_TOOL_COMMAND_PATH[basename]}" "$@"; }
+env() { "${LOCKED_TOOL_COMMAND_PATH[env]}" "$@"; }
 
 kernel_locked_path=
 kernel_kcflags=
@@ -583,13 +589,13 @@ if [[ $CROSS_COMPILE = */* && $CROSS_COMPILE != /* ]]; then
   ci_die 'CROSS_COMPILE containing a slash must be absolute'
 fi
 if [[ $CROSS_COMPILE = /* ]]; then
-  cross_directory=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$(${LOCKED_TOOL_PATH[dirname]} -- "$CROSS_COMPILE")") ||
+  cross_directory=$(${LOCKED_TOOL_COMMAND_PATH[realpath]} -e -- "$(${LOCKED_TOOL_COMMAND_PATH[dirname]} -- "$CROSS_COMPILE")") ||
     ci_die 'cannot resolve CROSS_COMPILE directory'
-  cross_basename=$(${LOCKED_TOOL_PATH[basename]} -- "$CROSS_COMPILE")
+  cross_basename=$(${LOCKED_TOOL_COMMAND_PATH[basename]} -- "$CROSS_COMPILE")
 else
   cross_gcc_candidate=$(type -P -- "${CROSS_COMPILE}gcc") ||
     ci_die "required command not found: ${CROSS_COMPILE}gcc"
-  cross_directory=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$(${LOCKED_TOOL_PATH[dirname]} -- "$cross_gcc_candidate")") ||
+  cross_directory=$(${LOCKED_TOOL_COMMAND_PATH[realpath]} -e -- "$(${LOCKED_TOOL_COMMAND_PATH[dirname]} -- "$cross_gcc_candidate")") ||
     ci_die 'cannot resolve CROSS_COMPILE directory'
   cross_basename=$CROSS_COMPILE
 fi
@@ -606,7 +612,7 @@ for cross_tool in gcc as ld ar nm objcopy objdump readelf strip; do
   capture_tool_identity "$cross_tool"
 done
 
-${LOCKED_TOOL_PATH[dpkg]} --validate-version "$KERNEL_PACKAGE_VERSION" >/dev/null ||
+"$DPKG_BIN" --validate-version "$KERNEL_PACKAGE_VERSION" >/dev/null ||
   ci_die "invalid KERNEL_PACKAGE_VERSION"
 
 for proxy_name in HTTPS_PROXY HTTP_PROXY https_proxy http_proxy; do
@@ -626,14 +632,14 @@ for proxy_name in NO_PROXY no_proxy; do
   fi
 done
 
-kernel_source=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$KERNEL_SOURCE_DIR")
-kernel_git=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$KERNEL_GIT_DIR")
-kernel_build_input=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$KERNEL_BUILD_DIR")
+kernel_source=$(realpath -e -- "$KERNEL_SOURCE_DIR")
+kernel_git=$(realpath -e -- "$KERNEL_GIT_DIR")
+kernel_build_input=$(realpath -e -- "$KERNEL_BUILD_DIR")
 [ -d "$kernel_source" ] || ci_die "kernel source is not a directory"
 [ -d "$kernel_git/objects" ] || ci_die "KERNEL_GIT_DIR is not a Git object database"
 [ -d "$kernel_build_input" ] || ci_die "kernel build is not a directory"
 [ -s "$kernel_build_input/.config" ] || ci_die "kernel build has no prepared .config"
-configured_rustc_version=$(${LOCKED_TOOL_PATH[awk]} -F= '
+configured_rustc_version=$("$AWK_BIN" -F= '
   $1 == "CONFIG_RUSTC_VERSION" { print $2; count++ }
   END { exit count == 1 ? 0 : 1 }
 ' "$kernel_build_input/.config") ||
@@ -651,11 +657,11 @@ fi
 [[ $KERNEL_RUSTC = /* ]] || ci_die 'KERNEL_RUSTC must be an absolute path'
 resolve_tool_path rustc "$KERNEL_RUSTC"
 capture_tool_identity rustc
-kernel_rustc=${LOCKED_TOOL_PATH[rustc]}
+kernel_rustc=${LOCKED_TOOL_COMMAND_PATH[rustc]}
 if [ "$configured_rustc_version" = 0 ]; then
   LOCKED_TOOL_VERSION[rustc]=disabled
 fi
-if ${LOCKED_TOOL_PATH[grep]} -Fxq 'CONFIG_DEBUG_INFO_BTF=y' "$kernel_build_input/.config"; then
+if "${LOCKED_TOOL_COMMAND_PATH[grep]}" -Fxq 'CONFIG_DEBUG_INFO_BTF=y' "$kernel_build_input/.config"; then
   resolve_tool_path pahole pahole
   capture_tool_identity pahole
 else
@@ -719,11 +725,14 @@ kernel_make() {
   )
   local -a locked_optional_make_arguments=()
   if [ "${LOCKED_TOOL_PATH[pahole]}" != unused ]; then
-    locked_make_environment+=(PAHOLE="${LOCKED_TOOL_PATH[pahole]}")
-    locked_optional_make_arguments+=(PAHOLE="${LOCKED_TOOL_PATH[pahole]}")
+    locked_make_environment+=(PAHOLE="${LOCKED_TOOL_COMMAND_PATH[pahole]}")
+    locked_optional_make_arguments+=(PAHOLE="${LOCKED_TOOL_COMMAND_PATH[pahole]}")
   fi
   verify_locked_tools 'before Kbuild invocation'
   verify_kernel_locked_path "$kernel_locked_path"
+  # Kconfig stores the first compiler-version line. Invoke the canonical
+  # locked command symlink so a versioned symlink target cannot rewrite the
+  # approved config while both command and target identities remain checked.
   if ci_sanitized_kernel_env \
       "${locked_make_environment[@]}" \
       "$MAKE_BIN" -C "$kernel_source" \
@@ -737,15 +746,15 @@ kernel_make() {
       KBUILD_BUILD_VERSION="$KBUILD_BUILD_VERSION" \
       KCONFIG_NOTIMESTAMP=1 \
       RUSTC="$kernel_rustc" \
-      CC="${LOCKED_TOOL_PATH[gcc]}" \
-      AS="${LOCKED_TOOL_PATH[as]}" \
-      LD="${LOCKED_TOOL_PATH[ld]}" \
-      AR="${LOCKED_TOOL_PATH[ar]}" \
-      NM="${LOCKED_TOOL_PATH[nm]}" \
-      OBJCOPY="${LOCKED_TOOL_PATH[objcopy]}" \
-      OBJDUMP="${LOCKED_TOOL_PATH[objdump]}" \
-      READELF="${LOCKED_TOOL_PATH[readelf]}" \
-      STRIP="${LOCKED_TOOL_PATH[strip]}" \
+      CC="${LOCKED_TOOL_COMMAND_PATH[gcc]}" \
+      AS="${LOCKED_TOOL_COMMAND_PATH[as]}" \
+      LD="${LOCKED_TOOL_COMMAND_PATH[ld]}" \
+      AR="${LOCKED_TOOL_COMMAND_PATH[ar]}" \
+      NM="${LOCKED_TOOL_COMMAND_PATH[nm]}" \
+      OBJCOPY="${LOCKED_TOOL_COMMAND_PATH[objcopy]}" \
+      OBJDUMP="${LOCKED_TOOL_COMMAND_PATH[objdump]}" \
+      READELF="${LOCKED_TOOL_COMMAND_PATH[readelf]}" \
+      STRIP="${LOCKED_TOOL_COMMAND_PATH[strip]}" \
       HOSTCC="$HOST_GCC_BIN" \
       HOSTCXX="$HOST_GXX_BIN" \
       HOSTAS="$HOST_AS_BIN" \
@@ -1106,7 +1115,7 @@ verify_bootstrap_producer_state() {
 
   producer_root=$(ci_sanitized_git_env "$GIT_BIN" -C "$SCRIPT_DIR/../.." rev-parse --show-toplevel) ||
     ci_die 'kernel bootstrap packager must run from a Git worktree'
-  producer_root=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$producer_root")
+  producer_root=$(${LOCKED_TOOL_COMMAND_PATH[realpath]} -e -- "$producer_root")
   producer_root_path=$producer_root
   producer_git=(ci_sanitized_git_env "$GIT_BIN" --no-replace-objects -C "$producer_root")
   actual=$("${producer_git[@]}" rev-parse HEAD) ||
@@ -1305,7 +1314,7 @@ umask "$saved_umask"
   [ ! -e "$kernel_locked_path" ] && [ ! -L "$kernel_locked_path" ] ||
   ci_die 'a deterministic private Kbuild path already exists'
 
-work=$(${LOCKED_TOOL_PATH[mktemp]} -d "$output_parent/.tb321fu-kernel-bootstrap.XXXXXX")
+work=$(${LOCKED_TOOL_COMMAND_PATH[mktemp]} -d "$output_parent/.tb321fu-kernel-bootstrap.XXXXXX")
 kernel_build_input_state=
 cleanup() {
   local status=$?
@@ -1700,7 +1709,7 @@ verify_bootstrap_producer_state
 verify_locked_tools 'before bootstrap promotion'
 ci_verify_kernel_bootstrap_stage \
   "$stage" "$kernel_archive_name" "$device_archive_name" "$sdk_archive_name" \
-  "$SHA256SUM_BIN" "${LOCKED_TOOL_PATH[stat]}"
+  "$SHA256SUM_BIN" "${LOCKED_TOOL_COMMAND_PATH[stat]}"
 verify_kernel_bootstrap_metadata_snapshot "$stage"
 verify_locked_tools 'after final stage verification'
 [ ! -e "$output_path" ] && [ ! -L "$output_path" ] ||
@@ -1710,7 +1719,7 @@ verify_locked_tools 'after final stage verification'
   ci_die 'kernel bootstrap no-clobber promotion failed'
 ci_verify_kernel_bootstrap_stage \
   "$output_path" "$kernel_archive_name" "$device_archive_name" "$sdk_archive_name" \
-  "$SHA256SUM_BIN" "${LOCKED_TOOL_PATH[stat]}"
+  "$SHA256SUM_BIN" "${LOCKED_TOOL_COMMAND_PATH[stat]}"
 verify_kernel_bootstrap_metadata_snapshot "$output_path"
 verify_locked_tools 'after bootstrap promotion'
 trap - EXIT

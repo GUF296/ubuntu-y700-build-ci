@@ -189,8 +189,7 @@ actual_bootstrap_inputs=$(awk '
     if (line !~ /^[A-Za-z_][A-Za-z0-9_]*=/) next
     sub(/=.*/, "", line)
     if (line == "PATH" || line == "HOME" || line == "LANG" ||
-        line == "LC_ALL" || line == "TZ" ||
-        line == "TB321FU_KERNEL_PRODUCER_ENV_POLICY") next
+        line == "LC_ALL" || line == "TZ") next
     print line
   }
 ' "$packager")
@@ -208,8 +207,10 @@ for token in \
   'PRODUCER_ENV_POLICY=isolated-allowlist-v1' \
   'readonly PRODUCER_CANONICAL_PATH' \
   'readonly PRODUCER_ENV_POLICY' \
+  '[ -z "${BASH_VERSION-}" ] || [ "${BASH_SOURCE-}" = "$0" ]' \
   'exec /usr/bin/env -i' \
-  '/usr/bin/bash --noprofile --norc'; do
+  '/usr/bin/bash --noprofile --norc -c' \
+  '. "$producer_script" "$@"'; do
   require_literal "$token"
 done
 
@@ -635,6 +636,23 @@ grep -Fq 'KERNEL_BOOTSTRAP_PREFLIGHT=PASS' <<<"$hostile_producer_output" ||
   fail "whole-producer hostile environment changed bootstrap preflight"
 [ ! -e "$shadow_marker" ] ||
   fail "whole-producer PATH/BASH_ENV/ENV payload executed across environment isolation"
+
+forged_phase_zero_env="$fixture/forged-phase-zero-bash-env"
+forged_phase_zero_trap_marker="$fixture/forged-phase-zero-exit-trap"
+cat > "$forged_phase_zero_env" <<EOF
+trap '/usr/bin/touch -- "$forged_phase_zero_trap_marker"' EXIT
+unset BASH_ENV
+EOF
+chmod 0644 "$forged_phase_zero_env"
+forged_phase_zero_output=$(env "${preflight_env[@]}" \
+  GITHUB_REPOSITORY="$producer_repository" \
+  TB321FU_KERNEL_PRODUCER_ENV_POLICY=isolated-allowlist-v1 \
+  BASH_ENV="$forged_phase_zero_env" \
+  /usr/bin/bash "$producer_packager" --preflight)
+grep -Fq 'KERNEL_BOOTSTRAP_PREFLIGHT=PASS' <<<"$forged_phase_zero_output" ||
+  fail "forged phase-zero marker changed bootstrap preflight"
+[ ! -e "$forged_phase_zero_trap_marker" ] ||
+  fail "forged phase-zero marker bypassed the clean producer re-entry"
 
 explicit_producer_output=$(env "${preflight_env[@]}" \
   GITHUB_REPOSITORY=GUF296/not-the-producer \
@@ -1111,6 +1129,23 @@ for host_tool_assignment in \
   [ "$(grep -Fc "$host_tool_assignment" <<<"$kernel_make_function")" -eq 2 ] ||
     fail "kernel_make must fix $host_tool_assignment in both boundaries"
 done
+for cross_tool_assignment in \
+  'CC="${LOCKED_TOOL_COMMAND_PATH[gcc]}"' \
+  'AS="${LOCKED_TOOL_COMMAND_PATH[as]}"' \
+  'LD="${LOCKED_TOOL_COMMAND_PATH[ld]}"' \
+  'AR="${LOCKED_TOOL_COMMAND_PATH[ar]}"' \
+  'NM="${LOCKED_TOOL_COMMAND_PATH[nm]}"' \
+  'OBJCOPY="${LOCKED_TOOL_COMMAND_PATH[objcopy]}"' \
+  'OBJDUMP="${LOCKED_TOOL_COMMAND_PATH[objdump]}"' \
+  'READELF="${LOCKED_TOOL_COMMAND_PATH[readelf]}"' \
+  'STRIP="${LOCKED_TOOL_COMMAND_PATH[strip]}"'; do
+  [ "$(grep -Fc "$cross_tool_assignment" <<<"$kernel_make_function")" -eq 1 ] ||
+    fail "kernel_make must invoke the locked command path: $cross_tool_assignment"
+done
+if grep -Eq '(CC|AS|LD|AR|NM|OBJCOPY|OBJDUMP|READELF|STRIP)="\$\{LOCKED_TOOL_PATH\[' \
+    <<<"$kernel_make_function"; then
+  fail "kernel_make invokes a resolved tool target instead of its locked command path"
+fi
 [ "$(grep -Fc 'verify_locked_tools ' <<<"$kernel_make_function")" -eq 2 ] ||
   fail "kernel_make must verify locked tool and data bytes before and after every invocation"
 kernel_make_function_file="$fixture/kernel-make-function.sh"
@@ -1125,16 +1160,26 @@ actual_kernel_make_env=$(
     verify_kernel_locked_path() { :; }
     verify_locked_tools() { :; }
     declare -A LOCKED_TOOL_PATH=()
+    declare -A LOCKED_TOOL_COMMAND_PATH=()
     LOCKED_TOOL_PATH[pahole]=unused
     LOCKED_TOOL_PATH[gcc]=/fixture/cross-gcc
+    LOCKED_TOOL_COMMAND_PATH[gcc]=/fixture/canonical-cross-gcc
     LOCKED_TOOL_PATH[as]=/fixture/cross-as
+    LOCKED_TOOL_COMMAND_PATH[as]=/fixture/canonical-cross-as
     LOCKED_TOOL_PATH[ld]=/fixture/cross-ld
+    LOCKED_TOOL_COMMAND_PATH[ld]=/fixture/canonical-cross-ld
     LOCKED_TOOL_PATH[ar]=/fixture/cross-ar
+    LOCKED_TOOL_COMMAND_PATH[ar]=/fixture/canonical-cross-ar
     LOCKED_TOOL_PATH[nm]=/fixture/cross-nm
+    LOCKED_TOOL_COMMAND_PATH[nm]=/fixture/canonical-cross-nm
     LOCKED_TOOL_PATH[objcopy]=/fixture/cross-objcopy
+    LOCKED_TOOL_COMMAND_PATH[objcopy]=/fixture/canonical-cross-objcopy
     LOCKED_TOOL_PATH[objdump]=/fixture/cross-objdump
+    LOCKED_TOOL_COMMAND_PATH[objdump]=/fixture/canonical-cross-objdump
     LOCKED_TOOL_PATH[readelf]=/fixture/cross-readelf
+    LOCKED_TOOL_COMMAND_PATH[readelf]=/fixture/canonical-cross-readelf
     LOCKED_TOOL_PATH[strip]=/fixture/cross-strip
+    LOCKED_TOOL_COMMAND_PATH[strip]=/fixture/canonical-cross-strip
     kernel_git=/fixture/git
     kernel_source="$fixture/kernel-make-source"
     kernel_build="$fixture/kernel-make-build"
@@ -1208,15 +1253,15 @@ KCFLAGS=-fdebug-prefix-map=$fixture/kernel-make-source=/usr/src/tb321fu-linux-so
 KAFLAGS=-fdebug-prefix-map=$fixture/kernel-make-source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$fixture/kernel-make-build=/usr/src/tb321fu-linux-build
 O=$fixture/kernel-make-build
 RUSTC=/bin/false
-CC=/fixture/cross-gcc
-AS=/fixture/cross-as
-LD=/fixture/cross-ld
-AR=/fixture/cross-ar
-NM=/fixture/cross-nm
-OBJCOPY=/fixture/cross-objcopy
-OBJDUMP=/fixture/cross-objdump
-READELF=/fixture/cross-readelf
-STRIP=/fixture/cross-strip
+CC=/fixture/canonical-cross-gcc
+AS=/fixture/canonical-cross-as
+LD=/fixture/canonical-cross-ld
+AR=/fixture/canonical-cross-ar
+NM=/fixture/canonical-cross-nm
+OBJCOPY=/fixture/canonical-cross-objcopy
+OBJDUMP=/fixture/canonical-cross-objdump
+READELF=/fixture/canonical-cross-readelf
+STRIP=/fixture/canonical-cross-strip
 HOSTCC=/fixture/host-gcc
 HOSTCXX=/fixture/host-gxx
 HOSTAS=/fixture/host-as
@@ -1535,6 +1580,16 @@ for tool_policy_token in \
   'declare -A LOCKED_TOOL_VERSION=()' \
   'declare -A LOCKED_TOOL_STATE=()' \
   'declare -A LOCKED_TOOL_COMMAND_STATE=()' \
+  'command_path=${LOCKED_TOOL_COMMAND_PATH[$label]:-}' \
+  'output=$("$command_path" "$mode" 2>&1 || true)' \
+  'readonly DEPMOD_BIN=${LOCKED_TOOL_COMMAND_PATH[depmod]}' \
+  'readonly MODINFO_BIN=${LOCKED_TOOL_COMMAND_PATH[modinfo]}' \
+  'readonly HOST_GCC_BIN=${LOCKED_TOOL_COMMAND_PATH[host-gcc]}' \
+  'readonly HOST_GXX_BIN=${LOCKED_TOOL_COMMAND_PATH[host-gxx]}' \
+  'readonly HOST_AS_BIN=${LOCKED_TOOL_COMMAND_PATH[host-as]}' \
+  'readonly HOST_LD_BIN=${LOCKED_TOOL_COMMAND_PATH[host-ld]}' \
+  'readonly HOST_AR_BIN=${LOCKED_TOOL_COMMAND_PATH[host-ar]}' \
+  'kernel_rustc=${LOCKED_TOOL_COMMAND_PATH[rustc]}' \
   'm4:m4' \
   'capture_bison_data_identity' \
   'canonical_data_tree_sha256' \
@@ -1543,8 +1598,8 @@ for tool_policy_token in \
   "printf 'bison-data-sha256\\t%s\\n'" \
   'cut:cut' \
   'findmnt:findmnt' \
-  'findmnt() { "${LOCKED_TOOL_PATH[findmnt]}" "$@"; }' \
-  'cut() { "${LOCKED_TOOL_PATH[cut]}" "$@"; }' \
+  'findmnt() { "${LOCKED_TOOL_COMMAND_PATH[findmnt]}" "$@"; }' \
+  'cut() { "${LOCKED_TOOL_COMMAND_PATH[cut]}" "$@"; }' \
   '"$MAKE_BIN" -C "$kernel_source"' \
   'depmod_config="$work/depmod.conf"' \
   'install -m 0644 /dev/null "$depmod_config"' \
@@ -1563,6 +1618,12 @@ for tool_policy_token in \
   "verify_locked_tools 'after final stage verification'"; do
   require_literal "$tool_policy_token"
 done
+if grep -Eq '^readonly [A-Z0-9_]+_BIN=\$\{LOCKED_TOOL_PATH\[' "$packager"; then
+  fail "runtime tool constant executes a resolved target instead of its locked command path"
+fi
+if grep -Fq '=$(${LOCKED_TOOL_PATH[' "$packager"; then
+  fail "tool identity code executes a resolved target instead of its locked command path"
+fi
 [ "$(grep -Fc '"$TAR_BIN" --format=gnu' "$packager")" -eq 3 ] ||
   fail "all three producer tar streams must use the fixed GNU format"
 [ "$(grep -Fc '"$GZIP_BIN" -6 -n' "$packager")" -eq 3 ] ||
@@ -1575,12 +1636,14 @@ for tool_function_name in resolve_tool_path capture_tool_identity verify_locked_
   [ -n "$tool_function" ] || fail "unable to extract $tool_function_name"
   printf '%s\n' "$tool_function" >> "$tool_identity_function_file"
 done
-fixture_tool="$fixture/identity-locked-tool"
-cat > "$fixture_tool" <<'EOF'
+fixture_tool_target="$fixture/identity-versioned-tool"
+fixture_tool="$fixture/identity-generic-tool"
+cat > "$fixture_tool_target" <<'EOF'
 #!/bin/sh
-printf 'tb321fu fixture tool AAA\n'
+printf '%s AAA\n' "${0##*/}"
 EOF
-chmod 0755 "$fixture_tool"
+chmod 0755 "$fixture_tool_target"
+ln -s "$fixture_tool_target" "$fixture_tool"
 set +e
 tool_drift_output=$(
   (
@@ -1596,16 +1659,23 @@ tool_drift_output=$(
     # shellcheck source=/dev/null
     . "$tool_identity_function_file"
     LOCKED_TOOL_PATH[sha256sum]=/usr/bin/sha256sum
+    LOCKED_TOOL_COMMAND_PATH[sha256sum]=/usr/bin/sha256sum
     LOCKED_TOOL_PATH[stat]=/usr/bin/stat
+    LOCKED_TOOL_COMMAND_PATH[stat]=/usr/bin/stat
     LOCKED_TOOL_PATH[realpath]=/usr/bin/realpath
+    LOCKED_TOOL_COMMAND_PATH[realpath]=/usr/bin/realpath
     verify_bison_data_identity() { :; }
     resolve_tool_path fixture-tool "$fixture_tool"
     capture_tool_identity fixture-tool
+    [ "${LOCKED_TOOL_VERSION[fixture-tool]}" = 'identity-generic-tool AAA' ] ||
+      ci_die 'tool version was captured through the resolved target path'
     verify_locked_tools 'before fixture mutation'
-    fixture_tool_mtime=$(/usr/bin/stat -c '%Y' -- "$fixture_tool")
-    printf '#!/bin/sh\nprintf '\''tb321fu fixture tool BBB\\n'\''\n' > "$fixture_tool"
-    chmod 0755 "$fixture_tool"
-    touch -d "@$fixture_tool_mtime" "$fixture_tool"
+    fixture_tool_mtime=$(/usr/bin/stat -c '%Y' -- "$fixture_tool_target")
+    fixture_tool_offset=$(grep -abo 'AAA' "$fixture_tool_target" | cut -d: -f1)
+    [ "$fixture_tool_offset" -ge 0 ] || ci_die 'cannot locate fixture mutation offset'
+    printf BBB | /usr/bin/dd of="$fixture_tool_target" bs=1 \
+      seek="$fixture_tool_offset" conv=notrunc status=none
+    touch -d "@$fixture_tool_mtime" "$fixture_tool_target"
     verify_locked_tools 'after fixture mutation'
   ) 2>&1
 )
@@ -1614,7 +1684,7 @@ set -e
 [ "$tool_drift_status" -ne 0 ] || fail "post-resolution tool byte drift was accepted"
 grep -Fq 'locked tool bytes changed after fixture mutation: fixture-tool' \
   <<<"$tool_drift_output" ||
-  fail "post-resolution tool byte drift failed at the wrong boundary"
+  fail "post-resolution tool byte drift failed at the wrong boundary: $tool_drift_output"
 
 bison_data_function_file="$fixture/bison-data-functions.sh"
 : > "$bison_data_function_file"
@@ -1643,14 +1713,23 @@ bison_data_drift_output=$(
     # shellcheck source=common.sh
     . "$common"
     declare -A LOCKED_TOOL_PATH=()
+    declare -A LOCKED_TOOL_COMMAND_PATH=()
     LOCKED_TOOL_PATH[bison]="$fake_bison"
+    LOCKED_TOOL_COMMAND_PATH[bison]="$fake_bison"
     LOCKED_TOOL_PATH[realpath]=/usr/bin/realpath
+    LOCKED_TOOL_COMMAND_PATH[realpath]=/usr/bin/realpath
     LOCKED_TOOL_PATH[find]=/usr/bin/find
+    LOCKED_TOOL_COMMAND_PATH[find]=/usr/bin/find
     LOCKED_TOOL_PATH[wc]=/usr/bin/wc
+    LOCKED_TOOL_COMMAND_PATH[wc]=/usr/bin/wc
     LOCKED_TOOL_PATH[awk]=/usr/bin/awk
+    LOCKED_TOOL_COMMAND_PATH[awk]=/usr/bin/awk
     LOCKED_TOOL_PATH[tar]=/usr/bin/tar
+    LOCKED_TOOL_COMMAND_PATH[tar]=/usr/bin/tar
     LOCKED_TOOL_PATH[sha256sum]=/usr/bin/sha256sum
+    LOCKED_TOOL_COMMAND_PATH[sha256sum]=/usr/bin/sha256sum
     LOCKED_TOOL_PATH[stat]=/usr/bin/stat
+    LOCKED_TOOL_COMMAND_PATH[stat]=/usr/bin/stat
     # shellcheck source=/dev/null
     . "$bison_data_function_file"
     capture_bison_data_identity
@@ -1884,9 +1963,11 @@ cat > "$valid_dts" <<'EOF'
 
 / {
   fixture-i2c {
+    compatible = "qcom,geni-i2c";
+    status = "okay";
     #address-cells = <1>;
     #size-cells = <0>;
-    haptics-right@5a { compatible = "lenovo,tb321fu-aw86937", "awinic,aw86937"; reg = <0x5a>; label = "aw86937-haptics-right"; };
+    haptics-right@5a { compatible = "lenovo,tb321fu-aw86937", "awinic,aw86937"; reg = <0x5a>; label = "aw86937-haptics-right"; status = "okay"; };
     haptics-left@5b { compatible = "lenovo,tb321fu-aw86937", "awinic,aw86937"; reg = <0x5b>; label = "aw86937-haptics-left"; };
   };
 };
@@ -1921,6 +2002,36 @@ expect_dtb_failure \
   'incomplete-compatible AW86937 DTB' \
   'compiled DTB AW86937 compatible mismatch' \
   "$wrong_compatible_dtb"
+
+wrong_parent_dts="$fixture/wrong-parent-aw86937.dts"
+wrong_parent_dtb="$fixture/wrong-parent-aw86937.dtb"
+sed 's/compatible = "qcom,geni-i2c"/compatible = "fixture,not-i2c"/' \
+  "$valid_dts" > "$wrong_parent_dts"
+dtc -q -I dts -O dtb -o "$wrong_parent_dtb" "$wrong_parent_dts"
+expect_dtb_failure \
+  'non-I2C-parent AW86937 DTB' \
+  'compiled DTB AW86937 parent is not a Qualcomm GENI I2C controller' \
+  "$wrong_parent_dtb"
+
+disabled_parent_dts="$fixture/disabled-parent-aw86937.dts"
+disabled_parent_dtb="$fixture/disabled-parent-aw86937.dtb"
+sed '0,/status = "okay"/s//status = "disabled"/' \
+  "$valid_dts" > "$disabled_parent_dts"
+dtc -q -I dts -O dtb -o "$disabled_parent_dtb" "$disabled_parent_dts"
+expect_dtb_failure \
+  'disabled-parent AW86937 DTB' \
+  'compiled DTB AW86937 parent status is not okay' \
+  "$disabled_parent_dtb"
+
+disabled_child_dts="$fixture/disabled-child-aw86937.dts"
+disabled_child_dtb="$fixture/disabled-child-aw86937.dtb"
+sed 's/label = "aw86937-haptics-right"; status = "okay"/label = "aw86937-haptics-right"; status = "disabled"/' \
+  "$valid_dts" > "$disabled_child_dts"
+dtc -q -I dts -O dtb -o "$disabled_child_dtb" "$disabled_child_dts"
+expect_dtb_failure \
+  'disabled-child AW86937 DTB' \
+  'compiled DTB AW86937 node status is not okay' \
+  "$disabled_child_dtb"
 
 sensor_commit=1111111111111111111111111111111111111111
 haptics_commit=2222222222222222222222222222222222222222

@@ -109,9 +109,10 @@ ci_sanitized_kernel_env() {
 }
 
 ci_verify_tb321fu_haptics_dtb() {
-  local dtb=$1 fdtget_bin=$2 path child child_path children reg compatible label
+  local dtb=$1 fdtget_bin=$2 path child child_path children reg compatible label status
   local contract_record contract_tail expected_reg expected_label
   local right_path= left_path= right_parent left_parent
+  local parent_compatible parent_status
   local node_count=0 queue_index=0
   local -a queue=(/)
 
@@ -161,6 +162,16 @@ ci_verify_tb321fu_haptics_dtb() {
   left_parent=${left_path%/*}
   [ "$right_parent" = "$left_parent" ] ||
     ci_die 'compiled DTB AW86937 nodes do not share one I2C parent'
+  parent_compatible=$("$fdtget_bin" -t s "$dtb" "$right_parent" compatible) ||
+    ci_die 'compiled DTB AW86937 parent lacks compatible'
+  case " $parent_compatible " in
+    *' qcom,geni-i2c '*) ;;
+    *) ci_die 'compiled DTB AW86937 parent is not a Qualcomm GENI I2C controller' ;;
+  esac
+  parent_status=$("$fdtget_bin" -d '' -t s "$dtb" "$right_parent" status) ||
+    ci_die 'cannot read compiled DTB AW86937 parent status'
+  [ "$parent_status" = okay ] ||
+    ci_die 'compiled DTB AW86937 parent status is not okay'
 
   for contract_record in \
     "$right_path:5a:aw86937-haptics-right" \
@@ -183,6 +194,10 @@ ci_verify_tb321fu_haptics_dtb() {
       ci_die "compiled DTB AW86937 node lacks label: $path"
     [ "$label" = "$expected_label" ] ||
       ci_die "compiled DTB AW86937 label mismatch: $path"
+    status=$("$fdtget_bin" -d okay -t s "$dtb" "$path" status) ||
+      ci_die "cannot read compiled DTB AW86937 node status: $path"
+    [ "$status" = okay ] ||
+      ci_die "compiled DTB AW86937 node status is not okay: $path"
   done
 }
 
