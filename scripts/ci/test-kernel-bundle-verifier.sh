@@ -27,6 +27,44 @@ sensor_root="$tmp/sensor"
 haptics_root="$tmp/haptics"
 producer_root="$tmp/haptics-producer"
 mkdir -p "$kernel_root" "$device_root" "$sensor_root" "$haptics_root"
+haptics_environment_policy_sha=9c1a0bfc44acbcde4833637698aaa59b8c386f3138f79486001ce2003f7095cd
+haptics_environment_policy_lines=(
+  'schema=tb321fu.haptics-build-environment/v1'
+  'policy=isolated-allowlist-v1'
+  'path=/usr/sbin:/usr/bin:/sbin:/bin'
+  'lang=C'
+  'lc-all=C'
+  'timezone=UTC'
+  'home=/nonexistent'
+  'tmpdir=/tmp'
+  'producer-environment=env-i-script-allowlist'
+  'transport-environment=http_proxy,https_proxy,no_proxy'
+  'dynamic-kbuild-environment=discarded'
+  'source-date-epoch=explicit'
+  'debian-compression=xz,level=6,threads=1,uniform=yes'
+  'kbuild-path=private-locked-tool-directory-v1'
+  'kbuild-shell=absolute-locked-dash-v1'
+  'command-resolution=absolute-recorded-paths'
+  'generated-kernel-host-tools=absolute-private-path,sha256,pre-and-post-use-verification'
+  'tool-identity=absolute-realpath,sha256,version,post-use-verification'
+)
+actual_haptics_environment_policy_sha=$(
+  printf '%s\n' "${haptics_environment_policy_lines[@]}" | sha256sum | awk '{print $1}'
+)
+[ "$actual_haptics_environment_policy_sha" = "$haptics_environment_policy_sha" ] || {
+  printf 'fixture haptics build-environment policy digest mismatch\n' >&2
+  exit 1
+}
+haptics_build_tool_names=(
+  bash dash env readlink realpath basename dirname date mktemp mkdir rm chmod cp mv
+  ln cat find install touch stat awk grep sed sort cut cmp tee tr wc git curl
+  python3 make gcc as ld ar rsync dpkg dpkg-deb sha256sum
+  aarch64-linux-gnu-gcc aarch64-linux-gnu-cpp aarch64-linux-gnu-as
+  aarch64-linux-gnu-ld aarch64-linux-gnu-ar aarch64-linux-gnu-nm
+  aarch64-linux-gnu-objcopy aarch64-linux-gnu-objdump
+  aarch64-linux-gnu-readelf aarch64-linux-gnu-strip kmod tar gzip xz
+  sh bc getconf sha1sum uname head expr uniq xargs
+)
 
 sha() {
   sha256sum "$1" | awk '{print $1}'
@@ -256,9 +294,19 @@ write_kernel_metadata_evidence() {
   dpkg_deb_sha=$(printf 'c%.0s' {1..64})
   dpkg_deb_version='fixture dpkg-deb 1.0'
   {
-    printf 'schema\ttb321fu.kernel-toolchain/v1\n'
-    printf 'cross-compile\taarch64-linux-gnu-\n'
-    for tool in gcc as ld ar nm objcopy strip rustc make dpkg-deb; do
+    printf 'schema\ttb321fu.kernel-toolchain/v2\n'
+    printf 'cross-compile\t/usr/bin/aarch64-linux-gnu-\n'
+    printf 'bison-data-directory\t/usr/share/bison\n'
+    printf 'bison-data-sha256\t%s\n' "$(printf 'e%.0s' {1..64})"
+    for tool in \
+      gcc as ld ar nm objcopy objdump readelf strip rustc \
+      host-gcc host-gxx host-as host-ld host-ar flex bison m4 \
+      awk perl python3 pkg-config pahole git \
+      make depmod modinfo tar gzip xz dpkg-deb fdtget bash sh bc getconf \
+      sha1sum ln uname sha256sum find sort xargs rsync cp dpkg touch \
+      realpath nproc date install stat grep sed readlink wc tr cut findmnt \
+      curl flock mv chmod mkdir mktemp rm cat dirname basename env true \
+      cmp head expr uniq; do
       case "$tool" in
         gcc) digest=$compiler_sha; version=$compiler_version ;;
         rustc) digest=$rustc_sha; version=$rustc_version ;;
@@ -270,6 +318,8 @@ write_kernel_metadata_evidence() {
         nm) digest=$(printf '7%.0s' {1..64}); version='fixture nm 1.0' ;;
         objcopy) digest=$(printf '8%.0s' {1..64}); version='fixture objcopy 1.0' ;;
         strip) digest=$(printf '9%.0s' {1..64}); version='fixture strip 1.0' ;;
+        pahole) digest=unused; version=unused ;;
+        *) digest=$(printf 'd%.0s' {1..64}); version="fixture $tool 1.0" ;;
       esac
       printf '%s-sha256\t%s\n' "$tool" "$digest"
       printf '%s-version\t%s\n' "$tool" "$version"
@@ -277,12 +327,21 @@ write_kernel_metadata_evidence() {
   } > "$tmp/KERNEL-TOOLCHAIN.tsv"
   toolchain_manifest_sha=$(sha "$tmp/KERNEL-TOOLCHAIN.tsv")
   {
-    printf 'schema\ttb321fu.kbuild-flags/v1\n'
+    printf 'schema\ttb321fu.kbuild-flags/v2\n'
+    printf 'environment-policy\tisolated-allowlist-v1\n'
+    printf 'path\tprivate-locked-tool-directory-v1\n'
+    printf 'config-shell\tabsolute-locked-sh-v1\n'
+    printf 'build-path-policy\tdeterministic-input-key-v1\n'
+    printf 'lc-all\tC\n'
+    printf 'lang\tC\n'
+    printf 'tz\tUTC\n'
     printf 'arch\tarm64\n'
-    printf 'cross-compile\taarch64-linux-gnu-\n'
+    printf 'cross-compile\t/usr/bin/aarch64-linux-gnu-\n'
     printf 'kconfig-notimestamp\t1\n'
-    printf 'kcflags\tunset\n'
-    printf 'kaflags\tunset\n'
+    printf 'dtb-contract\ttb321fu-aw86937-dual-v1\n'
+    printf 'depmod-config\tempty-private-v1\n'
+    printf 'kcflags\tdebug-prefix-map-source-and-build-v1\n'
+    printf 'kaflags\tdebug-prefix-map-source-and-build-v1\n'
     printf 'kcppflags\tunset\n'
     printf 'krustflags\tunset\n'
     printf 'kbuild-cflags\tunset\n'
@@ -305,8 +364,23 @@ write_kernel_metadata_evidence() {
     printf 'hostldflags\tunset\n'
     printf 'usercflags\tunset\n'
     printf 'userldflags\tunset\n'
-    printf 'makeflags\tunset\n'
-    printf 'makeoverrides\tunset\n'
+    for variable in \
+      localversion dtc dtc-flags objcopyflags \
+      host-extracflags host-extracxxflags host-extrarustflags hostldlibs \
+      procmacroldflags kbuild-extra-warn kbuild-clippy kbuild-checksrc \
+      kbuild-extmod-output kbuild-nocmddep kbuild-nsdeps kbuild-preserve \
+      kbuild-symtypes kbuild-gendwarfksyms-stable kbuild-kconfig \
+      kconfig-autoconfig kconfig-autoheader config-prefix \
+      kconfig-defconfig-list kconfig-allconfig kconfig-overwriteconfig \
+      kconfig-warn-unknown-symbols kconfig-werror kconfig-nosilentupdate \
+      makefiles gnumakeflags makeflags mflags makeoverrides cpath \
+      gcc-exec-prefix compiler-path library-path pkg-config-path \
+      tar-options gzip-env xz-opt xz-defaults; do
+      printf '%s\tunset\n' "$variable"
+    done
+    printf 'dpkg-deb-threads-max\t1\n'
+    printf 'dpkg-deb-compressor-type\txz\n'
+    printf 'dpkg-deb-compressor-level\t6\n'
     printf 'source-date-epoch\t%s\n' "$epoch"
     printf 'kbuild-build-timestamp\t2026-07-15 00:00:00 UTC\n'
     printf 'kbuild-build-user\ttb321fu-ci\n'
@@ -856,15 +930,46 @@ write_baseline_haptics_deb() {
     "usr/lib/modules/$release/extra/aw86937-haptics.ko" "$release"
 }
 
+write_haptics_build_tools_manifest() {
+  local manifest="$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+  local records="$tmp/HAPTICS-BUILD-TOOLS.records"
+  local name digest
+
+  rm -f -- "$manifest" "$records"
+  digest=$(printf 'd%.0s' {1..64})
+  for name in "${haptics_build_tool_names[@]}"; do
+    printf 'tool\t%s\t/usr/bin/%s\t%s\tfixture %s 1.0\n' \
+      "$name" "$name" "$digest" "$name" >> "$records"
+  done
+  haptics_build_toolset_sha=$(sha "$records")
+  {
+    printf 'schema\ttb321fu.haptics-build-tools/v1\n'
+    printf 'environment-policy\tisolated-allowlist-v1\n'
+    printf 'environment-policy-sha256\t%s\n' "$haptics_environment_policy_sha"
+    printf 'build-toolset-sha256\t%s\n' "$haptics_build_toolset_sha"
+    cat "$records"
+  } > "$manifest"
+  chmod 0644 "$manifest"
+  rm -f -- "$records"
+}
+
 write_haptics_lock() {
   local bundle_id=$1
   local producer_commit=${2:-$haptics_commit}
   local producer_state=${3:-clean}
+  local build_tools_manifest_sha
+
+  build_tools_manifest_sha=$(sha "$haptics_root/HAPTICS-BUILD-TOOLS.tsv")
   {
-    printf 'schema\ttb321fu.haptics-source-lock/v2\n'
+    printf 'schema\ttb321fu.haptics-source-lock/v3\n'
     printf 'haptics-output-mode\trelease-candidate\n'
     printf 'haptics-producer-commit\t%s\n' "$producer_commit"
     printf 'haptics-producer-state\t%s\n' "$producer_state"
+    printf 'environment-policy\tisolated-allowlist-v1\n'
+    printf 'environment-policy-sha256\t%s\n' "$haptics_environment_policy_sha"
+    printf 'build-toolset-sha256\t%s\n' "$haptics_build_toolset_sha"
+    printf 'build-tools-manifest\tHAPTICS-BUILD-TOOLS.tsv\n'
+    printf 'build-tools-manifest-sha256\t%s\n' "$build_tools_manifest_sha"
     printf 'aw86937-driver-sha256\t%s\n' "$haptics_driver_sha"
     printf 'aw86937-build-source-sha256\t%s\n' "$haptics_build_source_sha"
     printf 'haptic-ram-firmware-sha256\t%s\n' "$haptic_ram_sha"
@@ -910,6 +1015,7 @@ write_haptics_checksum_manifest() {
   (cd "$haptics_root" && sha256sum \
     ./"$(basename -- "$deb")" \
     ./HAPTICS-SOURCE-LOCK.tsv \
+    ./HAPTICS-BUILD-TOOLS.tsv \
     ./HAPTICS-PRODUCER.bundle \
     ./HAPTICS-SOURCE-SNAPSHOT/source/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c \
     ./HAPTICS-SOURCE-SNAPSHOT/build/aw86937-haptics.c \
@@ -1074,6 +1180,7 @@ write_sensor_metadata
 make_deb tb321fu-haptics "$haptics_root/tb321fu-haptics_20260715.1_arm64.deb" \
   "usr/lib/modules/$release/extra/aw86937-haptics.ko" "$release"
 write_haptics_snapshot
+write_haptics_build_tools_manifest
 write_haptics_lock "$kernel_bundle_id"
 write_haptics_producer_bundle
 pack_archives
@@ -1092,6 +1199,10 @@ grep -Fxq $'haptics-module-sha256\t'"$expected_haptics_module_sha" \
   "$success_dir/VERIFIED-INPUTS.tsv"
 grep -Fxq $'haptics-helper-binary-sha256\t'"$expected_haptics_helper_binary_sha" \
   "$success_dir/VERIFIED-INPUTS.tsv"
+cmp -s "$haptics_root/HAPTICS-BUILD-TOOLS.tsv" \
+  "$success_dir/HAPTICS-BUILD-TOOLS.tsv"
+grep -Fxq $'schema\ttb321fu.haptics-build-tools/v1' \
+  "$success_dir/HAPTICS-BUILD-TOOLS.tsv"
 grep -Fxq $'producer_repository\t'"$kernel_producer_repository" \
   "$success_dir/KERNEL-SOURCE-LOCK.tsv"
 grep -Fxq $'producer_tree\t'"$kernel_producer_tree" \
@@ -1514,6 +1625,95 @@ pack_archives
 require_failure haptics-source-date-mismatch 'haptics source-date-epoch mismatch'
 write_haptics_lock "$kernel_bundle_id"
 
+mv "$haptics_root/HAPTICS-BUILD-TOOLS.tsv" "$tmp/HAPTICS-BUILD-TOOLS.saved.tsv"
+pack_archives_raw
+require_failure haptics-build-tools-missing \
+  'HAPTICS-BUILD-TOOLS.tsv must occur exactly once'
+mv "$tmp/HAPTICS-BUILD-TOOLS.saved.tsv" "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+
+chmod 0600 "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+pack_archives
+require_failure haptics-build-tools-mode \
+  'HAPTICS-BUILD-TOOLS.tsv must have mode 0644'
+chmod 0644 "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+
+mapfile -t haptics_build_tool_lines < "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+printf '%s\n' "${haptics_build_tool_lines[@]:0:${#haptics_build_tool_lines[@]}-1}" > \
+  "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+pack_archives
+require_failure haptics-build-tools-record-missing \
+  'haptics build-tools manifest must contain exactly four headers and 64 tool records'
+write_haptics_build_tools_manifest
+write_haptics_lock "$kernel_bundle_id"
+
+sed -i 's/fixture bash 1\.0/fixture bash 1.1/' \
+  "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+forged_toolset_sha=$(tail -n +5 "$haptics_root/HAPTICS-BUILD-TOOLS.tsv" | sha256sum | awk '{print $1}')
+sed -i \
+  "s/^build-toolset-sha256.*/build-toolset-sha256\\t$forged_toolset_sha/" \
+  "$haptics_root/HAPTICS-BUILD-TOOLS.tsv" \
+  "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
+pack_archives
+require_failure haptics-build-tools-tamper \
+  'haptics build-tools manifest SHA-256 mismatch'
+write_haptics_build_tools_manifest
+write_haptics_lock "$kernel_bundle_id"
+
+sed -i $'s#tool\tbash\t/usr/bin/bash\t#tool\tbash\trelative/bash\t#' \
+  "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+pack_archives
+require_failure haptics-build-tools-path \
+  'haptics build-tool path is outside the canonical producer PATH: bash'
+write_haptics_build_tools_manifest
+write_haptics_lock "$kernel_bundle_id"
+
+invalid_haptics_tool_sha=$(printf 'z%.0s' {1..64})
+valid_haptics_tool_sha=$(printf 'd%.0s' {1..64})
+sed -i "5s/$valid_haptics_tool_sha/$invalid_haptics_tool_sha/" \
+  "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+pack_archives
+require_failure haptics-build-tools-sha \
+  'invalid haptics build-tool SHA-256: bash'
+write_haptics_build_tools_manifest
+write_haptics_lock "$kernel_bundle_id"
+
+long_haptics_tool_version=$(printf 'v%.0s' {1..241})
+sed -i "5s/fixture bash 1\.0/$long_haptics_tool_version/" \
+  "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+pack_archives
+require_failure haptics-build-tools-version \
+  'invalid haptics build-tool version: bash'
+write_haptics_build_tools_manifest
+write_haptics_lock "$kernel_bundle_id"
+
+mapfile -t haptics_build_tool_lines < "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+{
+  printf '%s\n' "${haptics_build_tool_lines[@]:0:4}"
+  printf '%s\n' "${haptics_build_tool_lines[5]}" "${haptics_build_tool_lines[4]}"
+  printf '%s\n' "${haptics_build_tool_lines[@]:6}"
+} > "$haptics_root/HAPTICS-BUILD-TOOLS.tsv"
+pack_archives
+require_failure haptics-build-tools-order \
+  'unexpected haptics build-tool order at line 5'
+write_haptics_build_tools_manifest
+write_haptics_lock "$kernel_bundle_id"
+
+sed -i \
+  's/^environment-policy\tisolated-allowlist-v1$/environment-policy\thostile-policy/' \
+  "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
+pack_archives
+require_failure haptics-build-environment-policy \
+  'haptics source lock has an unexpected build-environment policy'
+write_haptics_lock "$kernel_bundle_id"
+
+sed -i \
+  "s/^environment-policy-sha256.*/environment-policy-sha256\\t$(printf '0%.0s' {1..64})/" \
+  "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
+pack_archives
+require_failure haptics-build-environment-policy-sha \
+  'haptics source lock environment-policy SHA-256 mismatch'
+write_haptics_lock "$kernel_bundle_id"
+
 printf 'tampered-driver-source' > \
   "$haptics_root/HAPTICS-SOURCE-SNAPSHOT/source/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c"
 pack_archives
@@ -1704,6 +1904,18 @@ mapfile -t haptics_manifest_lines < \
 pack_archives_raw
 require_failure haptics-manifest-reordered \
   'unexpected haptics checksum path/order at line 1'
+write_haptics_checksum_manifest
+
+mapfile -t haptics_manifest_lines < \
+  "$haptics_root/SHA256SUMS-tb321fu-haptics-debs.txt"
+{
+  printf '%s\n' "${haptics_manifest_lines[0]}"
+  printf '%s\n' "${haptics_manifest_lines[2]}" "${haptics_manifest_lines[1]}"
+  printf '%s\n' "${haptics_manifest_lines[@]:3}"
+} > "$haptics_root/SHA256SUMS-tb321fu-haptics-debs.txt"
+pack_archives_raw
+require_failure haptics-build-tools-checksum-order \
+  'unexpected haptics checksum path/order at line 2'
 write_haptics_checksum_manifest
 
 cp "$haptics_root/tb321fu-haptics_20260715.1_arm64.deb" \

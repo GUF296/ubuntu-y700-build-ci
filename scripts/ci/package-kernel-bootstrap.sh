@@ -1,6 +1,121 @@
-#!/usr/bin/env bash
+#!/bin/sh
+
+PRODUCER_CANONICAL_PATH=/usr/sbin:/usr/bin:/sbin:/bin
+PRODUCER_ENV_POLICY=isolated-allowlist-v1
+
+# Use a fixed POSIX interpreter for the first instructions: noninteractive
+# Bash would process an inherited BASH_ENV before any script code. This small
+# preamble passes every documented input literally into a new empty environment
+# and only then starts the fixed Bash interpreter used by the producer body.
+if [ "${TB321FU_KERNEL_PRODUCER_ENV_POLICY-}" != "$PRODUCER_ENV_POLICY" ] ||
+   [ -z "${BASH_VERSION-}" ]; then
+  clean_script=$(/usr/bin/realpath -e -- "$0") || {
+    printf 'error: cannot resolve kernel bootstrap producer path\n' >&2
+    exit 1
+  }
+  exec /usr/bin/env -i \
+    PATH="$PRODUCER_CANONICAL_PATH" \
+    HOME=/nonexistent \
+    LANG=C \
+    LC_ALL=C \
+    TZ=UTC \
+    TB321FU_KERNEL_PRODUCER_ENV_POLICY="$PRODUCER_ENV_POLICY" \
+    KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR-}" \
+    KERNEL_GIT_DIR="${KERNEL_GIT_DIR-}" \
+    KERNEL_BUILD_DIR="${KERNEL_BUILD_DIR-}" \
+    EXPECTED_KERNEL_COMMIT="${EXPECTED_KERNEL_COMMIT-}" \
+    EXPECTED_KERNEL_CONFIG_SHA256="${EXPECTED_KERNEL_CONFIG_SHA256-}" \
+    EXPECTED_KERNEL_RELEASE="${EXPECTED_KERNEL_RELEASE-}" \
+    KERNEL_PACKAGE_VERSION="${KERNEL_PACKAGE_VERSION-}" \
+    BASE_DEVICE_DEB_ARCHIVE="${BASE_DEVICE_DEB_ARCHIVE-}" \
+    BASE_DEVICE_DEB_ARCHIVE_SHA256="${BASE_DEVICE_DEB_ARCHIVE_SHA256-}" \
+    OUTPUT_DIR="${OUTPUT_DIR-}" \
+    SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH-}" \
+    KERNEL_BUILD_JOBS="${KERNEL_BUILD_JOBS-}" \
+    ARCH="${ARCH-}" \
+    CROSS_COMPILE="${CROSS_COMPILE-}" \
+    DTB_NAME="${DTB_NAME-}" \
+    KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP-}" \
+    KBUILD_BUILD_USER="${KBUILD_BUILD_USER-}" \
+    KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST-}" \
+    KBUILD_BUILD_VERSION="${KBUILD_BUILD_VERSION-}" \
+    KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY="${KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY-}" \
+    GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+    KERNEL_RUSTC="${KERNEL_RUSTC-}" \
+    HTTPS_PROXY="${HTTPS_PROXY-}" \
+    HTTP_PROXY="${HTTP_PROXY-}" \
+    NO_PROXY="${NO_PROXY-}" \
+    https_proxy="${https_proxy-}" \
+    http_proxy="${http_proxy-}" \
+    no_proxy="${no_proxy-}" \
+    /usr/bin/bash --noprofile --norc "$clean_script" "$@"
+fi
+
 set -euo pipefail
 umask 022
+
+readonly PRODUCER_CANONICAL_PATH
+readonly PRODUCER_ENV_POLICY
+readonly KBUILD_PATH_POLICY=private-locked-tool-directory-v1
+readonly KBUILD_CONFIG_SHELL_POLICY=absolute-locked-sh-v1
+readonly KBUILD_PATH_IDENTITY_POLICY=deterministic-input-key-v1
+readonly KBUILD_KCFLAGS_POLICY=debug-prefix-map-source-and-build-v1
+readonly -a PRODUCER_INPUT_ENV=(
+  KERNEL_SOURCE_DIR
+  KERNEL_GIT_DIR
+  KERNEL_BUILD_DIR
+  EXPECTED_KERNEL_COMMIT
+  EXPECTED_KERNEL_CONFIG_SHA256
+  EXPECTED_KERNEL_RELEASE
+  KERNEL_PACKAGE_VERSION
+  BASE_DEVICE_DEB_ARCHIVE
+  BASE_DEVICE_DEB_ARCHIVE_SHA256
+  OUTPUT_DIR
+  SOURCE_DATE_EPOCH
+  KERNEL_BUILD_JOBS
+  ARCH
+  CROSS_COMPILE
+  DTB_NAME
+  KBUILD_BUILD_TIMESTAMP
+  KBUILD_BUILD_USER
+  KBUILD_BUILD_HOST
+  KBUILD_BUILD_VERSION
+  KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY
+  GITHUB_REPOSITORY
+  KERNEL_RUSTC
+  HTTPS_PROXY
+  HTTP_PROXY
+  NO_PROXY
+  https_proxy
+  http_proxy
+  no_proxy
+)
+
+[ "$PATH" = "$PRODUCER_CANONICAL_PATH" ] &&
+  [ "${HOME:-}" = /nonexistent ] &&
+  [ "${LANG:-}" = C ] &&
+  [ "${LC_ALL:-}" = C ] &&
+  [ "${TZ:-}" = UTC ] || {
+    printf 'error: invalid kernel bootstrap producer environment policy\n' >&2
+    exit 1
+  }
+
+while IFS= read -r exported_name; do
+  case "$exported_name" in
+    PATH|HOME|LANG|LC_ALL|TZ|PWD|OLDPWD|SHLVL|_|TB321FU_KERNEL_PRODUCER_ENV_POLICY) continue ;;
+  esac
+  exported_allowed=0
+  for clean_name in "${PRODUCER_INPUT_ENV[@]}"; do
+    if [ "$exported_name" = "$clean_name" ]; then
+      exported_allowed=1
+      break
+    fi
+  done
+  [ "$exported_allowed" -eq 1 ] || {
+    printf 'error: unexpected exported producer variable: %s\n' "$exported_name" >&2
+    exit 1
+  }
+done < <(compgen -e | LC_ALL=C /usr/bin/sort)
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=common.sh
@@ -16,7 +131,8 @@ Required environment:
   KERNEL_BUILD_DIR              completed out-of-tree kernel build
   EXPECTED_KERNEL_COMMIT        exact 40-hex source commit
   EXPECTED_KERNEL_CONFIG_SHA256 exact approved post-olddefconfig .config digest
-  KERNEL_PACKAGE_VERSION        Debian version for the modules package
+  EXPECTED_KERNEL_RELEASE       exact kernelrelease from the authoritative refs
+  KERNEL_PACKAGE_VERSION        Debian version; must equal EXPECTED_KERNEL_RELEASE
   BASE_DEVICE_DEB_ARCHIVE       tested device archive to update
   BASE_DEVICE_DEB_ARCHIVE_SHA256
 
@@ -44,8 +160,10 @@ Options:
 
 The baseline rootfs-overlay DEB and compat overlay are copied byte-for-byte.
   Only the kernel-modules DEB is replaced. Image, DTB and modules must come from
-  the same clean, commit-bound build. The output also records a deterministic
-  kernel SDK tree manifest; it avoids copying a second, potentially multi-GB SDK.
+  the same clean, commit-bound build. The first canonical closure emits the full
+  kernel SDK archive plus its deterministic tree manifest; allow several GiB of
+  temporary build space. Minimal-SDK optimization is deferred until the matching
+  external haptics module has built successfully from this exact archive.
 EOF
 }
 
@@ -56,47 +174,466 @@ case "${1:-}" in
 esac
 [ "$#" -eq 0 ] || { usage >&2; exit 2; }
 
-for command in git make sha256sum find sort xargs rsync cp dpkg dpkg-deb depmod modinfo tar gzip touch realpath nproc date install awk stat grep sed readlink wc tr; do
-  ci_require_cmd "$command"
+declare -A LOCKED_TOOL_PATH=()
+declare -A LOCKED_TOOL_COMMAND_PATH=()
+declare -A LOCKED_TOOL_COMMAND_NAME=()
+declare -A LOCKED_TOOL_SHA256=()
+declare -A LOCKED_TOOL_VERSION=()
+declare -A LOCKED_TOOL_STATE=()
+declare -A LOCKED_TOOL_COMMAND_STATE=()
+BISON_DATA_DIR=
+BISON_DATA_SHA256=
+BISON_DATA_STATE=
+
+resolve_tool_path() {
+  local label=$1 command=$2 candidate command_directory command_path path
+
+  if [[ $command = */* ]]; then
+    candidate=$command
+  else
+    candidate=$(type -P -- "$command") || ci_die "required command not found: $command"
+  fi
+  command_directory=$(/usr/bin/realpath -e -- "$(/usr/bin/dirname -- "$candidate")") ||
+    ci_die "cannot resolve tool directory: $command"
+  command_path="$command_directory/$(/usr/bin/basename -- "$candidate")"
+  path=$(/usr/bin/realpath -e -- "$command_path") ||
+    ci_die "cannot resolve tool: $command"
+  [ -f "$path" ] && [ -x "$path" ] ||
+    ci_die "tool is not an executable regular file: $command"
+  LOCKED_TOOL_COMMAND_PATH["$label"]=$command_path
+  LOCKED_TOOL_COMMAND_NAME["$label"]=$(/usr/bin/basename -- "$command_path")
+  LOCKED_TOOL_PATH["$label"]=$path
+}
+
+capture_tool_identity() {
+  local label=$1 mode=${2:---version} path output line digest state
+
+  path=${LOCKED_TOOL_PATH[$label]:-}
+  [ -n "$path" ] || ci_die "tool path was not locked: $label"
+  digest=$(${LOCKED_TOOL_PATH[sha256sum]} -- "$path")
+  read -r digest _ <<<"$digest"
+  [[ $digest =~ ^[0-9a-f]{64}$ ]] || ci_die "cannot hash locked tool: $label"
+  case "$mode" in
+    awk) output=$("$path" -W version 2>&1 || true) ;;
+    *) output=$("$path" "$mode" 2>&1 || true) ;;
+  esac
+  line=
+  while IFS= read -r state; do
+    if [ -n "$state" ]; then
+      line=$state
+      break
+    fi
+  done <<<"$output"
+  [ -n "$line" ] && [ "${#line}" -le 255 ] &&
+    [[ $line != *$'\t'* && $line != *$'\r'* && $line != *$'\n'* ]] &&
+    [[ $line =~ ^[[:print:]]+$ ]] ||
+    ci_die "invalid locked tool version: $label"
+  state=$(${LOCKED_TOOL_PATH[stat]} -Lc '%d:%i:%s:%Y' -- "$path") ||
+    ci_die "cannot stat locked tool: $label"
+  LOCKED_TOOL_SHA256["$label"]=$digest
+  LOCKED_TOOL_VERSION["$label"]=$line
+  LOCKED_TOOL_STATE["$label"]=$state
+  LOCKED_TOOL_COMMAND_STATE["$label"]=$(${LOCKED_TOOL_PATH[stat]} -c '%d:%i:%s:%Y:%F' -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
+    ci_die "cannot stat locked tool invocation path: $label"
+}
+
+canonical_data_tree_sha256() {
+  local root=$1 output digest
+
+  output=$("${LOCKED_TOOL_PATH[tar]}" \
+    --sort=name \
+    --format=gnu \
+    --numeric-owner \
+    --owner=0 \
+    --group=0 \
+    --mtime=@0 \
+    -C "$root" \
+    -cf - \
+    . | "${LOCKED_TOOL_PATH[sha256sum]}") ||
+    ci_die "cannot hash canonical data tree: $root"
+  read -r digest _ <<<"$output"
+  [[ $digest =~ ^[0-9a-f]{64}$ ]] ||
+    ci_die "invalid canonical data-tree SHA-256: $root"
+  printf '%s\n' "$digest"
+}
+
+capture_bison_data_identity() {
+  local reported resolved bad_entry bad_mode entry_count total_size
+
+  reported=$("${LOCKED_TOOL_PATH[bison]}" --print-datadir) ||
+    ci_die 'cannot query the Bison data directory'
+  [ -n "$reported" ] && [ "${#reported}" -le 512 ] &&
+    [[ $reported = /* && $reported != *$'\t'* && $reported != *$'\r'* &&
+       $reported != *$'\n'* && $reported != *\\* ]] ||
+    ci_die 'Bison reported an unsafe data directory'
+  resolved=$("${LOCKED_TOOL_PATH[realpath]}" -e -- "$reported") ||
+    ci_die 'cannot resolve the Bison data directory'
+  [ "$reported" = "$resolved" ] && [ -d "$resolved" ] && [ ! -L "$resolved" ] ||
+    ci_die 'Bison data directory is not a canonical real directory'
+
+  bad_entry=$("${LOCKED_TOOL_PATH[find]}" "$resolved" -xdev -mindepth 1 \
+    ! -type d ! -type f -print -quit) ||
+    ci_die 'cannot inspect Bison data-tree entry types'
+  [ -z "$bad_entry" ] ||
+    ci_die "Bison data tree contains an unsupported entry: $bad_entry"
+  bad_mode=$("${LOCKED_TOOL_PATH[find]}" "$resolved" -xdev \
+    \( -type d ! -perm 0755 -o -type f ! -perm 0644 \) -print -quit) ||
+    ci_die 'cannot inspect Bison data-tree modes'
+  [ -z "$bad_mode" ] ||
+    ci_die "Bison data tree contains an unexpected mode: $bad_mode"
+  entry_count=$("${LOCKED_TOOL_PATH[find]}" "$resolved" -xdev -printf '.\n' |
+    "${LOCKED_TOOL_PATH[wc]}" -l) ||
+    ci_die 'cannot count Bison data-tree entries'
+  [ "$entry_count" -ge 2 ] && [ "$entry_count" -le 4096 ] ||
+    ci_die 'Bison data tree has an unsafe entry count'
+  total_size=$("${LOCKED_TOOL_PATH[find]}" "$resolved" -xdev -type f -printf '%s\n' |
+    "${LOCKED_TOOL_PATH[awk]}" '{ total += $1 } END { print total + 0 }') ||
+    ci_die 'cannot measure the Bison data tree'
+  [ "$total_size" -gt 0 ] && [ "$total_size" -le 16777216 ] ||
+    ci_die 'Bison data tree has an unsafe logical size'
+
+  BISON_DATA_DIR=$resolved
+  BISON_DATA_SHA256=$(canonical_data_tree_sha256 "$resolved")
+  BISON_DATA_STATE=$("${LOCKED_TOOL_PATH[stat]}" -Lc '%d:%i:%s:%Y' -- "$resolved") ||
+    ci_die 'cannot stat the Bison data directory'
+}
+
+verify_bison_data_identity() {
+  local phase=$1 reported resolved state digest
+
+  [ -n "$BISON_DATA_DIR" ] && [ -n "$BISON_DATA_SHA256" ] &&
+    [ -n "$BISON_DATA_STATE" ] ||
+    ci_die "Bison data identity was not captured $phase"
+  reported=$("${LOCKED_TOOL_PATH[bison]}" --print-datadir) ||
+    ci_die "cannot query the Bison data directory $phase"
+  [ "$reported" = "$BISON_DATA_DIR" ] ||
+    ci_die "Bison data directory changed $phase"
+  resolved=$("${LOCKED_TOOL_PATH[realpath]}" -e -- "$reported") ||
+    ci_die "Bison data directory disappeared $phase"
+  [ "$resolved" = "$BISON_DATA_DIR" ] && [ -d "$resolved" ] && [ ! -L "$resolved" ] ||
+    ci_die "Bison data directory identity changed $phase"
+  state=$("${LOCKED_TOOL_PATH[stat]}" -Lc '%d:%i:%s:%Y' -- "$resolved") ||
+    ci_die "cannot stat the Bison data directory $phase"
+  [ "$state" = "$BISON_DATA_STATE" ] ||
+    ci_die "Bison data directory state changed $phase"
+  digest=$(canonical_data_tree_sha256 "$resolved")
+  [ "$digest" = "$BISON_DATA_SHA256" ] ||
+    ci_die "Bison data tree bytes changed $phase"
+}
+
+mark_tool_unused() {
+  local label=$1
+
+  LOCKED_TOOL_PATH["$label"]=unused
+  LOCKED_TOOL_COMMAND_PATH["$label"]=unused
+  LOCKED_TOOL_COMMAND_NAME["$label"]=unused
+  LOCKED_TOOL_SHA256["$label"]=unused
+  LOCKED_TOOL_VERSION["$label"]=unused
+  LOCKED_TOOL_STATE["$label"]=unused
+  LOCKED_TOOL_COMMAND_STATE["$label"]=unused
+}
+
+verify_locked_tools() {
+  local phase=$1 label path state digest resolved command_state
+
+  for label in "${!LOCKED_TOOL_SHA256[@]}"; do
+    [ "${LOCKED_TOOL_SHA256[$label]}" != unused ] || continue
+    path=${LOCKED_TOOL_PATH[$label]}
+    resolved=$(${LOCKED_TOOL_PATH[realpath]} -e -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
+      ci_die "locked tool invocation path disappeared $phase: $label"
+    [ "$resolved" = "$path" ] ||
+      ci_die "locked tool invocation target changed $phase: $label"
+    command_state=$(${LOCKED_TOOL_PATH[stat]} -c '%d:%i:%s:%Y:%F' -- "${LOCKED_TOOL_COMMAND_PATH[$label]}") ||
+      ci_die "cannot stat locked tool invocation path $phase: $label"
+    [ "$command_state" = "${LOCKED_TOOL_COMMAND_STATE[$label]}" ] ||
+      ci_die "locked tool invocation path changed $phase: $label"
+    [ -f "$path" ] && [ -x "$path" ] ||
+      ci_die "locked tool disappeared $phase: $label"
+    state=$(${LOCKED_TOOL_PATH[stat]} -Lc '%d:%i:%s:%Y' -- "$path") ||
+      ci_die "cannot stat locked tool $phase: $label"
+    [ "$state" = "${LOCKED_TOOL_STATE[$label]}" ] ||
+      ci_die "locked tool identity changed $phase: $label"
+    digest=$(${LOCKED_TOOL_PATH[sha256sum]} -- "$path")
+    read -r digest _ <<<"$digest"
+    [ "$digest" = "${LOCKED_TOOL_SHA256[$label]}" ] ||
+      ci_die "locked tool bytes changed $phase: $label"
+  done
+  verify_bison_data_identity "$phase"
+}
+
+for tool_spec in \
+  bash:bash git:git make:make sha256sum:sha256sum find:find sort:sort \
+  xargs:xargs rsync:rsync cp:cp dpkg:dpkg dpkg-deb:dpkg-deb \
+  depmod:depmod modinfo:modinfo tar:tar gzip:gzip xz:xz touch:touch \
+  realpath:realpath nproc:nproc date:date install:install awk:awk \
+  stat:stat grep:grep sed:sed readlink:readlink wc:wc tr:tr cut:cut \
+  findmnt:findmnt curl:curl \
+  python3:python3 fdtget:fdtget flock:flock mv:mv chmod:chmod mkdir:mkdir \
+  mktemp:mktemp rm:rm cat:cat dirname:dirname basename:basename env:env \
+  host-gcc:gcc host-gxx:g++ host-as:as host-ld:ld host-ar:ar \
+  flex:flex bison:bison m4:m4 perl:perl \
+  pkg-config:pkg-config true:true sh:sh bc:bc getconf:getconf \
+  sha1sum:sha1sum ln:ln uname:uname cmp:cmp head:head expr:expr uniq:uniq; do
+  resolve_tool_path "${tool_spec%%:*}" "${tool_spec#*:}"
 done
+
+for tool_label in \
+  bash git make sha256sum find sort xargs rsync cp dpkg dpkg-deb depmod \
+  modinfo tar gzip xz touch realpath nproc date install stat grep sed \
+  readlink wc tr cut findmnt curl python3 fdtget flock mv chmod mkdir mktemp rm cat dirname \
+  basename env host-gcc host-gxx host-as host-ld host-ar flex bison m4 \
+  perl pkg-config true sh bc getconf \
+  sha1sum ln uname cmp head expr uniq; do
+  capture_tool_identity "$tool_label"
+done
+capture_tool_identity awk awk
+
+readonly BASH_BIN=${LOCKED_TOOL_PATH[bash]}
+readonly GIT_BIN=${LOCKED_TOOL_PATH[git]}
+readonly MAKE_BIN=${LOCKED_TOOL_PATH[make]}
+readonly SHA256SUM_BIN=${LOCKED_TOOL_PATH[sha256sum]}
+readonly FIND_BIN=${LOCKED_TOOL_PATH[find]}
+readonly SORT_BIN=${LOCKED_TOOL_PATH[sort]}
+readonly XARGS_BIN=${LOCKED_TOOL_PATH[xargs]}
+readonly RSYNC_BIN=${LOCKED_TOOL_PATH[rsync]}
+readonly CP_BIN=${LOCKED_TOOL_PATH[cp]}
+readonly DPKG_BIN=${LOCKED_TOOL_PATH[dpkg]}
+readonly DPKG_DEB_BIN=${LOCKED_TOOL_PATH[dpkg-deb]}
+readonly DEPMOD_BIN=${LOCKED_TOOL_PATH[depmod]}
+readonly MODINFO_BIN=${LOCKED_TOOL_PATH[modinfo]}
+readonly TAR_BIN=${LOCKED_TOOL_PATH[tar]}
+readonly GZIP_BIN=${LOCKED_TOOL_PATH[gzip]}
+readonly XZ_BIN=${LOCKED_TOOL_PATH[xz]}
+readonly FDTGET_BIN=${LOCKED_TOOL_PATH[fdtget]}
+readonly FLOCK_BIN=${LOCKED_TOOL_PATH[flock]}
+readonly MV_BIN=${LOCKED_TOOL_PATH[mv]}
+readonly READLINK_BIN=${LOCKED_TOOL_PATH[readlink]}
+readonly LN_BIN=${LOCKED_TOOL_PATH[ln]}
+readonly SH_BIN=${LOCKED_TOOL_PATH[sh]}
+readonly HOST_GCC_BIN=${LOCKED_TOOL_PATH[host-gcc]}
+readonly HOST_GXX_BIN=${LOCKED_TOOL_PATH[host-gxx]}
+readonly HOST_AS_BIN=${LOCKED_TOOL_PATH[host-as]}
+readonly HOST_LD_BIN=${LOCKED_TOOL_PATH[host-ld]}
+readonly HOST_AR_BIN=${LOCKED_TOOL_PATH[host-ar]}
+readonly FLEX_BIN=${LOCKED_TOOL_PATH[flex]}
+readonly BISON_BIN=${LOCKED_TOOL_PATH[bison]}
+readonly M4_BIN=${LOCKED_TOOL_PATH[m4]}
+[ "${LOCKED_TOOL_COMMAND_PATH[m4]}" = /usr/bin/m4 ] ||
+  ci_die 'Bison/Flex require the canonical absolute /usr/bin/m4 invocation path'
+readonly AWK_BIN=${LOCKED_TOOL_PATH[awk]}
+readonly PERL_BIN=${LOCKED_TOOL_PATH[perl]}
+readonly PYTHON3_BIN=${LOCKED_TOOL_PATH[python3]}
+readonly PKG_CONFIG_BIN=${LOCKED_TOOL_PATH[pkg-config]}
+readonly TRUE_BIN=${LOCKED_TOOL_PATH[true]}
+capture_bison_data_identity
+readonly BISON_DATA_DIR BISON_DATA_SHA256 BISON_DATA_STATE
+
+# Common helpers call these names directly. Keep their existing interfaces but
+# bind every invocation in this producer process to the path captured above.
+sha256sum() { "$SHA256SUM_BIN" "$@"; }
+find() { "${LOCKED_TOOL_PATH[find]}" "$@"; }
+sort() { "$SORT_BIN" "$@"; }
+xargs() { "$XARGS_BIN" "$@"; }
+rsync() { "$RSYNC_BIN" "$@"; }
+cp() { "$CP_BIN" "$@"; }
+dpkg() { "$DPKG_BIN" "$@"; }
+touch() { "${LOCKED_TOOL_PATH[touch]}" "$@"; }
+realpath() { "${LOCKED_TOOL_PATH[realpath]}" "$@"; }
+nproc() { "${LOCKED_TOOL_PATH[nproc]}" "$@"; }
+date() { "${LOCKED_TOOL_PATH[date]}" "$@"; }
+install() { "${LOCKED_TOOL_PATH[install]}" "$@"; }
+awk() { "$AWK_BIN" "$@"; }
+stat() { "${LOCKED_TOOL_PATH[stat]}" "$@"; }
+grep() { "${LOCKED_TOOL_PATH[grep]}" "$@"; }
+sed() { "${LOCKED_TOOL_PATH[sed]}" "$@"; }
+readlink() { "${LOCKED_TOOL_PATH[readlink]}" "$@"; }
+wc() { "${LOCKED_TOOL_PATH[wc]}" "$@"; }
+tr() { "${LOCKED_TOOL_PATH[tr]}" "$@"; }
+cut() { "${LOCKED_TOOL_PATH[cut]}" "$@"; }
+findmnt() { "${LOCKED_TOOL_PATH[findmnt]}" "$@"; }
+curl() { "${LOCKED_TOOL_PATH[curl]}" "$@"; }
+python3() { "$PYTHON3_BIN" "$@"; }
+mv() { "$MV_BIN" "$@"; }
+chmod() { "${LOCKED_TOOL_PATH[chmod]}" "$@"; }
+mkdir() { "${LOCKED_TOOL_PATH[mkdir]}" "$@"; }
+mktemp() { "${LOCKED_TOOL_PATH[mktemp]}" "$@"; }
+rm() { "${LOCKED_TOOL_PATH[rm]}" "$@"; }
+cat() { "${LOCKED_TOOL_PATH[cat]}" "$@"; }
+dirname() { "${LOCKED_TOOL_PATH[dirname]}" "$@"; }
+basename() { "${LOCKED_TOOL_PATH[basename]}" "$@"; }
+env() { "${LOCKED_TOOL_PATH[env]}" "$@"; }
+
+kernel_locked_path=
+kernel_kcflags=
+kernel_kaflags=
+prepare_kernel_locked_path() {
+  local destination=$1 label name link target
+  local -A expected_names=()
+
+  [ ! -e "$destination" ] && [ ! -L "$destination" ] ||
+    ci_die 'private Kbuild tool path already exists'
+  mkdir -m 0700 -- "$destination"
+  for label in "${!LOCKED_TOOL_PATH[@]}"; do
+    target=${LOCKED_TOOL_PATH[$label]}
+    [ "$target" != unused ] || continue
+    name=${LOCKED_TOOL_COMMAND_NAME[$label]}
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9+._-]{0,127}$ ]] ||
+      ci_die "unsafe private Kbuild tool name: $label"
+    link="$destination/$name"
+    if [ -n "${expected_names[$name]:-}" ]; then
+      [ "${expected_names[$name]}" = "$target" ] ||
+        ci_die "private Kbuild tool name collision: $name"
+      continue
+    fi
+    "$LN_BIN" -s -- "$target" "$link"
+    expected_names["$name"]=$target
+  done
+  verify_kernel_locked_path "$destination"
+}
+
+verify_kernel_locked_path() {
+  local destination=$1 label name link target resolved actual_count
+  local expected_count=0
+  local -A expected_names=()
+
+  [ -d "$destination" ] && [ ! -L "$destination" ] &&
+    [ "$(stat -c '%a' -- "$destination")" = 700 ] ||
+    ci_die 'private Kbuild tool path is not a real mode-0700 directory'
+  for label in "${!LOCKED_TOOL_PATH[@]}"; do
+    target=${LOCKED_TOOL_PATH[$label]}
+    [ "$target" != unused ] || continue
+    name=${LOCKED_TOOL_COMMAND_NAME[$label]}
+    if [ -n "${expected_names[$name]:-}" ]; then
+      [ "${expected_names[$name]}" = "$target" ] ||
+        ci_die "private Kbuild tool name collision: $name"
+      continue
+    fi
+    expected_names["$name"]=$target
+    expected_count=$((expected_count + 1))
+    link="$destination/$name"
+    [ -L "$link" ] || ci_die "private Kbuild tool link disappeared: $name"
+    [ "$("$READLINK_BIN" -- "$link")" = "$target" ] ||
+      ci_die "private Kbuild tool link target changed: $name"
+    resolved=$(realpath -e -- "$link") ||
+      ci_die "private Kbuild tool link became dangling: $name"
+    [ "$resolved" = "$target" ] ||
+      ci_die "private Kbuild tool link resolves to unexpected bytes: $name"
+  done
+  [ -z "$(find "$destination" -mindepth 1 -maxdepth 1 ! -type l -print -quit)" ] ||
+    ci_die 'private Kbuild tool path contains a non-symlink entry'
+  actual_count=$(find "$destination" -mindepth 1 -maxdepth 1 -type l | wc -l)
+  [ "$actual_count" -eq "$expected_count" ] ||
+    ci_die 'private Kbuild tool path contains an unexpected entry'
+}
+
+verify_kernel_release_identity() {
+  local actual_release=$1
+
+  [[ $actual_release =~ ^[0-9A-Za-z][0-9A-Za-z._+~-]{0,127}$ ]] ||
+    ci_die "unsafe kernel release: $actual_release"
+  [ "$actual_release" = "$EXPECTED_KERNEL_RELEASE" ] ||
+    ci_die "kernel release mismatch: expected $EXPECTED_KERNEL_RELEASE, got $actual_release"
+}
 
 : "${KERNEL_SOURCE_DIR:?set KERNEL_SOURCE_DIR}"
 : "${KERNEL_GIT_DIR:?set KERNEL_GIT_DIR}"
 : "${KERNEL_BUILD_DIR:?set KERNEL_BUILD_DIR}"
 : "${EXPECTED_KERNEL_COMMIT:?set EXPECTED_KERNEL_COMMIT}"
 : "${EXPECTED_KERNEL_CONFIG_SHA256:?set EXPECTED_KERNEL_CONFIG_SHA256}"
+: "${EXPECTED_KERNEL_RELEASE:?set EXPECTED_KERNEL_RELEASE}"
 : "${KERNEL_PACKAGE_VERSION:?set KERNEL_PACKAGE_VERSION}"
 : "${BASE_DEVICE_DEB_ARCHIVE:?set BASE_DEVICE_DEB_ARCHIVE}"
 : "${BASE_DEVICE_DEB_ARCHIVE_SHA256:?set BASE_DEVICE_DEB_ARCHIVE_SHA256}"
 
-ARCH=${ARCH:-arm64}
+if [ -n "${ARCH:-}" ] && [ "$ARCH" != arm64 ]; then
+  ci_die 'ARCH must be arm64'
+fi
+ARCH=arm64
 CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
 DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
 OUTPUT_DIR=${OUTPUT_DIR:-out/tb321fu-kernel-bootstrap}
 KERNEL_BUILD_JOBS=${KERNEL_BUILD_JOBS:-$(nproc)}
 KERNEL_RUSTC=${KERNEL_RUSTC:-}
 
+[ -n "$OUTPUT_DIR" ] && [ "${#OUTPUT_DIR}" -le 4096 ] &&
+  [[ $OUTPUT_DIR != *$'\t'* && $OUTPUT_DIR != *$'\r'* && $OUTPUT_DIR != *$'\n'* ]] &&
+  [[ $OUTPUT_DIR != *//* && $OUTPUT_DIR != */ && $OUTPUT_DIR != ../* &&
+     $OUTPUT_DIR != */../* && $OUTPUT_DIR != */.. && $OUTPUT_DIR != ./*/../* ]] ||
+  ci_die 'unsafe OUTPUT_DIR'
+early_output_name=${OUTPUT_DIR##*/}
+[[ $early_output_name =~ ^tb321fu-kernel-bootstrap([A-Za-z0-9._-]{0,96})$ ]] ||
+  ci_die "OUTPUT_DIR basename must be a bounded tb321fu-kernel-bootstrap name"
+
 [[ $EXPECTED_KERNEL_COMMIT =~ ^[0-9a-f]{40}$ ]] || ci_die "EXPECTED_KERNEL_COMMIT must be 40 lowercase hex characters"
 [[ $EXPECTED_KERNEL_CONFIG_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid EXPECTED_KERNEL_CONFIG_SHA256"
+[[ $EXPECTED_KERNEL_RELEASE =~ ^[0-9A-Za-z][0-9A-Za-z._+~-]{0,127}$ ]] || ci_die "unsafe EXPECTED_KERNEL_RELEASE"
 [[ $BASE_DEVICE_DEB_ARCHIVE_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid baseline archive SHA-256"
 [[ $DTB_NAME =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\.dtb$ ]] || ci_die "unsafe DTB_NAME"
 [[ $KERNEL_PACKAGE_VERSION =~ ^[0-9][0-9A-Za-z.+~_-]{0,63}$ ]] || ci_die "unsafe KERNEL_PACKAGE_VERSION"
+[ "$KERNEL_PACKAGE_VERSION" = "$EXPECTED_KERNEL_RELEASE" ] ||
+  ci_die 'KERNEL_PACKAGE_VERSION must equal EXPECTED_KERNEL_RELEASE'
+case "$EXPECTED_KERNEL_RELEASE" in
+  *-g"${EXPECTED_KERNEL_COMMIT:0:12}"*) ;;
+  *) ci_die "EXPECTED_KERNEL_RELEASE does not bind EXPECTED_KERNEL_COMMIT" ;;
+esac
 [[ $KERNEL_BUILD_JOBS =~ ^[1-9][0-9]{0,3}$ ]] || ci_die "invalid KERNEL_BUILD_JOBS"
 [[ $CROSS_COMPILE =~ ^/?[A-Za-z0-9][A-Za-z0-9._+/-]{0,254}-$ && $CROSS_COMPILE != *..* && $CROSS_COMPILE != *//* ]] ||
   ci_die "unsafe CROSS_COMPILE"
-dpkg --validate-version "$KERNEL_PACKAGE_VERSION" >/dev/null || ci_die "invalid KERNEL_PACKAGE_VERSION"
-for command in gcc as ld ar nm objcopy strip; do
-  ci_require_cmd "${CROSS_COMPILE}${command}"
+if [[ $CROSS_COMPILE = */* && $CROSS_COMPILE != /* ]]; then
+  ci_die 'CROSS_COMPILE containing a slash must be absolute'
+fi
+if [[ $CROSS_COMPILE = /* ]]; then
+  cross_directory=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$(${LOCKED_TOOL_PATH[dirname]} -- "$CROSS_COMPILE")") ||
+    ci_die 'cannot resolve CROSS_COMPILE directory'
+  cross_basename=$(${LOCKED_TOOL_PATH[basename]} -- "$CROSS_COMPILE")
+else
+  cross_gcc_candidate=$(type -P -- "${CROSS_COMPILE}gcc") ||
+    ci_die "required command not found: ${CROSS_COMPILE}gcc"
+  cross_directory=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$(${LOCKED_TOOL_PATH[dirname]} -- "$cross_gcc_candidate")") ||
+    ci_die 'cannot resolve CROSS_COMPILE directory'
+  cross_basename=$CROSS_COMPILE
+fi
+[[ $cross_basename =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}-$ ]] ||
+  ci_die 'unsafe CROSS_COMPILE basename'
+CROSS_COMPILE="$cross_directory/$cross_basename"
+[ "${#CROSS_COMPILE}" -le 257 ] &&
+  [[ $CROSS_COMPILE =~ ^/[A-Za-z0-9][A-Za-z0-9._+/-]{0,254}-$ &&
+     $CROSS_COMPILE != *..* && $CROSS_COMPILE != *//* ]] ||
+  ci_die 'canonical CROSS_COMPILE is not representable by the evidence schema'
+
+for cross_tool in gcc as ld ar nm objcopy objdump readelf strip; do
+  resolve_tool_path "$cross_tool" "${CROSS_COMPILE}${cross_tool}"
+  capture_tool_identity "$cross_tool"
 done
 
-kernel_source=$(realpath -e -- "$KERNEL_SOURCE_DIR")
-kernel_git=$(realpath -e -- "$KERNEL_GIT_DIR")
-kernel_build_input=$(realpath -e -- "$KERNEL_BUILD_DIR")
+${LOCKED_TOOL_PATH[dpkg]} --validate-version "$KERNEL_PACKAGE_VERSION" >/dev/null ||
+  ci_die "invalid KERNEL_PACKAGE_VERSION"
+
+for proxy_name in HTTPS_PROXY HTTP_PROXY https_proxy http_proxy; do
+  proxy_value=${!proxy_name}
+  if [ -n "$proxy_value" ]; then
+    [ "${#proxy_value}" -le 2048 ] &&
+      [[ $proxy_value =~ ^https?://[A-Za-z0-9._~:/@%+,-]+$ ]] ||
+      ci_die "invalid transport proxy variable: $proxy_name"
+  fi
+done
+for proxy_name in NO_PROXY no_proxy; do
+  proxy_value=${!proxy_name}
+  if [ -n "$proxy_value" ]; then
+    [ "${#proxy_value}" -le 2048 ] &&
+      [[ $proxy_value =~ ^[A-Za-z0-9.*_~:,-]*$ ]] ||
+      ci_die "invalid transport proxy variable: $proxy_name"
+  fi
+done
+
+kernel_source=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$KERNEL_SOURCE_DIR")
+kernel_git=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$KERNEL_GIT_DIR")
+kernel_build_input=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$KERNEL_BUILD_DIR")
 [ -d "$kernel_source" ] || ci_die "kernel source is not a directory"
 [ -d "$kernel_git/objects" ] || ci_die "KERNEL_GIT_DIR is not a Git object database"
 [ -d "$kernel_build_input" ] || ci_die "kernel build is not a directory"
 [ -s "$kernel_build_input/.config" ] || ci_die "kernel build has no prepared .config"
-configured_rustc_version=$(awk -F= '
+configured_rustc_version=$(${LOCKED_TOOL_PATH[awk]} -F= '
   $1 == "CONFIG_RUSTC_VERSION" { print $2; count++ }
   END { exit count == 1 ? 0 : 1 }
 ' "$kernel_build_input/.config") ||
@@ -112,12 +649,21 @@ elif [ -z "$KERNEL_RUSTC" ]; then
   ci_die 'set KERNEL_RUSTC to the compiler used by the approved Rust-enabled config'
 fi
 [[ $KERNEL_RUSTC = /* ]] || ci_die 'KERNEL_RUSTC must be an absolute path'
-kernel_rustc=$(realpath -e -- "$KERNEL_RUSTC")
-[ -f "$kernel_rustc" ] && [ -x "$kernel_rustc" ] ||
-  ci_die 'KERNEL_RUSTC must resolve to an executable regular file'
+resolve_tool_path rustc "$KERNEL_RUSTC"
+capture_tool_identity rustc
+kernel_rustc=${LOCKED_TOOL_PATH[rustc]}
+if [ "$configured_rustc_version" = 0 ]; then
+  LOCKED_TOOL_VERSION[rustc]=disabled
+fi
+if ${LOCKED_TOOL_PATH[grep]} -Fxq 'CONFIG_DEBUG_INFO_BTF=y' "$kernel_build_input/.config"; then
+  resolve_tool_path pahole pahole
+  capture_tool_identity pahole
+else
+  mark_tool_unused pahole
+fi
 kernel_build=$kernel_build_input
 
-git_cmd=(ci_sanitized_git_env git --no-replace-objects --git-dir="$kernel_git" --work-tree="$kernel_source")
+git_cmd=(ci_sanitized_git_env "$GIT_BIN" --no-replace-objects --git-dir="$kernel_git" --work-tree="$kernel_source")
 expected_config_sha=${EXPECTED_KERNEL_CONFIG_SHA256,,}
 
 verify_kernel_source_state() {
@@ -140,17 +686,92 @@ verify_kernel_source_state() {
 }
 
 kernel_make() {
-  ci_sanitized_kernel_env \
-    GIT_DIR="$kernel_git" \
-    GIT_WORK_TREE="$kernel_source" \
-    ARCH="$ARCH" \
-    CROSS_COMPILE="$CROSS_COMPILE" \
-    KBUILD_BUILD_TIMESTAMP="$KBUILD_BUILD_TIMESTAMP" \
-    KBUILD_BUILD_USER="$KBUILD_BUILD_USER" \
-    KBUILD_BUILD_HOST="$KBUILD_BUILD_HOST" \
-    KBUILD_BUILD_VERSION="$KBUILD_BUILD_VERSION" \
-    KCONFIG_NOTIMESTAMP=1 \
-    make -C "$kernel_source" O="$kernel_build" RUSTC="$kernel_rustc" "$@"
+  local status
+  local -a locked_make_environment=(
+    PATH="$kernel_locked_path"
+    GIT_DIR="$kernel_git"
+    GIT_WORK_TREE="$kernel_source"
+    SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"
+    ARCH="$ARCH"
+    CROSS_COMPILE="$CROSS_COMPILE"
+    KBUILD_BUILD_TIMESTAMP="$KBUILD_BUILD_TIMESTAMP"
+    KBUILD_BUILD_USER="$KBUILD_BUILD_USER"
+    KBUILD_BUILD_HOST="$KBUILD_BUILD_HOST"
+    KBUILD_BUILD_VERSION="$KBUILD_BUILD_VERSION"
+    KCONFIG_NOTIMESTAMP=1
+    HOSTCC="$HOST_GCC_BIN"
+    HOSTCXX="$HOST_GXX_BIN"
+    HOSTAS="$HOST_AS_BIN"
+    HOSTLD="$HOST_LD_BIN"
+    HOSTAR="$HOST_AR_BIN"
+    LEX="$FLEX_BIN"
+    YACC="$BISON_BIN"
+    M4="$M4_BIN"
+    BISON_PKGDATADIR="$BISON_DATA_DIR"
+    AWK="$AWK_BIN"
+    PERL="$PERL_BIN"
+    PYTHON3="$PYTHON3_BIN"
+    PKG_CONFIG="$PKG_CONFIG_BIN"
+    CONFIG_SHELL="$SH_BIN"
+    SHELL="$SH_BIN"
+    KCFLAGS="$kernel_kcflags"
+    KAFLAGS="$kernel_kaflags"
+  )
+  local -a locked_optional_make_arguments=()
+  if [ "${LOCKED_TOOL_PATH[pahole]}" != unused ]; then
+    locked_make_environment+=(PAHOLE="${LOCKED_TOOL_PATH[pahole]}")
+    locked_optional_make_arguments+=(PAHOLE="${LOCKED_TOOL_PATH[pahole]}")
+  fi
+  verify_locked_tools 'before Kbuild invocation'
+  verify_kernel_locked_path "$kernel_locked_path"
+  if ci_sanitized_kernel_env \
+      "${locked_make_environment[@]}" \
+      "$MAKE_BIN" -C "$kernel_source" \
+      O="$kernel_build" \
+      ARCH="$ARCH" \
+      CROSS_COMPILE="$CROSS_COMPILE" \
+      SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+      KBUILD_BUILD_TIMESTAMP="$KBUILD_BUILD_TIMESTAMP" \
+      KBUILD_BUILD_USER="$KBUILD_BUILD_USER" \
+      KBUILD_BUILD_HOST="$KBUILD_BUILD_HOST" \
+      KBUILD_BUILD_VERSION="$KBUILD_BUILD_VERSION" \
+      KCONFIG_NOTIMESTAMP=1 \
+      RUSTC="$kernel_rustc" \
+      CC="${LOCKED_TOOL_PATH[gcc]}" \
+      AS="${LOCKED_TOOL_PATH[as]}" \
+      LD="${LOCKED_TOOL_PATH[ld]}" \
+      AR="${LOCKED_TOOL_PATH[ar]}" \
+      NM="${LOCKED_TOOL_PATH[nm]}" \
+      OBJCOPY="${LOCKED_TOOL_PATH[objcopy]}" \
+      OBJDUMP="${LOCKED_TOOL_PATH[objdump]}" \
+      READELF="${LOCKED_TOOL_PATH[readelf]}" \
+      STRIP="${LOCKED_TOOL_PATH[strip]}" \
+      HOSTCC="$HOST_GCC_BIN" \
+      HOSTCXX="$HOST_GXX_BIN" \
+      HOSTAS="$HOST_AS_BIN" \
+      HOSTLD="$HOST_LD_BIN" \
+      HOSTAR="$HOST_AR_BIN" \
+      LEX="$FLEX_BIN" \
+      YACC="$BISON_BIN" \
+      M4="$M4_BIN" \
+      BISON_PKGDATADIR="$BISON_DATA_DIR" \
+      AWK="$AWK_BIN" \
+      PERL="$PERL_BIN" \
+      PYTHON3="$PYTHON3_BIN" \
+      PKG_CONFIG="$PKG_CONFIG_BIN" \
+      CONFIG_SHELL="$SH_BIN" \
+      SHELL="$SH_BIN" \
+      KCFLAGS="$kernel_kcflags" \
+      KAFLAGS="$kernel_kaflags" \
+      "${locked_optional_make_arguments[@]}" \
+      "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  verify_kernel_locked_path "$kernel_locked_path"
+  verify_locked_tools 'after Kbuild invocation'
+  return "$status"
 }
 
 write_kernel_build_input_state() {
@@ -179,65 +800,36 @@ ci_require_tsv_scalar() {
     ci_die "invalid $label"
 }
 
-tool_sha256() {
-  local command=$1 path
-
-  path=$(realpath -e -- "$(command -v "$command")")
-  [ -f "$path" ] && [ -x "$path" ] ||
-    ci_die "tool is not an executable regular file: $command"
-  sha256sum "$path" | awk '{print $1}'
-}
-
-tool_version() {
-  local command=$1 value
-
-  value=$("$command" --version 2>/dev/null | sed -n '1p' || true)
-  ci_require_tsv_scalar "tool version for $command" "$value" 255
-  printf '%s\n' "$value"
-}
-
-write_toolchain_record() {
-  local label=$1 command=$2 sha version
-
-  sha=$(tool_sha256 "$command")
-  version=$(tool_version "$command")
-  printf '%s-sha256\t%s\n' "$label" "$sha"
-  printf '%s-version\t%s\n' "$label" "$version"
-}
-
 kernel_rustc_version() {
-  if [ "$configured_rustc_version" = 0 ]; then
-    printf 'disabled\n'
-  else
-    tool_version "$kernel_rustc"
-  fi
+  printf '%s\n' "${LOCKED_TOOL_VERSION[rustc]}"
 }
 
-write_rustc_toolchain_record() {
-  local sha version
+write_locked_toolchain_record() {
+  local label=$1
 
-  sha=$(tool_sha256 "$kernel_rustc")
-  version=$(kernel_rustc_version)
-  printf 'rustc-sha256\t%s\n' "$sha"
-  printf 'rustc-version\t%s\n' "$version"
+  ci_require_tsv_scalar "tool version for $label" "${LOCKED_TOOL_VERSION[$label]}" 255
+  printf '%s-sha256\t%s\n' "$label" "${LOCKED_TOOL_SHA256[$label]}"
+  printf '%s-version\t%s\n' "$label" "${LOCKED_TOOL_VERSION[$label]}"
 }
 
 write_kernel_toolchain_manifest() {
   local destination=$1
 
   {
-    printf 'schema\ttb321fu.kernel-toolchain/v1\n'
+    printf 'schema\ttb321fu.kernel-toolchain/v2\n'
     printf 'cross-compile\t%s\n' "$CROSS_COMPILE"
-    write_toolchain_record gcc "${CROSS_COMPILE}gcc"
-    write_toolchain_record as "${CROSS_COMPILE}as"
-    write_toolchain_record ld "${CROSS_COMPILE}ld"
-    write_toolchain_record ar "${CROSS_COMPILE}ar"
-    write_toolchain_record nm "${CROSS_COMPILE}nm"
-    write_toolchain_record objcopy "${CROSS_COMPILE}objcopy"
-    write_toolchain_record strip "${CROSS_COMPILE}strip"
-    write_rustc_toolchain_record
-    write_toolchain_record make make
-    write_toolchain_record dpkg-deb dpkg-deb
+    printf 'bison-data-directory\t%s\n' "$BISON_DATA_DIR"
+    printf 'bison-data-sha256\t%s\n' "$BISON_DATA_SHA256"
+    for tool_label in \
+      gcc as ld ar nm objcopy objdump readelf strip rustc host-gcc host-gxx \
+      host-as host-ld host-ar \
+      flex bison m4 awk perl python3 pkg-config pahole git make depmod modinfo \
+      tar gzip xz dpkg-deb fdtget bash sh bc getconf sha1sum ln uname \
+      sha256sum find sort xargs rsync cp dpkg touch realpath nproc date \
+      install stat grep sed readlink wc tr cut findmnt curl flock mv chmod \
+      mkdir mktemp rm cat dirname basename env true cmp head expr uniq; do
+      write_locked_toolchain_record "$tool_label"
+    done
   } > "$destination"
 }
 
@@ -245,12 +837,21 @@ write_kbuild_flags_manifest() {
   local destination=$1
 
   {
-    printf 'schema\ttb321fu.kbuild-flags/v1\n'
+    printf 'schema\ttb321fu.kbuild-flags/v2\n'
+    printf 'environment-policy\t%s\n' "$PRODUCER_ENV_POLICY"
+    printf 'path\t%s\n' "$KBUILD_PATH_POLICY"
+    printf 'config-shell\t%s\n' "$KBUILD_CONFIG_SHELL_POLICY"
+    printf 'build-path-policy\t%s\n' "$KBUILD_PATH_IDENTITY_POLICY"
+    printf 'lc-all\tC\n'
+    printf 'lang\tC\n'
+    printf 'tz\tUTC\n'
     printf 'arch\t%s\n' "$ARCH"
     printf 'cross-compile\t%s\n' "$CROSS_COMPILE"
     printf 'kconfig-notimestamp\t1\n'
-    printf 'kcflags\tunset\n'
-    printf 'kaflags\tunset\n'
+    printf 'dtb-contract\ttb321fu-aw86937-dual-v1\n'
+    printf 'depmod-config\tempty-private-v1\n'
+    printf 'kcflags\t%s\n' "$KBUILD_KCFLAGS_POLICY"
+    printf 'kaflags\t%s\n' "$KBUILD_KCFLAGS_POLICY"
     printf 'kcppflags\tunset\n'
     printf 'krustflags\tunset\n'
     printf 'kbuild-cflags\tunset\n'
@@ -273,8 +874,51 @@ write_kbuild_flags_manifest() {
     printf 'hostldflags\tunset\n'
     printf 'usercflags\tunset\n'
     printf 'userldflags\tunset\n'
+    printf 'localversion\tunset\n'
+    printf 'dtc\tunset\n'
+    printf 'dtc-flags\tunset\n'
+    printf 'objcopyflags\tunset\n'
+    printf 'host-extracflags\tunset\n'
+    printf 'host-extracxxflags\tunset\n'
+    printf 'host-extrarustflags\tunset\n'
+    printf 'hostldlibs\tunset\n'
+    printf 'procmacroldflags\tunset\n'
+    printf 'kbuild-extra-warn\tunset\n'
+    printf 'kbuild-clippy\tunset\n'
+    printf 'kbuild-checksrc\tunset\n'
+    printf 'kbuild-extmod-output\tunset\n'
+    printf 'kbuild-nocmddep\tunset\n'
+    printf 'kbuild-nsdeps\tunset\n'
+    printf 'kbuild-preserve\tunset\n'
+    printf 'kbuild-symtypes\tunset\n'
+    printf 'kbuild-gendwarfksyms-stable\tunset\n'
+    printf 'kbuild-kconfig\tunset\n'
+    printf 'kconfig-autoconfig\tunset\n'
+    printf 'kconfig-autoheader\tunset\n'
+    printf 'config-prefix\tunset\n'
+    printf 'kconfig-defconfig-list\tunset\n'
+    printf 'kconfig-allconfig\tunset\n'
+    printf 'kconfig-overwriteconfig\tunset\n'
+    printf 'kconfig-warn-unknown-symbols\tunset\n'
+    printf 'kconfig-werror\tunset\n'
+    printf 'kconfig-nosilentupdate\tunset\n'
+    printf 'makefiles\tunset\n'
+    printf 'gnumakeflags\tunset\n'
     printf 'makeflags\tunset\n'
+    printf 'mflags\tunset\n'
     printf 'makeoverrides\tunset\n'
+    printf 'cpath\tunset\n'
+    printf 'gcc-exec-prefix\tunset\n'
+    printf 'compiler-path\tunset\n'
+    printf 'library-path\tunset\n'
+    printf 'pkg-config-path\tunset\n'
+    printf 'tar-options\tunset\n'
+    printf 'gzip-env\tunset\n'
+    printf 'xz-opt\tunset\n'
+    printf 'xz-defaults\tunset\n'
+    printf 'dpkg-deb-threads-max\t1\n'
+    printf 'dpkg-deb-compressor-type\txz\n'
+    printf 'dpkg-deb-compressor-level\t6\n'
     printf 'source-date-epoch\t%s\n' "$SOURCE_DATE_EPOCH"
     printf 'kbuild-build-timestamp\t%s\n' "$KBUILD_BUILD_TIMESTAMP"
     printf 'kbuild-build-user\t%s\n' "$KBUILD_BUILD_USER"
@@ -285,14 +929,20 @@ write_kbuild_flags_manifest() {
 
 validate_sdk_relative_path() {
   local relative=$1 component
+  local -a sdk_components=()
 
   [ -n "$relative" ] && [ "${#relative}" -le 4094 ] ||
     ci_die 'kernel SDK manifest contains an unsafe path'
   [[ $relative != /* && $relative != *//* && $relative != */ ]] ||
     ci_die 'kernel SDK manifest contains an unsafe path'
-  [[ $relative != *$'\t'* && $relative != *$'\r'* && $relative != *$'\n'* ]] ||
+  [[ $relative != *\\* && $relative != *$'\t'* &&
+     $relative != *$'\r'* && $relative != *$'\n'* ]] ||
     ci_die 'kernel SDK manifest contains an unsafe path'
+  [ "$(LC_ALL=C printf '%s' "$relative" | tr -d '\040-\176' | wc -c)" -eq 0 ] ||
+    ci_die 'kernel SDK manifest path must be printable ASCII'
   IFS=/ read -r -a sdk_components <<< "$relative"
+  [[ ${sdk_components[0]} != *:* ]] ||
+    ci_die 'kernel SDK manifest contains an unsafe path'
   for component in "${sdk_components[@]}"; do
     [ -n "$component" ] && [ "$component" != . ] && [ "$component" != .. ] &&
       [ "${#component}" -le 255 ] ||
@@ -301,8 +951,9 @@ validate_sdk_relative_path() {
 }
 
 write_kernel_sdk_manifest() {
-  local root=$1 destination=$2 entry relative digest mode target special
-  local record_count=0
+  local root=$1 destination=$2 entry relative digest mode target special size
+  local mode_value normalized_mode expected_mode
+  local record_count=0 total_regular_bytes=0
 
   [ -d "$root" ] || ci_die 'kernel SDK root is not a directory'
   special=$(find "$root" -xdev ! -type d ! -type f ! -type l -print -quit)
@@ -328,22 +979,49 @@ write_kernel_sdk_manifest() {
       [ "$relative" = source ] && continue
       mode=$(stat -c '%a' "$entry")
       if [ -L "$entry" ]; then
-        target=$(readlink -- "$entry")
+        target=
+        IFS= read -r -d '' target < <("$READLINK_BIN" -z -- "$entry") ||
+          ci_die 'cannot read a NUL-terminated kernel SDK symlink target'
+        [ -n "$target" ] && [ "${#target}" -le 4096 ] &&
+          [[ $target != *$'\t'* && $target != *$'\r'* && $target != *$'\n'* ]] &&
+          [ "$(LC_ALL=C printf '%s' "$target" | tr -d '\040-\176' | wc -c)" -eq 0 ] ||
+          ci_die 'kernel SDK symlink target must be bounded printable ASCII'
+        [[ $target != /* && $target != *\\* && ${target%%/*} != *:* ]] ||
+          ci_die 'kernel SDK symlink target has an unsafe lexical form'
+        [ "$mode" = 777 ] ||
+          ci_die 'kernel SDK symlink mode differs from the consumer contract'
         digest=$(printf '%s' "$target" | sha256sum | awk '{print $1}')
         printf 'symlink\t%s\t%s\t./%s\n' "$digest" "$mode" "$relative"
       else
+        mode_value=$((8#$mode))
+        normalized_mode=$(( (mode_value & 0755) | 0600 ))
+        if (( (mode_value & 0100) == 0 )); then
+          normalized_mode=$((normalized_mode & ~0111))
+        fi
+        printf -v expected_mode '%o' "$normalized_mode"
+        [ "$mode" = "$expected_mode" ] ||
+          ci_die 'kernel SDK regular-file mode would be changed by safe extraction'
+        size=$(stat -c '%s' "$entry")
+        [ "$size" -le 8589934592 ] ||
+          ci_die 'kernel SDK contains a regular file larger than 8 GiB'
+        total_regular_bytes=$((total_regular_bytes + size))
+        [ "$total_regular_bytes" -le 34359738368 ] ||
+          ci_die 'kernel SDK regular-file total exceeds 32 GiB'
         digest=$(sha256sum "$entry" | awk '{print $1}')
         printf 'file\t%s\t%s\t./%s\n' "$digest" "$mode" "$relative"
       fi
       record_count=$((record_count + 1))
-      [ "$record_count" -le 500000 ] || ci_die 'kernel SDK manifest has too many records'
+      [ "$record_count" -le 200000 ] || ci_die 'kernel SDK manifest has too many records'
     done < <(find "$root" -xdev \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
   } > "$destination"
   [ "$record_count" -gt 0 ] || ci_die 'kernel SDK manifest is empty'
+  [ "$(stat -c '%s' "$destination")" -le 16777216 ] ||
+    ci_die 'kernel SDK manifest exceeds the 16 MiB consumer limit'
 }
 
 write_kernel_sdk_archive() {
-  local root=$1 destination=$2 file_list entry resolved
+  local root=$1 destination=$2 file_list member_list size_file entry relative resolved size
+  local archive_entry_count=0 source_regular_bytes=0 archive_bytes
 
   [ -d "$root" ] || ci_die 'kernel SDK root is not a directory'
   while IFS= read -r -d '' entry; do
@@ -354,18 +1032,51 @@ write_kernel_sdk_archive() {
       "$root"|"$root"/*) ;;
       *) ci_die "kernel SDK root contains an external symlink: $entry" ;;
     esac
-  done < <(find "$root" -xdev -type l -print0)
+  done < <("$FIND_BIN" "$root" -xdev -type l -print0)
 
   file_list="$work/kernel-sdk-files.list"
+  member_list="$work/kernel-sdk-members.list"
+  size_file="$work/kernel-sdk-uncompressed-size"
   (
     cd "$root"
-    find . -xdev -mindepth 1 ! -path ./source ! -path './source/*' -print0 |
-      LC_ALL=C sort -z > "$file_list"
-    tar --null --files-from="$file_list" --no-recursion --sort=name \
-      --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -cf - | gzip -n > "$destination"
+    : > "$file_list"
+    while IFS= read -r -d '' entry; do
+      relative=${entry#./}
+      validate_sdk_relative_path "$relative"
+      printf '%s\0' "$entry" >> "$file_list"
+      if [ -f "$entry" ] && [ ! -L "$entry" ]; then
+        size=$(stat -c '%s' -- "$entry")
+        source_regular_bytes=$((source_regular_bytes + size))
+        [ "$source_regular_bytes" -le 34359738368 ] ||
+          ci_die 'kernel SDK archive regular-file total exceeds 32 GiB'
+      fi
+      archive_entry_count=$((archive_entry_count + 1))
+      [ "$archive_entry_count" -le 200000 ] ||
+        ci_die 'kernel SDK archive contains too many source entries'
+    done < <(
+      "$FIND_BIN" . -xdev -mindepth 1 ! -path ./source ! -path './source/*' -print0 |
+        LC_ALL=C "$SORT_BIN" -z
+    )
+    [ "$archive_entry_count" -gt 0 ] || ci_die 'kernel SDK archive source list is empty'
+    printf '%s\n' "$source_regular_bytes" > "$size_file"
+    "$TAR_BIN" --format=gnu --hard-dereference --null --no-recursion --sort=name \
+      --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
+      --files-from="$file_list" -cf - | "$GZIP_BIN" -6 -n > "$destination"
   )
   [ -s "$destination" ] || ci_die 'kernel SDK archive is empty'
-  if tar -tzf "$destination" | grep -Fxq './source'; then
+  source_regular_bytes=$(cat "$size_file")
+  [[ $source_regular_bytes =~ ^[0-9]+$ ]] ||
+    ci_die 'kernel SDK archive logical size record is invalid'
+  archive_bytes=$(stat -c '%s' -- "$destination")
+  [ "$source_regular_bytes" -le $((archive_bytes * 1000)) ] ||
+    ci_die 'kernel SDK archive compression ratio exceeds the consumer limit'
+  "$TAR_BIN" -tzf "$destination" > "$member_list" ||
+    ci_die 'cannot list kernel SDK archive'
+  [ "$(wc -c < "$member_list")" -le 67108864 ] ||
+    ci_die 'kernel SDK archive member listing exceeds size limit'
+  [ "$(wc -l < "$member_list")" -le 200000 ] ||
+    ci_die 'kernel SDK archive contains too many members'
+  if grep -Fx './source' "$member_list" >/dev/null; then
     ci_die 'kernel SDK archive must not retain the transient source symlink'
   fi
 }
@@ -375,11 +1086,17 @@ producer_repository=
 producer_commit=
 producer_tree=
 producer_tree_sha256=
+producer_safe_extract_sha256=
+producer_bundle_verifier_sha256=
+producer_root_path=
 verify_bootstrap_producer_state() {
-  local producer_root actual status relative current_sha committed_sha
+  local producer_root actual status relative current_sha committed_sha index_record index_mode expected_mode index_flags
   local -a producer_git=()
 
-  if [ "${KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY+x}" = x ]; then
+  producer_safe_extract_sha256=
+  producer_bundle_verifier_sha256=
+
+  if [ -n "${KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY:-}" ]; then
     producer_repository=$KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY
   else
     producer_repository=${GITHUB_REPOSITORY:-}
@@ -387,10 +1104,11 @@ verify_bootstrap_producer_state() {
   [ "$producer_repository" = "$CANONICAL_KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY" ] ||
     ci_die 'kernel bootstrap producer repository must be GUF296/ubuntu-y700-build-ci'
 
-  producer_root=$(ci_sanitized_git_env git -C "$SCRIPT_DIR/../.." rev-parse --show-toplevel) ||
+  producer_root=$(ci_sanitized_git_env "$GIT_BIN" -C "$SCRIPT_DIR/../.." rev-parse --show-toplevel) ||
     ci_die 'kernel bootstrap packager must run from a Git worktree'
-  producer_root=$(realpath -e -- "$producer_root")
-  producer_git=(ci_sanitized_git_env git --no-replace-objects -C "$producer_root")
+  producer_root=$(${LOCKED_TOOL_PATH[realpath]} -e -- "$producer_root")
+  producer_root_path=$producer_root
+  producer_git=(ci_sanitized_git_env "$GIT_BIN" --no-replace-objects -C "$producer_root")
   actual=$("${producer_git[@]}" rev-parse HEAD) ||
     ci_die 'cannot resolve kernel bootstrap producer commit'
   [[ $actual =~ ^[0-9a-f]{40}$ ]] || ci_die 'invalid kernel bootstrap producer commit'
@@ -404,19 +1122,49 @@ verify_bootstrap_producer_state() {
     ci_die 'invalid kernel bootstrap producer tree SHA-256'
   status=$("${producer_git[@]}" status --porcelain=v1 --untracked-files=all)
   [ -z "$status" ] || ci_die 'kernel bootstrap producer worktree must be clean'
-  for entry in "$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")" "$SCRIPT_DIR/common.sh"; do
+  index_flags=$("${producer_git[@]}" ls-files -v) ||
+    ci_die 'cannot inspect kernel bootstrap producer index flags'
+  if grep -Eq '^[a-zS] ' <<<"$index_flags"; then
+    ci_die 'kernel bootstrap producer has unsafe assume-unchanged/skip-worktree index flags'
+  fi
+  for entry in \
+    "$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")" \
+    "$SCRIPT_DIR/common.sh" \
+    "$SCRIPT_DIR/safe-extract-archive.py" \
+    "$SCRIPT_DIR/verify-kernel-bundle.py"; do
     relative=$(realpath --relative-to="$producer_root" -- "$entry")
     case "$relative" in
       ''|/*|../*|*/../*|*/..|*\\*) ci_die 'kernel bootstrap producer script escaped its Git worktree' ;;
     esac
     "${producer_git[@]}" ls-files --error-unmatch -- "$relative" >/dev/null ||
       ci_die "kernel bootstrap producer script is not tracked: $relative"
+    index_record=$("${producer_git[@]}" ls-files --stage -- "$relative") ||
+      ci_die "cannot read kernel bootstrap producer index mode: $relative"
+    read -r index_mode _ <<<"$index_record"
+    case "$relative" in
+      scripts/ci/package-kernel-bootstrap.sh) expected_mode=100755 ;;
+      scripts/ci/common.sh) expected_mode=100755 ;;
+      scripts/ci/safe-extract-archive.py) expected_mode=100644 ;;
+      scripts/ci/verify-kernel-bundle.py) expected_mode=100644 ;;
+      *) ci_die "unexpected kernel bootstrap producer source: $relative" ;;
+    esac
+    [ "$index_mode" = "$expected_mode" ] ||
+      ci_die "kernel bootstrap producer index mode mismatch: $relative"
     current_sha=$(sha256sum "$entry" | awk '{print $1}')
     committed_sha=$("${producer_git[@]}" show "$actual:$relative" | sha256sum | awk '{print $1}') ||
       ci_die "cannot read committed kernel bootstrap producer script: $relative"
     [ "$current_sha" = "$committed_sha" ] ||
       ci_die "kernel bootstrap producer script differs from its committed bytes: $relative"
+    if [ "$relative" = scripts/ci/safe-extract-archive.py ]; then
+      producer_safe_extract_sha256=$committed_sha
+    elif [ "$relative" = scripts/ci/verify-kernel-bundle.py ]; then
+      producer_bundle_verifier_sha256=$committed_sha
+    fi
   done
+  [[ $producer_safe_extract_sha256 =~ ^[0-9a-f]{64}$ ]] ||
+    ci_die 'kernel bootstrap safe extractor identity is unavailable'
+  [[ $producer_bundle_verifier_sha256 =~ ^[0-9a-f]{64}$ ]] ||
+    ci_die 'kernel bootstrap metadata verifier identity is unavailable'
   producer_commit=$actual
 }
 
@@ -439,6 +1187,7 @@ export KCONFIG_NOTIMESTAMP=1
 verify_kernel_source_state "before release packaging"
 verify_bootstrap_producer_state
 if [ "$mode" = preflight ]; then
+  verify_locked_tools 'during preflight'
   printf 'KERNEL_BOOTSTRAP_PREFLIGHT=PASS commit=%s config=%s rustc=%s producer-repository=%s producer-commit=%s producer-tree=%s producer-tree-sha256=%s\n' \
     "$actual_commit" "$expected_config_sha" "$(kernel_rustc_version)" \
     "$producer_repository" "$producer_commit" "$producer_tree" "$producer_tree_sha256"
@@ -450,20 +1199,113 @@ bootstrap_producer_commit=$producer_commit
 bootstrap_producer_tree=$producer_tree
 bootstrap_producer_tree_sha256=$producer_tree_sha256
 
-output_parent=$(dirname -- "$OUTPUT_DIR")
-output_name=$(basename -- "$OUTPUT_DIR")
-case "$output_name" in
-  tb321fu-kernel-bootstrap*) ;;
-  *) ci_die "OUTPUT_DIR basename must start with tb321fu-kernel-bootstrap" ;;
-esac
-mkdir -p "$output_parent"
-output_parent=$(realpath -e -- "$output_parent")
-output_path="$output_parent/$output_name"
-if [ -e "$output_path" ]; then
-  ci_safe_rmtree "$output_path" "$output_parent" tb321fu-kernel-bootstrap
-fi
+validate_kernel_bootstrap_output_location() {
+  local path=$1 parent=$2 probe relative ignore_record ignore_source
 
-work=$(mktemp -d "$output_parent/.tb321fu-kernel-bootstrap.XXXXXX")
+  case "$path" in
+    "$kernel_source"|"$kernel_source"/*|"$kernel_git"|"$kernel_git"/*|\
+    "$kernel_build_input"|"$kernel_build_input"/*)
+      ci_die 'OUTPUT_DIR must not overlap authoritative kernel inputs'
+      ;;
+  esac
+  [ -n "$producer_root_path" ] || ci_die 'kernel bootstrap producer root is unavailable'
+  case "$path" in
+    "$producer_root_path")
+      ci_die 'OUTPUT_DIR must not replace the producer worktree'
+      ;;
+    "$producer_root_path"/*)
+      for probe in "$path" "$path.lock" "$parent/.tb321fu-kernel-bootstrap.probe"; do
+        relative=$(realpath -m --relative-to="$producer_root_path" -- "$probe") ||
+          ci_die 'cannot normalize producer-local OUTPUT_DIR probe'
+        case "$relative" in
+          ''|.|/*|../*|*/../*|*/..|*\\*)
+            ci_die 'producer-local OUTPUT_DIR probe escaped its worktree'
+            ;;
+        esac
+        ignore_record=$(ci_sanitized_git_env "$GIT_BIN" -C "$producer_root_path" \
+          check-ignore -v -- "$relative") ||
+          ci_die 'producer-local OUTPUT_DIR, lock and temporary paths must be Git-ignored'
+        ignore_source=${ignore_record%%:*}
+        case "$ignore_source" in
+          .gitignore|*/.gitignore) ;;
+          *) ci_die 'producer-local OUTPUT_DIR must be ignored by a tracked .gitignore' ;;
+        esac
+        ci_sanitized_git_env "$GIT_BIN" -C "$producer_root_path" \
+          ls-files --error-unmatch -- "$ignore_source" >/dev/null ||
+          ci_die 'producer-local OUTPUT_DIR ignore policy is not tracked'
+      done
+      ;;
+  esac
+}
+
+validate_compiler_prefix_map_path() {
+  local label=$1 path=$2
+
+  [ -n "$path" ] && [ "${#path}" -le 4096 ] &&
+    [[ $path =~ ^/[A-Za-z0-9_./+-]+$ ]] ||
+    ci_die "$label cannot be represented safely in deterministic compiler flags"
+}
+
+output_parent_requested=$(dirname -- "$OUTPUT_DIR")
+output_name=$(basename -- "$OUTPUT_DIR")
+[ "$output_name" = "$early_output_name" ] || ci_die 'OUTPUT_DIR basename changed during validation'
+output_parent_candidate=$(realpath -m -- "$output_parent_requested") ||
+  ci_die 'cannot normalize OUTPUT_DIR parent'
+output_path_candidate="$output_parent_candidate/$output_name"
+[ "${#output_path_candidate}" -le 4096 ] || ci_die 'resolved OUTPUT_DIR exceeds size limit'
+validate_kernel_bootstrap_output_location "$output_path_candidate" "$output_parent_candidate"
+build_identity_key="$actual_commit-$expected_config_sha"
+kernel_build_candidate="$output_parent_candidate/.tb321fu-kernel-build-$build_identity_key"
+kernel_locked_path_candidate="$output_parent_candidate/.tb321fu-kernel-tools-$build_identity_key"
+validate_kernel_bootstrap_output_location "$kernel_build_candidate" "$output_parent_candidate"
+validate_kernel_bootstrap_output_location "$kernel_locked_path_candidate" "$output_parent_candidate"
+mkdir -p -- "$output_parent_requested"
+output_parent=$(realpath -e -- "$output_parent_requested")
+[ "$output_parent" = "$output_parent_candidate" ] ||
+  ci_die 'OUTPUT_DIR parent changed while it was created'
+output_path="$output_parent/$output_name"
+[ "$output_path" = "$output_path_candidate" ] || ci_die 'OUTPUT_DIR changed during validation'
+validate_kernel_bootstrap_output_location "$output_path" "$output_parent"
+kernel_build="$output_parent/.tb321fu-kernel-build-$build_identity_key"
+kernel_locked_path="$output_parent/.tb321fu-kernel-tools-$build_identity_key"
+[ "$kernel_build" = "$kernel_build_candidate" ] &&
+  [ "$kernel_locked_path" = "$kernel_locked_path_candidate" ] ||
+  ci_die 'deterministic private Kbuild paths changed during validation'
+validate_compiler_prefix_map_path 'kernel source path' "$kernel_source"
+validate_compiler_prefix_map_path 'private kernel build path' "$kernel_build"
+[ ! -e "$output_path" ] && [ ! -L "$output_path" ] ||
+  ci_die 'kernel bootstrap target already exists'
+
+output_lock_path="$output_path.lock"
+if [ -e "$output_lock_path" ] || [ -L "$output_lock_path" ]; then
+  [ -f "$output_lock_path" ] && [ ! -L "$output_lock_path" ] ||
+    ci_die 'kernel bootstrap target lock must be a regular file'
+fi
+saved_umask=$(umask)
+umask 077
+exec {output_lock_fd}>>"$output_lock_path"
+umask "$saved_umask"
+"$FLOCK_BIN" -n "$output_lock_fd" ||
+  ci_die 'kernel bootstrap target is already locked'
+[ ! -e "$output_path" ] && [ ! -L "$output_path" ] ||
+  ci_die 'kernel bootstrap target appeared while acquiring its lock'
+
+kernel_build_lock_path="$kernel_build.lock"
+if [ -e "$kernel_build_lock_path" ] || [ -L "$kernel_build_lock_path" ]; then
+  [ -f "$kernel_build_lock_path" ] && [ ! -L "$kernel_build_lock_path" ] ||
+    ci_die 'deterministic private Kbuild lock must be a regular file'
+fi
+saved_umask=$(umask)
+umask 077
+exec {kernel_build_lock_fd}>>"$kernel_build_lock_path"
+umask "$saved_umask"
+"$FLOCK_BIN" -n "$kernel_build_lock_fd" ||
+  ci_die 'the deterministic private Kbuild path is already locked'
+[ ! -e "$kernel_build" ] && [ ! -L "$kernel_build" ] &&
+  [ ! -e "$kernel_locked_path" ] && [ ! -L "$kernel_locked_path" ] ||
+  ci_die 'a deterministic private Kbuild path already exists'
+
+work=$(${LOCKED_TOOL_PATH[mktemp]} -d "$output_parent/.tb321fu-kernel-bootstrap.XXXXXX")
 kernel_build_input_state=
 cleanup() {
   local status=$?
@@ -474,21 +1316,72 @@ cleanup() {
       status=1
     fi
   fi
-  if [ -d "$work" ]; then
-    ci_safe_rmtree "$work" "$output_parent" .tb321fu-kernel-bootstrap
+  if [ -e "$work" ] || [ -L "$work" ]; then
+    if ! ci_safe_rmtree "$work" "$output_parent" .tb321fu-kernel-bootstrap; then
+      status=1
+    fi
+  fi
+  if [ -e "$kernel_build" ] || [ -L "$kernel_build" ]; then
+    if ! ci_safe_rmtree "$kernel_build" "$output_parent" .tb321fu-kernel-build-; then
+      status=1
+    fi
+  fi
+  if [ -e "$kernel_locked_path" ] || [ -L "$kernel_locked_path" ]; then
+    if ! ci_safe_rmtree "$kernel_locked_path" "$output_parent" .tb321fu-kernel-tools-; then
+      status=1
+    fi
   fi
   return "$status"
 }
 trap cleanup EXIT
 
+runtime_safe_extract="$work/safe-extract-archive.py"
+install -m 0644 "$SCRIPT_DIR/safe-extract-archive.py" "$runtime_safe_extract"
+[ "$(sha256sum "$runtime_safe_extract" | awk '{print $1}')" = "$producer_safe_extract_sha256" ] ||
+  ci_die 'private safe extractor differs from committed producer bytes'
+runtime_bundle_verifier="$work/verify-kernel-bundle.py"
+install -m 0644 "$SCRIPT_DIR/verify-kernel-bundle.py" "$runtime_bundle_verifier"
+[ "$(sha256sum "$runtime_bundle_verifier" | awk '{print $1}')" = "$producer_bundle_verifier_sha256" ] ||
+  ci_die 'private metadata verifier differs from committed producer bytes'
+verify_kernel_bootstrap_metadata_snapshot() {
+  local root=$1
+
+  [ "$(sha256sum "$runtime_bundle_verifier" | awk '{print $1}')" = "$producer_bundle_verifier_sha256" ] ||
+    ci_die 'private metadata verifier changed before stage verification'
+  "$PYTHON3_BIN" -I "$runtime_bundle_verifier" \
+    "$root/KERNEL-BUNDLE.tsv" \
+    --kbuild-flags "$root/KBUILD-FLAGS.tsv" \
+    --toolchain "$root/KERNEL-TOOLCHAIN.tsv" \
+    --sdk-manifest "$root/KERNEL-SDK-MANIFEST.tsv" >/dev/null ||
+    ci_die 'generated kernel bootstrap metadata failed canonical parser verification'
+}
 kernel_build_input_state="$work/kernel-build-input-state.sha256"
 write_kernel_build_input_state "$kernel_build_input_state"
+
+approved_config="$work/approved-kernel.config"
+install -m 0644 "$kernel_build_input/.config" "$approved_config"
+mkdir -m 0700 -- "$kernel_build"
+prepare_kernel_locked_path "$kernel_locked_path"
+kernel_kcflags="-fdebug-prefix-map=$kernel_source=/usr/src/tb321fu-linux-source -fdebug-prefix-map=$kernel_build=/usr/src/tb321fu-linux-build"
+kernel_kaflags=$kernel_kcflags
+# Build from a fresh private O= directory. Reject ref-derived ABI drift before
+# acquiring or extracting the baseline archive.
+install -m 0644 "$approved_config" "$kernel_build/.config"
+kernel_make olddefconfig
+private_config_sha=$(sha256sum "$kernel_build/.config" | awk '{print $1}')
+[ "$private_config_sha" = "$expected_config_sha" ] ||
+  ci_die 'private olddefconfig changed the approved kernel config'
+verify_kernel_source_state "after clean configuration restore"
+
+kernel_release=$(kernel_make -s kernelrelease)
+verify_kernel_release_identity "$kernel_release"
 
 baseline_archive="$work/baseline-device-debs.tar.gz"
 baseline_dir="$work/baseline"
 mkdir -p "$baseline_dir"
 ci_download "$BASE_DEVICE_DEB_ARCHIVE" "$baseline_archive" "$BASE_DEVICE_DEB_ARCHIVE_SHA256"
-ci_extract_archive "$baseline_archive" "$baseline_dir"
+"$PYTHON3_BIN" -I "$runtime_safe_extract" "$baseline_archive" "$baseline_dir" ||
+  ci_die "safe archive extraction failed: $baseline_archive"
 
 mapfile -d '' baseline_modules < <(find "$baseline_dir" -maxdepth 1 -type f -name 'y700-daily-kernel-modules_*.deb' -print0)
 mapfile -d '' baseline_rootfs < <(find "$baseline_dir" -maxdepth 1 -type f -name 'y700-daily-rootfs-overlay_*.deb' -print0)
@@ -538,34 +1431,35 @@ esac
 rootfs_sha=$(sha256sum "${baseline_rootfs[0]}" | awk '{print $1}')
 compat_sha=$(sha256sum "${baseline_compat[0]}" | awk '{print $1}')
 
-approved_config="$work/approved-kernel.config"
-install -m 0644 "$kernel_build_input/.config" "$approved_config"
-kernel_build="$work/kernel-build"
-mkdir -p "$kernel_build"
-# Build from a fresh private O= directory. Reusing generated files through
-# hardlinks would let Kbuild mutate the authoritative build input.
-install -m 0644 "$approved_config" "$kernel_build/.config"
-kernel_make olddefconfig
-verify_kernel_source_state "after clean configuration restore"
-
-kernel_release=$(kernel_make -s kernelrelease)
-[[ $kernel_release =~ ^[0-9A-Za-z][0-9A-Za-z._+~-]{0,127}$ ]] || ci_die "unsafe kernel release: $kernel_release"
-case "$kernel_release" in
-  *-g"${actual_commit:0:12}"*) ;;
-  *) ci_die "kernel release does not bind the expected commit: $kernel_release" ;;
-esac
-
 kernel_make -j"$KERNEL_BUILD_JOBS" Image modules "qcom/$DTB_NAME"
+[ "$(sha256sum "$kernel_build/.config" | awk '{print $1}')" = "$expected_config_sha" ] ||
+  ci_die 'kernel build changed the approved kernel config'
 [ "$(cat "$kernel_build/include/config/kernel.release")" = "$kernel_release" ] || ci_die "built kernel.release does not match source commit"
 grep -Fxq "#define UTS_RELEASE \"$kernel_release\"" "$kernel_build/include/generated/utsrelease.h" || ci_die "UTS_RELEASE does not match built kernel release"
+
+[ -s "$kernel_build/arch/arm64/kernel/entry.o" ] ||
+  ci_die 'kernel build did not produce the required ARM64 assembly object'
+private_path_patterns="$work/private-build-paths.patterns"
+private_path_leaks="$work/private-build-path-leaks.list"
+printf '%s\n' "$kernel_build" "$kernel_source" "$work" > "$private_path_patterns"
+if grep -aFrl -f "$private_path_patterns" --include='*.o' --include='*.ko' \
+    "$kernel_build" > "$private_path_leaks"; then
+  first_private_path_leak=$(sed -n '1p' "$private_path_leaks")
+  ci_die "compiled kernel object retains a private build/source path: $first_private_path_leak"
+else
+  private_path_scan_status=$?
+  [ "$private_path_scan_status" -eq 1 ] ||
+    ci_die 'cannot scan compiled kernel objects for private path leakage'
+fi
 
 image="$kernel_build/arch/arm64/boot/Image"
 dtb="$kernel_build/arch/arm64/boot/dts/qcom/$DTB_NAME"
 [ -s "$image" ] || ci_die "missing kernel Image"
 [ -s "$dtb" ] || ci_die "missing $DTB_NAME"
+ci_verify_tb321fu_haptics_dtb "$dtb" "$FDTGET_BIN"
 
 modules_root="$work/modules-root"
-kernel_make INSTALL_MOD_PATH="$modules_root" DEPMOD=/bin/true modules_install
+kernel_make INSTALL_MOD_PATH="$modules_root" DEPMOD="$TRUE_BIN" modules_install
 verify_kernel_source_state "after kernel build and modules_install"
 verify_kernel_build_input_state "$kernel_build_input_state"
 verify_bootstrap_producer_state
@@ -580,11 +1474,13 @@ verify_bootstrap_producer_state
 [ -d "$modules_root/lib/modules/$kernel_release" ] || ci_die "modules_install produced the wrong kernel release"
 [ "$(find "$modules_root/lib/modules" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ] || ci_die "modules_install produced multiple releases"
 rm -f -- "$modules_root/lib/modules/$kernel_release/build" "$modules_root/lib/modules/$kernel_release/source"
-depmod -b "$modules_root" "$kernel_release"
+depmod_config="$work/depmod.conf"
+install -m 0644 /dev/null "$depmod_config"
+"$DEPMOD_BIN" -C "$depmod_config" -b "$modules_root" "$kernel_release"
 
 module_count=0
 while IFS= read -r -d '' module; do
-  vermagic=$(modinfo -F vermagic "$module")
+  vermagic=$("$MODINFO_BIN" -F vermagic "$module")
   case "$vermagic" in
     "$kernel_release"|"$kernel_release "*) ;;
     *) ci_die "module vermagic mismatch: $module: $vermagic" ;;
@@ -622,6 +1518,9 @@ chmod 0755 "$package_root/DEBIAN/postinst"
 [ -z "$(find "$package_root" -type f ! -path '*/DEBIAN/postinst' ! -perm 0644 -print -quit)" ] ||
   ci_die "package contains a regular file with an unexpected mode"
 [ "$(stat -c '%a' "$package_root/DEBIAN/postinst")" = 755 ] || ci_die "postinst must be mode 0755"
+package_special=$(find "$package_root" ! -type d ! -type f -print -quit)
+[ -z "$package_special" ] ||
+  ci_die "kernel modules package contains an unsupported non-regular member: $package_special"
 find "$package_root" -print0 | xargs -0 touch -h -d "@$SOURCE_DATE_EPOCH"
 
 stage="$work/stage"
@@ -629,7 +1528,8 @@ artifacts="$work/kernel-artifacts"
 device="$work/device-debs"
 mkdir -p "$stage" "$artifacts" "$device"
 modules_deb="$device/y700-daily-kernel-modules_${KERNEL_PACKAGE_VERSION}_arm64.deb"
-dpkg-deb --root-owner-group -Zxz -b "$package_root" "$modules_deb" >/dev/null
+"$DPKG_DEB_BIN" --root-owner-group --threads-max=1 -Zxz -z6 \
+  -b "$package_root" "$modules_deb" >/dev/null
 
 modules_manifest="$work/MODULES.sha256"
 (
@@ -639,6 +1539,10 @@ modules_manifest="$work/MODULES.sha256"
 modules_manifest_file_count=$(wc -l < "$modules_manifest")
 [[ $modules_manifest_file_count =~ ^[1-9][0-9]{0,8}$ ]] ||
   ci_die 'kernel modules manifest is empty or has an unsafe record count'
+[ "$modules_manifest_file_count" -le 400000 ] ||
+  ci_die 'kernel modules manifest has too many records'
+[ "$(stat -c '%s' "$modules_manifest")" -le 16777216 ] ||
+  ci_die 'kernel modules manifest exceeds the 16 MiB consumer limit'
 modules_manifest_sha=$(sha256sum "$modules_manifest" | awk '{print $1}')
 
 cp -a "${baseline_rootfs[0]}" "$device/"
@@ -664,14 +1568,14 @@ chmod 0644 "$sdk_archive"
 
 packager_sha=$(sha256sum "$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")" | awk '{print $1}')
 common_sha=$(sha256sum "$SCRIPT_DIR/common.sh" | awk '{print $1}')
-compiler_version=$(tool_version "${CROSS_COMPILE}gcc")
-compiler_sha=$(tool_sha256 "${CROSS_COMPILE}gcc")
+compiler_version=${LOCKED_TOOL_VERSION[gcc]}
+compiler_sha=${LOCKED_TOOL_SHA256[gcc]}
 rustc_version=$(kernel_rustc_version)
-rustc_sha=$(tool_sha256 "$kernel_rustc")
-make_version=$(tool_version make)
-make_sha=$(tool_sha256 make)
-dpkg_deb_version=$(tool_version dpkg-deb)
-dpkg_deb_sha=$(tool_sha256 dpkg-deb)
+rustc_sha=${LOCKED_TOOL_SHA256[rustc]}
+make_version=${LOCKED_TOOL_VERSION[make]}
+make_sha=${LOCKED_TOOL_SHA256[make]}
+dpkg_deb_version=${LOCKED_TOOL_VERSION[dpkg-deb]}
+dpkg_deb_sha=${LOCKED_TOOL_SHA256[dpkg-deb]}
 config_sha=$(sha256sum "$kernel_build/.config" | awk '{print $1}')
 image_sha=$(sha256sum "$image" | awk '{print $1}')
 dtb_sha=$(sha256sum "$dtb" | awk '{print $1}')
@@ -762,8 +1666,12 @@ install -m 0644 "$artifacts/SOURCE-LOCK.tsv" "$device/SOURCE-LOCK.tsv"
 
 find "$artifacts" "$device" -type f -exec chmod 0644 {} +
 find "$artifacts" "$device" -print0 | xargs -0 touch -h -d "@$SOURCE_DATE_EPOCH"
-tar -C "$artifacts" --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -cf - . | gzip -n > "$kernel_archive"
-tar -C "$device" --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -cf - . | gzip -n > "$device_archive"
+"$TAR_BIN" --format=gnu --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
+  --owner=0 --group=0 --numeric-owner -C "$artifacts" -cf - . |
+  "$GZIP_BIN" -6 -n > "$kernel_archive"
+"$TAR_BIN" --format=gnu --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
+  --owner=0 --group=0 --numeric-owner -C "$device" -cf - . |
+  "$GZIP_BIN" -6 -n > "$device_archive"
 chmod 0644 "$kernel_archive" "$device_archive"
 cp -a "$artifacts/SOURCE-LOCK.tsv" "$stage/KERNEL-SOURCE-LOCK.tsv"
 cp -a "$bundle_file" "$stage/KERNEL-BUNDLE.tsv"
@@ -773,13 +1681,40 @@ cp -a "$toolchain_manifest" "$stage/KERNEL-TOOLCHAIN.tsv"
 cp -a "$kbuild_flags_manifest" "$stage/KBUILD-FLAGS.tsv"
 (
   cd "$stage"
-  sha256sum -- "$(basename -- "$kernel_archive")" "$(basename -- "$device_archive")" \
+  "$SHA256SUM_BIN" -- "$(basename -- "$kernel_archive")" "$(basename -- "$device_archive")" \
     "$(basename -- "$sdk_archive")" KERNEL-SOURCE-LOCK.tsv KERNEL-BUNDLE.tsv \
     MODULES.sha256 KERNEL-SDK-MANIFEST.tsv KERNEL-TOOLCHAIN.tsv KBUILD-FLAGS.tsv > SHA256SUMS.txt
 )
 
-mv "$stage" "$output_path"
+kernel_archive_name=$(basename -- "$kernel_archive")
+device_archive_name=$(basename -- "$device_archive")
+sdk_archive_name=$(basename -- "$sdk_archive")
+verify_kernel_source_state 'before bootstrap promotion'
+verify_kernel_build_input_state "$kernel_build_input_state"
+verify_bootstrap_producer_state
+[ "$producer_repository" = "$bootstrap_producer_repository" ] &&
+  [ "$producer_commit" = "$bootstrap_producer_commit" ] &&
+  [ "$producer_tree" = "$bootstrap_producer_tree" ] &&
+  [ "$producer_tree_sha256" = "$bootstrap_producer_tree_sha256" ] ||
+  ci_die 'kernel bootstrap producer identity changed before promotion'
+verify_locked_tools 'before bootstrap promotion'
+ci_verify_kernel_bootstrap_stage \
+  "$stage" "$kernel_archive_name" "$device_archive_name" "$sdk_archive_name" \
+  "$SHA256SUM_BIN" "${LOCKED_TOOL_PATH[stat]}"
+verify_kernel_bootstrap_metadata_snapshot "$stage"
+verify_locked_tools 'after final stage verification'
+[ ! -e "$output_path" ] && [ ! -L "$output_path" ] ||
+  ci_die 'kernel bootstrap target appeared before promotion'
+"$MV_BIN" --no-clobber -T -- "$stage" "$output_path"
+[ ! -e "$stage" ] && [ -d "$output_path" ] && [ ! -L "$output_path" ] ||
+  ci_die 'kernel bootstrap no-clobber promotion failed'
+ci_verify_kernel_bootstrap_stage \
+  "$output_path" "$kernel_archive_name" "$device_archive_name" "$sdk_archive_name" \
+  "$SHA256SUM_BIN" "${LOCKED_TOOL_PATH[stat]}"
+verify_kernel_bootstrap_metadata_snapshot "$output_path"
+verify_locked_tools 'after bootstrap promotion'
 trap - EXIT
 cleanup
+exec {output_lock_fd}>&-
 printf 'KERNEL_BOOTSTRAP=PASS release=%s commit=%s bundle=%s modules=%d output=%s\n' \
   "$kernel_release" "$actual_commit" "$kernel_bundle_id" "$module_count" "$output_path"

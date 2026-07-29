@@ -12,11 +12,12 @@ import sys
 
 
 MAX_METADATA_BYTES = 64 * 1024
-MAX_SDK_MANIFEST_BYTES = 32 * 1024 * 1024
-MAX_SDK_MANIFEST_RECORDS = 500_000
+MAX_SDK_MANIFEST_BYTES = 16 * 1024 * 1024
+MAX_SDK_MANIFEST_RECORDS = 200_000
 
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
+HEX64_OR_UNUSED = re.compile(r"(?:[0-9a-f]{64}|unused)")
 KERNEL_RELEASE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+~-]{0,127}")
 DTB_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\.dtb")
 TIMESTAMP = re.compile(r"[0-9A-Za-z][0-9A-Za-z,:+._ -]{0,95}")
@@ -24,7 +25,9 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 DECIMAL = re.compile(r"[0-9]{1,12}")
 MODE = re.compile(r"[0-7]{3,4}")
 CROSS_COMPILE = re.compile(r"/?[A-Za-z0-9][A-Za-z0-9._+/-]{0,254}-")
+ABSOLUTE_DATA_PATH = re.compile(r"/[A-Za-z0-9._+/-]{1,511}")
 PRINTABLE = re.compile(r"[ -~]{1,512}")
+UNSET = re.compile(r"unset")
 
 
 BUNDLE_FIELDS = (
@@ -52,36 +55,91 @@ BUNDLE_FIELDS = (
 )
 
 KBUILD_FLAGS_FIELDS = (
-    ("schema", re.compile(r"tb321fu\.kbuild-flags/v1")),
+    ("schema", re.compile(r"tb321fu\.kbuild-flags/v2")),
+    ("environment-policy", re.compile(r"isolated-allowlist-v1")),
+    (
+        "path",
+        re.compile(r"private-locked-tool-directory-v1"),
+    ),
+    ("config-shell", re.compile(r"absolute-locked-sh-v1")),
+    ("build-path-policy", re.compile(r"deterministic-input-key-v1")),
+    ("lc-all", re.compile(r"C")),
+    ("lang", re.compile(r"C")),
+    ("tz", re.compile(r"UTC")),
     ("arch", re.compile(r"arm64")),
     ("cross-compile", CROSS_COMPILE),
     ("kconfig-notimestamp", re.compile(r"1")),
-    ("kcflags", re.compile(r"unset")),
-    ("kaflags", re.compile(r"unset")),
-    ("kcppflags", re.compile(r"unset")),
-    ("krustflags", re.compile(r"unset")),
-    ("kbuild-cflags", re.compile(r"unset")),
-    ("kbuild-aflags", re.compile(r"unset")),
-    ("kbuild-cppflags", re.compile(r"unset")),
-    ("kbuild-rustflags", re.compile(r"unset")),
-    ("cflags", re.compile(r"unset")),
-    ("cxxflags", re.compile(r"unset")),
-    ("cppflags", re.compile(r"unset")),
-    ("asflags", re.compile(r"unset")),
-    ("ldflags", re.compile(r"unset")),
-    ("cflags-kernel", re.compile(r"unset")),
-    ("cflags-module", re.compile(r"unset")),
-    ("aflags-kernel", re.compile(r"unset")),
-    ("aflags-module", re.compile(r"unset")),
-    ("ldflags-vmlinux", re.compile(r"unset")),
-    ("ldflags-module", re.compile(r"unset")),
-    ("hostcflags", re.compile(r"unset")),
-    ("hostcxxflags", re.compile(r"unset")),
-    ("hostldflags", re.compile(r"unset")),
-    ("usercflags", re.compile(r"unset")),
-    ("userldflags", re.compile(r"unset")),
-    ("makeflags", re.compile(r"unset")),
-    ("makeoverrides", re.compile(r"unset")),
+    ("dtb-contract", re.compile(r"tb321fu-aw86937-dual-v1")),
+    ("depmod-config", re.compile(r"empty-private-v1")),
+    ("kcflags", re.compile(r"debug-prefix-map-source-and-build-v1")),
+    ("kaflags", re.compile(r"debug-prefix-map-source-and-build-v1")),
+    ("kcppflags", UNSET),
+    ("krustflags", UNSET),
+    ("kbuild-cflags", UNSET),
+    ("kbuild-aflags", UNSET),
+    ("kbuild-cppflags", UNSET),
+    ("kbuild-rustflags", UNSET),
+    ("cflags", UNSET),
+    ("cxxflags", UNSET),
+    ("cppflags", UNSET),
+    ("asflags", UNSET),
+    ("ldflags", UNSET),
+    ("cflags-kernel", UNSET),
+    ("cflags-module", UNSET),
+    ("aflags-kernel", UNSET),
+    ("aflags-module", UNSET),
+    ("ldflags-vmlinux", UNSET),
+    ("ldflags-module", UNSET),
+    ("hostcflags", UNSET),
+    ("hostcxxflags", UNSET),
+    ("hostldflags", UNSET),
+    ("usercflags", UNSET),
+    ("userldflags", UNSET),
+    ("localversion", UNSET),
+    ("dtc", UNSET),
+    ("dtc-flags", UNSET),
+    ("objcopyflags", UNSET),
+    ("host-extracflags", UNSET),
+    ("host-extracxxflags", UNSET),
+    ("host-extrarustflags", UNSET),
+    ("hostldlibs", UNSET),
+    ("procmacroldflags", UNSET),
+    ("kbuild-extra-warn", UNSET),
+    ("kbuild-clippy", UNSET),
+    ("kbuild-checksrc", UNSET),
+    ("kbuild-extmod-output", UNSET),
+    ("kbuild-nocmddep", UNSET),
+    ("kbuild-nsdeps", UNSET),
+    ("kbuild-preserve", UNSET),
+    ("kbuild-symtypes", UNSET),
+    ("kbuild-gendwarfksyms-stable", UNSET),
+    ("kbuild-kconfig", UNSET),
+    ("kconfig-autoconfig", UNSET),
+    ("kconfig-autoheader", UNSET),
+    ("config-prefix", UNSET),
+    ("kconfig-defconfig-list", UNSET),
+    ("kconfig-allconfig", UNSET),
+    ("kconfig-overwriteconfig", UNSET),
+    ("kconfig-warn-unknown-symbols", UNSET),
+    ("kconfig-werror", UNSET),
+    ("kconfig-nosilentupdate", UNSET),
+    ("makefiles", UNSET),
+    ("gnumakeflags", UNSET),
+    ("makeflags", UNSET),
+    ("mflags", UNSET),
+    ("makeoverrides", UNSET),
+    ("cpath", UNSET),
+    ("gcc-exec-prefix", UNSET),
+    ("compiler-path", UNSET),
+    ("library-path", UNSET),
+    ("pkg-config-path", UNSET),
+    ("tar-options", UNSET),
+    ("gzip-env", UNSET),
+    ("xz-opt", UNSET),
+    ("xz-defaults", UNSET),
+    ("dpkg-deb-threads-max", re.compile(r"1")),
+    ("dpkg-deb-compressor-type", re.compile(r"xz")),
+    ("dpkg-deb-compressor-level", re.compile(r"6")),
     ("source-date-epoch", DECIMAL),
     ("kbuild-build-timestamp", TIMESTAMP),
     ("kbuild-build-user", IDENTIFIER),
@@ -89,29 +147,96 @@ KBUILD_FLAGS_FIELDS = (
     ("kbuild-build-version", re.compile(r"[1-9][0-9]{0,8}")),
 )
 
+TOOLCHAIN_TOOL_NAMES = (
+    "gcc",
+    "as",
+    "ld",
+    "ar",
+    "nm",
+    "objcopy",
+    "objdump",
+    "readelf",
+    "strip",
+    "rustc",
+    "host-gcc",
+    "host-gxx",
+    "host-as",
+    "host-ld",
+    "host-ar",
+    "flex",
+    "bison",
+    "m4",
+    "awk",
+    "perl",
+    "python3",
+    "pkg-config",
+    "pahole",
+    "git",
+    "make",
+    "depmod",
+    "modinfo",
+    "tar",
+    "gzip",
+    "xz",
+    "dpkg-deb",
+    "fdtget",
+    "bash",
+    "sh",
+    "bc",
+    "getconf",
+    "sha1sum",
+    "ln",
+    "uname",
+    "sha256sum",
+    "find",
+    "sort",
+    "xargs",
+    "rsync",
+    "cp",
+    "dpkg",
+    "touch",
+    "realpath",
+    "nproc",
+    "date",
+    "install",
+    "stat",
+    "grep",
+    "sed",
+    "readlink",
+    "wc",
+    "tr",
+    "cut",
+    "findmnt",
+    "curl",
+    "flock",
+    "mv",
+    "chmod",
+    "mkdir",
+    "mktemp",
+    "rm",
+    "cat",
+    "dirname",
+    "basename",
+    "env",
+    "true",
+    "cmp",
+    "head",
+    "expr",
+    "uniq",
+)
+
 TOOLCHAIN_FIELDS = (
-    ("schema", re.compile(r"tb321fu\.kernel-toolchain/v1")),
+    ("schema", re.compile(r"tb321fu\.kernel-toolchain/v2")),
     ("cross-compile", CROSS_COMPILE),
-    ("gcc-sha256", HEX64),
-    ("gcc-version", PRINTABLE),
-    ("as-sha256", HEX64),
-    ("as-version", PRINTABLE),
-    ("ld-sha256", HEX64),
-    ("ld-version", PRINTABLE),
-    ("ar-sha256", HEX64),
-    ("ar-version", PRINTABLE),
-    ("nm-sha256", HEX64),
-    ("nm-version", PRINTABLE),
-    ("objcopy-sha256", HEX64),
-    ("objcopy-version", PRINTABLE),
-    ("strip-sha256", HEX64),
-    ("strip-version", PRINTABLE),
-    ("rustc-sha256", HEX64),
-    ("rustc-version", PRINTABLE),
-    ("make-sha256", HEX64),
-    ("make-version", PRINTABLE),
-    ("dpkg-deb-sha256", HEX64),
-    ("dpkg-deb-version", PRINTABLE),
+    ("bison-data-directory", ABSOLUTE_DATA_PATH),
+    ("bison-data-sha256", HEX64),
+) + tuple(
+    field
+    for tool in TOOLCHAIN_TOOL_NAMES
+    for field in (
+        (f"{tool}-sha256", HEX64_OR_UNUSED if tool == "pahole" else HEX64),
+        (f"{tool}-version", PRINTABLE),
+    )
 )
 
 
@@ -192,9 +317,12 @@ def parse_bundle(path: pathlib.Path) -> tuple[dict[str, str], bytes]:
 def validate_sdk_path(path: str, source: pathlib.Path) -> None:
     if not path.startswith("./") or path == "./" or len(path) > 4096:
         raise BundleError(f"invalid SDK manifest path: {source}")
-    if "//" in path or path.endswith("/"):
+    if "//" in path or "\\" in path or path.endswith("/"):
         raise BundleError(f"invalid SDK manifest path: {source}")
-    for component in path[2:].split("/"):
+    components = path[2:].split("/")
+    if ":" in components[0]:
+        raise BundleError(f"invalid SDK manifest path: {source}")
+    for component in components:
         if not component or component in {".", ".."} or len(component) > 255:
             raise BundleError(f"invalid SDK manifest path: {source}")
 
@@ -252,8 +380,24 @@ def parse_expectation(argument: str) -> tuple[str, str]:
 
 
 def validate_cross_compile(value: str, label: str) -> None:
-    if ".." in value or "//" in value:
+    if not value.startswith("/") or ".." in value or "//" in value:
         raise BundleError(f"invalid {label} cross-compile prefix")
+
+
+def validate_absolute_data_path(value: str, label: str) -> None:
+    if (
+        not value.startswith("/")
+        or value.endswith("/")
+        or "//" in value
+        or "\\" in value
+    ):
+        raise BundleError(f"invalid {label} data path")
+    components = value[1:].split("/")
+    if any(
+        component in {"", ".", ".."} or len(component) > 255
+        for component in components
+    ):
+        raise BundleError(f"invalid {label} data path")
 
 
 def verify_linked_metadata(
@@ -284,6 +428,12 @@ def verify_linked_metadata(
         if digest != bundle["kernel-toolchain-manifest-sha256"]:
             raise BundleError("toolchain manifest SHA-256 mismatch")
         validate_cross_compile(toolchain["cross-compile"], "toolchain")
+        validate_absolute_data_path(
+            toolchain["bison-data-directory"], "toolchain Bison"
+        )
+        pahole_unused = toolchain["pahole-sha256"] == "unused"
+        if pahole_unused != (toolchain["pahole-version"] == "unused"):
+            raise BundleError("toolchain pahole unused state is inconsistent")
         if toolchain["rustc-sha256"] != bundle["rustc-sha256"]:
             raise BundleError("toolchain rustc SHA-256 differs from bundle")
         if toolchain["rustc-version"] != bundle["rustc"]:

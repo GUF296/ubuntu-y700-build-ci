@@ -342,6 +342,8 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         '"$release_dir/SENSOR-SOURCE-LOCK.tsv"',
         'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/HAPTICS-SOURCE-LOCK.tsv"',
         '"$release_dir/HAPTICS-SOURCE-LOCK.tsv"',
+        'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/HAPTICS-BUILD-TOOLS.tsv"',
+        '"$release_dir/HAPTICS-BUILD-TOOLS.tsv"',
         'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/MODULES.sha256"',
         '"$release_dir/MODULES.sha256"',
         'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KERNEL-SDK-MANIFEST.tsv"',

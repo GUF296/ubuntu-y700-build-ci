@@ -108,7 +108,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
-            gdisk qemu-utils sudo ca-certificates gnupg binutils patch kmod \
+            gdisk qemu-utils sudo ca-certificates gnupg binutils patch kmod bc \
+            device-tree-compiler flex bison m4 build-essential \
             meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
             libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64
 
@@ -499,6 +500,8 @@ jobs:
             "$release_dir/SENSOR-SOURCE-LOCK.tsv"
           stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/HAPTICS-SOURCE-LOCK.tsv" \
             "$release_dir/HAPTICS-SOURCE-LOCK.tsv"
+          stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/HAPTICS-BUILD-TOOLS.tsv" \
+            "$release_dir/HAPTICS-BUILD-TOOLS.tsv"
           stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/MODULES.sha256" \
             "$release_dir/MODULES.sha256"
           stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KERNEL-SDK-MANIFEST.tsv" \

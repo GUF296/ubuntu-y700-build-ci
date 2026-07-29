@@ -11,25 +11,44 @@ import tempfile
 
 
 SCRIPT = pathlib.Path(__file__).with_name("verify-kernel-bundle.py")
+DEFAULT_CROSS_COMPILE = "/usr/bin/aarch64-linux-gnu-"
 
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def fixture_tool_digest(tool: str) -> str:
+    return sha(f"tb321fu fixture tool: {tool}".encode("ascii"))
+
+
 def tsv(fields: list[tuple[str, str]]) -> bytes:
     return "".join(f"{key}\t{value}\n" for key, value in fields).encode("ascii")
 
 
-def make_flags(source_epoch: str, cross_compile: str = "aarch64-linux-gnu-") -> bytes:
+def make_flags(
+    source_epoch: str, cross_compile: str = DEFAULT_CROSS_COMPILE
+) -> bytes:
     return tsv(
         [
-            ("schema", "tb321fu.kbuild-flags/v1"),
+            ("schema", "tb321fu.kbuild-flags/v2"),
+            ("environment-policy", "isolated-allowlist-v1"),
+            (
+                "path",
+                "private-locked-tool-directory-v1",
+            ),
+            ("config-shell", "absolute-locked-sh-v1"),
+            ("build-path-policy", "deterministic-input-key-v1"),
+            ("lc-all", "C"),
+            ("lang", "C"),
+            ("tz", "UTC"),
             ("arch", "arm64"),
             ("cross-compile", cross_compile),
             ("kconfig-notimestamp", "1"),
-            ("kcflags", "unset"),
-            ("kaflags", "unset"),
+            ("dtb-contract", "tb321fu-aw86937-dual-v1"),
+            ("depmod-config", "empty-private-v1"),
+            ("kcflags", "debug-prefix-map-source-and-build-v1"),
+            ("kaflags", "debug-prefix-map-source-and-build-v1"),
             ("kcppflags", "unset"),
             ("krustflags", "unset"),
             ("kbuild-cflags", "unset"),
@@ -52,8 +71,51 @@ def make_flags(source_epoch: str, cross_compile: str = "aarch64-linux-gnu-") -> 
             ("hostldflags", "unset"),
             ("usercflags", "unset"),
             ("userldflags", "unset"),
+            ("localversion", "unset"),
+            ("dtc", "unset"),
+            ("dtc-flags", "unset"),
+            ("objcopyflags", "unset"),
+            ("host-extracflags", "unset"),
+            ("host-extracxxflags", "unset"),
+            ("host-extrarustflags", "unset"),
+            ("hostldlibs", "unset"),
+            ("procmacroldflags", "unset"),
+            ("kbuild-extra-warn", "unset"),
+            ("kbuild-clippy", "unset"),
+            ("kbuild-checksrc", "unset"),
+            ("kbuild-extmod-output", "unset"),
+            ("kbuild-nocmddep", "unset"),
+            ("kbuild-nsdeps", "unset"),
+            ("kbuild-preserve", "unset"),
+            ("kbuild-symtypes", "unset"),
+            ("kbuild-gendwarfksyms-stable", "unset"),
+            ("kbuild-kconfig", "unset"),
+            ("kconfig-autoconfig", "unset"),
+            ("kconfig-autoheader", "unset"),
+            ("config-prefix", "unset"),
+            ("kconfig-defconfig-list", "unset"),
+            ("kconfig-allconfig", "unset"),
+            ("kconfig-overwriteconfig", "unset"),
+            ("kconfig-warn-unknown-symbols", "unset"),
+            ("kconfig-werror", "unset"),
+            ("kconfig-nosilentupdate", "unset"),
+            ("makefiles", "unset"),
+            ("gnumakeflags", "unset"),
             ("makeflags", "unset"),
+            ("mflags", "unset"),
             ("makeoverrides", "unset"),
+            ("cpath", "unset"),
+            ("gcc-exec-prefix", "unset"),
+            ("compiler-path", "unset"),
+            ("library-path", "unset"),
+            ("pkg-config-path", "unset"),
+            ("tar-options", "unset"),
+            ("gzip-env", "unset"),
+            ("xz-opt", "unset"),
+            ("xz-defaults", "unset"),
+            ("dpkg-deb-threads-max", "1"),
+            ("dpkg-deb-compressor-type", "xz"),
+            ("dpkg-deb-compressor-level", "6"),
             ("source-date-epoch", source_epoch),
             ("kbuild-build-timestamp", "2026-07-15 00:00:00 UTC"),
             ("kbuild-build-user", "tb321fu-ci"),
@@ -63,25 +125,104 @@ def make_flags(source_epoch: str, cross_compile: str = "aarch64-linux-gnu-") -> 
     )
 
 
-def make_toolchain(cross_compile: str = "aarch64-linux-gnu-") -> bytes:
+def make_toolchain(
+    cross_compile: str = DEFAULT_CROSS_COMPILE,
+    bison_data_directory: str = "/usr/share/bison",
+    bison_data_sha256: str = "e" * 64,
+    pahole_sha256: str = "unused",
+    pahole_version: str = "unused",
+) -> bytes:
     fields = [
-        ("schema", "tb321fu.kernel-toolchain/v1"),
+        ("schema", "tb321fu.kernel-toolchain/v2"),
         ("cross-compile", cross_compile),
+        ("bison-data-directory", bison_data_directory),
+        ("bison-data-sha256", bison_data_sha256),
     ]
-    for tool, digest in (
-        ("gcc", "3" * 64),
-        ("as", "4" * 64),
-        ("ld", "5" * 64),
-        ("ar", "6" * 64),
-        ("nm", "7" * 64),
-        ("objcopy", "8" * 64),
-        ("strip", "9" * 64),
-        ("rustc", "a" * 64),
-        ("make", "b" * 64),
-        ("dpkg-deb", "c" * 64),
+    for tool in (
+        "gcc",
+        "as",
+        "ld",
+        "ar",
+        "nm",
+        "objcopy",
+        "objdump",
+        "readelf",
+        "strip",
+        "rustc",
+        "host-gcc",
+        "host-gxx",
+        "host-as",
+        "host-ld",
+        "host-ar",
+        "flex",
+        "bison",
+        "m4",
+        "awk",
+        "perl",
+        "python3",
+        "pkg-config",
+        "pahole",
+        "git",
+        "make",
+        "depmod",
+        "modinfo",
+        "tar",
+        "gzip",
+        "xz",
+        "dpkg-deb",
+        "fdtget",
+        "bash",
+        "sh",
+        "bc",
+        "getconf",
+        "sha1sum",
+        "ln",
+        "uname",
+        "sha256sum",
+        "find",
+        "sort",
+        "xargs",
+        "rsync",
+        "cp",
+        "dpkg",
+        "touch",
+        "realpath",
+        "nproc",
+        "date",
+        "install",
+        "stat",
+        "grep",
+        "sed",
+        "readlink",
+        "wc",
+        "tr",
+        "cut",
+        "findmnt",
+        "curl",
+        "flock",
+        "mv",
+        "chmod",
+        "mkdir",
+        "mktemp",
+        "rm",
+        "cat",
+        "dirname",
+        "basename",
+        "env",
+        "true",
+        "cmp",
+        "head",
+        "expr",
+        "uniq",
     ):
+        if tool == "pahole":
+            digest = pahole_sha256
+            version = pahole_version
+        else:
+            digest = fixture_tool_digest(tool)
+            version = f"fixture {tool} 1.0"
         fields.extend(
-            [(f"{tool}-sha256", digest), (f"{tool}-version", f"fixture {tool} 1.0")]
+            [(f"{tool}-sha256", digest), (f"{tool}-version", version)]
         )
     return tsv(fields)
 
@@ -102,9 +243,15 @@ def make_sdk_manifest(config_sha: str) -> bytes:
 def make_bundle(**overrides: str) -> tuple[bytes, bytes, bytes, bytes]:
     source_epoch = overrides.get("source-date-epoch", "1784073600")
     config_sha = overrides.get("kernel-config-sha256", "2" * 64)
-    cross_compile = overrides.get("_cross_compile", "aarch64-linux-gnu-")
+    cross_compile = overrides.get("_cross_compile", DEFAULT_CROSS_COMPILE)
     flags = make_flags(source_epoch, cross_compile)
-    toolchain = make_toolchain(cross_compile)
+    toolchain = make_toolchain(
+        cross_compile,
+        overrides.get("_bison_data_directory", "/usr/share/bison"),
+        overrides.get("_bison_data_sha256", "e" * 64),
+        overrides.get("_pahole_sha256", "unused"),
+        overrides.get("_pahole_version", "unused"),
+    )
     sdk_manifest = make_sdk_manifest(config_sha)
     fields = [
         ("schema", "tb321fu.kernel-bundle/v2"),
@@ -120,7 +267,7 @@ def make_bundle(**overrides: str) -> tuple[bytes, bytes, bytes, bytes]:
         ("kernel-sdk-manifest-sha256", sha(sdk_manifest)),
         ("kernel-toolchain-manifest-sha256", sha(toolchain)),
         ("kbuild-flags-sha256", sha(flags)),
-        ("rustc-sha256", "a" * 64),
+        ("rustc-sha256", fixture_tool_digest("rustc")),
         ("rustc", "fixture rustc 1.0"),
         ("source-date-epoch", source_epoch),
         ("kbuild-build-timestamp", "2026-07-15 00:00:00 UTC"),
@@ -278,14 +425,51 @@ def main() -> None:
         if result.returncode == 0 or b"not byte-identical" not in result.stderr:
             raise SystemExit("non-identical valid bundle was accepted")
 
-        result = run(bundle, flags, toolchain, sdk_manifest, "--expect", "kernel-release=7.1.1-wrong")
+        result = run(
+            bundle,
+            flags,
+            toolchain,
+            sdk_manifest,
+            "--expect",
+            "kernel-release=7.1.1-wrong",
+        )
         if result.returncode == 0 or b"expectation mismatch" not in result.stderr:
             raise SystemExit("mismatched expectation was accepted")
 
-        flags.write_bytes(flags_bytes.replace(b"kcflags\tunset", b"kcflags\t-hostile"))
+        flags.write_bytes(
+            flags_bytes.replace(
+                b"kcflags\tdebug-prefix-map-source-and-build-v1",
+                b"kcflags\t-hostile",
+            )
+        )
         result = run(bundle, flags, toolchain, sdk_manifest)
         if result.returncode == 0 or b"invalid Kbuild flags kcflags" not in result.stderr:
             raise SystemExit("hostile inherited Kbuild flag was accepted")
+        flags.write_bytes(flags_bytes)
+
+        flags.write_bytes(
+            flags_bytes.replace(
+                b"environment-policy\tisolated-allowlist-v1",
+                b"environment-policy\tambient-denylist",
+            )
+        )
+        result = run(bundle, flags, toolchain, sdk_manifest)
+        if (
+            result.returncode == 0
+            or b"invalid Kbuild flags environment-policy" not in result.stderr
+        ):
+            raise SystemExit("non-allowlist Kbuild environment policy was accepted")
+        flags.write_bytes(flags_bytes)
+
+        flags.write_bytes(
+            flags_bytes.replace(
+                b"dtb-contract\ttb321fu-aw86937-dual-v1",
+                b"dtb-contract\tpresence-only",
+            )
+        )
+        result = run(bundle, flags, toolchain, sdk_manifest)
+        if result.returncode == 0 or b"invalid Kbuild flags dtb-contract" not in result.stderr:
+            raise SystemExit("weakened DTB contract was accepted")
         flags.write_bytes(flags_bytes)
 
         sdk_manifest.write_bytes(
@@ -296,10 +480,32 @@ def main() -> None:
             raise SystemExit("SDK source symlink was accepted")
         sdk_manifest.write_bytes(sdk_manifest_bytes)
 
-        toolchain.write_bytes(toolchain_bytes.replace(b"rustc-version\tfixture rustc 1.0", b"rustc-version\tother rustc"))
+        toolchain.write_bytes(
+            toolchain_bytes.replace(
+                b"rustc-version\tfixture rustc 1.0",
+                b"rustc-version\tother rustc",
+            )
+        )
         result = run(bundle, flags, toolchain, sdk_manifest)
         if result.returncode == 0 or b"toolchain manifest SHA-256 mismatch" not in result.stderr:
             raise SystemExit("tampered toolchain manifest was accepted")
+
+        (
+            inconsistent,
+            inconsistent_flags,
+            inconsistent_toolchain,
+            inconsistent_sdk,
+        ) = make_bundle(_pahole_sha256="unused", _pahole_version="fixture pahole 1.0")
+        bundle.write_bytes(inconsistent)
+        flags.write_bytes(inconsistent_flags)
+        toolchain.write_bytes(inconsistent_toolchain)
+        sdk_manifest.write_bytes(inconsistent_sdk)
+        result = run(bundle, flags, toolchain, sdk_manifest)
+        if (
+            result.returncode == 0
+            or b"toolchain pahole unused state is inconsistent" not in result.stderr
+        ):
+            raise SystemExit("inconsistent unused pahole identity was accepted")
 
         hostile_bundle, hostile_flags, hostile_toolchain, hostile_sdk = make_bundle(
             _cross_compile="a/../hostile-"
@@ -309,8 +515,39 @@ def main() -> None:
         toolchain.write_bytes(hostile_toolchain)
         sdk_manifest.write_bytes(hostile_sdk)
         result = run(bundle, flags, toolchain, sdk_manifest)
-        if result.returncode == 0 or b"invalid Kbuild flags cross-compile prefix" not in result.stderr:
+        if (
+            result.returncode == 0
+            or b"invalid Kbuild flags cross-compile prefix" not in result.stderr
+        ):
             raise SystemExit("unsafe cross-compile prefix was accepted")
+
+        hostile_bundle, hostile_flags, hostile_toolchain, hostile_sdk = make_bundle(
+            _bison_data_directory="/usr/share/../hostile"
+        )
+        bundle.write_bytes(hostile_bundle)
+        flags.write_bytes(hostile_flags)
+        toolchain.write_bytes(hostile_toolchain)
+        sdk_manifest.write_bytes(hostile_sdk)
+        result = run(bundle, flags, toolchain, sdk_manifest)
+        if (
+            result.returncode == 0
+            or b"invalid toolchain Bison data path" not in result.stderr
+        ):
+            raise SystemExit("unsafe Bison data directory was accepted")
+
+        relative_bundle, relative_flags, relative_toolchain, relative_sdk = make_bundle(
+            _cross_compile="toolchains/aarch64-linux-gnu-"
+        )
+        bundle.write_bytes(relative_bundle)
+        flags.write_bytes(relative_flags)
+        toolchain.write_bytes(relative_toolchain)
+        sdk_manifest.write_bytes(relative_sdk)
+        result = run(bundle, flags, toolchain, sdk_manifest)
+        if (
+            result.returncode == 0
+            or b"invalid Kbuild flags cross-compile prefix" not in result.stderr
+        ):
+            raise SystemExit("relative cross-compile prefix was accepted")
 
     print("KERNEL_BUNDLE_METADATA=PASS")
 

@@ -7,6 +7,8 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/common.sh"
 
 readonly CANONICAL_KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY=GUF296/ubuntu-y700-build-ci
+readonly HAPTICS_BUILD_ENVIRONMENT_POLICY=isolated-allowlist-v1
+readonly HAPTICS_BUILD_ENVIRONMENT_POLICY_SHA256=9c1a0bfc44acbcde4833637698aaa59b8c386f3138f79486001ce2003f7095cd
 
 usage() {
   cat <<'EOF'
@@ -312,6 +314,105 @@ verify_haptics_checksum_manifest() {
   (cd "$(dirname -- "$manifest")" &&
     sha256sum --strict --check "$(basename -- "$manifest")" >/dev/null) ||
     ci_die "haptics checksum manifest verification failed"
+}
+
+haptics_build_environment_policy_sha256() {
+  printf '%s\n' \
+    'schema=tb321fu.haptics-build-environment/v1' \
+    'policy=isolated-allowlist-v1' \
+    'path=/usr/sbin:/usr/bin:/sbin:/bin' \
+    'lang=C' \
+    'lc-all=C' \
+    'timezone=UTC' \
+    'home=/nonexistent' \
+    'tmpdir=/tmp' \
+    'producer-environment=env-i-script-allowlist' \
+    'transport-environment=http_proxy,https_proxy,no_proxy' \
+    'dynamic-kbuild-environment=discarded' \
+    'source-date-epoch=explicit' \
+    'debian-compression=xz,level=6,threads=1,uniform=yes' \
+    'kbuild-path=private-locked-tool-directory-v1' \
+    'kbuild-shell=absolute-locked-dash-v1' \
+    'command-resolution=absolute-recorded-paths' \
+    'generated-kernel-host-tools=absolute-private-path,sha256,pre-and-post-use-verification' \
+    'tool-identity=absolute-realpath,sha256,version,post-use-verification' |
+    sha256sum | awk '{print $1}'
+}
+
+verify_haptics_build_tools_manifest() {
+  local manifest=$1 expected_manifest_sha=$2 expected_policy_sha=$3
+  local expected_toolset_sha=$4
+  local index line kind logical_name path digest version extra without_tabs
+  local actual_policy_sha actual_toolset_sha tool_records
+  local -a lines=() tool_lines=()
+  local -a expected_tools=(
+    bash dash env readlink realpath basename dirname date mktemp mkdir rm chmod cp mv
+    ln cat find install touch stat awk grep sed sort cut cmp tee tr wc git curl
+    python3 make gcc as ld ar rsync dpkg dpkg-deb sha256sum
+    aarch64-linux-gnu-gcc aarch64-linux-gnu-cpp aarch64-linux-gnu-as
+    aarch64-linux-gnu-ld aarch64-linux-gnu-ar aarch64-linux-gnu-nm
+    aarch64-linux-gnu-objcopy aarch64-linux-gnu-objdump
+    aarch64-linux-gnu-readelf aarch64-linux-gnu-strip kmod tar gzip xz
+    sh bc getconf sha1sum uname head expr uniq xargs
+  )
+
+  require_regular_mode "$manifest" 644 'HAPTICS-BUILD-TOOLS.tsv'
+  require_bounded_metadata_file "$manifest" 'haptics build-tools manifest' 131072
+  mapfile -t lines < "$manifest"
+  [ "${#lines[@]}" -eq "$((4 + ${#expected_tools[@]}))" ] ||
+    ci_die 'haptics build-tools manifest must contain exactly four headers and 64 tool records'
+  [ "${#expected_tools[@]}" -eq 64 ] ||
+    ci_die 'internal haptics build-tools inventory count mismatch'
+  [ "${lines[0]}" = $'schema\ttb321fu.haptics-build-tools/v1' ] ||
+    ci_die 'unsupported haptics build-tools manifest schema'
+  [ "${lines[1]}" = $'environment-policy\tisolated-allowlist-v1' ] ||
+    ci_die 'haptics build-tools manifest has an unexpected environment policy'
+  [ "${lines[2]}" = "environment-policy-sha256"$'\t'"$expected_policy_sha" ] ||
+    ci_die 'haptics build-tools manifest environment-policy SHA-256 mismatch'
+  [ "${lines[3]}" = "build-toolset-sha256"$'\t'"$expected_toolset_sha" ] ||
+    ci_die 'haptics build-tools manifest toolset SHA-256 differs from the source lock'
+
+  for index in "${!expected_tools[@]}"; do
+    line=${lines[$((index + 4))]}
+    without_tabs=${line//$'\t'/}
+    [ "$(( ${#line} - ${#without_tabs} ))" -eq 4 ] ||
+      ci_die "haptics build-tool record must contain exactly five TSV fields at line $((index + 5))"
+    IFS=$'\t' read -r kind logical_name path digest version extra <<<"$line"
+    [ "$kind" = tool ] && [ "$logical_name" = "${expected_tools[$index]}" ] &&
+      [ -z "$extra" ] ||
+      ci_die "unexpected haptics build-tool order at line $((index + 5))"
+    [ -n "$path" ] && [ "${#path}" -le 4096 ] ||
+      ci_die "invalid haptics build-tool path: $logical_name"
+    LC_ALL=C grep -Eq '^[ -~]+$' <<<"$path" ||
+      ci_die "invalid haptics build-tool path: $logical_name"
+    case "$path" in
+      /usr/sbin/*|/usr/bin/*|/sbin/*|/bin/*) ;;
+      *) ci_die "haptics build-tool path is outside the canonical producer PATH: $logical_name" ;;
+    esac
+    case "$path" in
+      *//*|*/./*|*/../*|*/.|*/..|*\\*)
+        ci_die "unsafe haptics build-tool path: $logical_name"
+        ;;
+    esac
+    [[ $digest =~ ^[0-9a-f]{64}$ ]] ||
+      ci_die "invalid haptics build-tool SHA-256: $logical_name"
+    [ -n "$version" ] && [ "${#version}" -le 240 ] &&
+      LC_ALL=C grep -Eq '^[ -~]+$' <<<"$version" ||
+      ci_die "invalid haptics build-tool version: $logical_name"
+    tool_lines+=("$line")
+  done
+
+  actual_policy_sha=$(haptics_build_environment_policy_sha256)
+  [ "$actual_policy_sha" = "$HAPTICS_BUILD_ENVIRONMENT_POLICY_SHA256" ] ||
+    ci_die 'internal haptics build-environment policy digest mismatch'
+  [ "$expected_policy_sha" = "$HAPTICS_BUILD_ENVIRONMENT_POLICY_SHA256" ] ||
+    ci_die 'haptics source lock environment-policy SHA-256 mismatch'
+  tool_records="$work/HAPTICS-BUILD-TOOLS.records"
+  printf '%s\n' "${tool_lines[@]}" > "$tool_records"
+  actual_toolset_sha=$(sha256sum "$tool_records" | awk '{print $1}')
+  [ "$actual_toolset_sha" = "$expected_toolset_sha" ] ||
+    ci_die 'haptics build-toolset SHA-256 does not cover the exact ordered tool records'
+  check_sha "$manifest" "$expected_manifest_sha" 'haptics build-tools manifest'
 }
 
 extract_haptics_git_blob() {
@@ -870,6 +971,8 @@ verify_modules_manifest \
 
 find_unique_file haptics_deb "$haptics_root" 'tb321fu-haptics_*.deb' 'haptics DEB'
 find_unique_file haptics_lock "$haptics_root" HAPTICS-SOURCE-LOCK.tsv 'HAPTICS-SOURCE-LOCK.tsv'
+find_unique_file haptics_build_tools "$haptics_root" \
+  HAPTICS-BUILD-TOOLS.tsv 'HAPTICS-BUILD-TOOLS.tsv'
 find_unique_file haptics_checksum_manifest "$haptics_root" \
   SHA256SUMS-tb321fu-haptics-debs.txt 'haptics checksum manifest'
 find_unique_file haptics_producer_bundle "$haptics_root" \
@@ -878,20 +981,29 @@ find_unique_file haptics_producer_bundle "$haptics_root" \
   ci_die "haptics DEB must be at the archive root"
 [ "$haptics_lock" = "$haptics_root/HAPTICS-SOURCE-LOCK.tsv" ] ||
   ci_die "HAPTICS-SOURCE-LOCK.tsv must be at the archive root"
+[ "$haptics_build_tools" = "$haptics_root/HAPTICS-BUILD-TOOLS.tsv" ] ||
+  ci_die "HAPTICS-BUILD-TOOLS.tsv must be at the archive root"
 [ "$haptics_checksum_manifest" = "$haptics_root/SHA256SUMS-tb321fu-haptics-debs.txt" ] ||
   ci_die "haptics checksum manifest must be at the archive root"
 [ "$haptics_producer_bundle" = "$haptics_root/HAPTICS-PRODUCER.bundle" ] ||
   ci_die "haptics producer Git bundle must be at the archive root"
 require_regular_mode "$haptics_lock" 644 'HAPTICS-SOURCE-LOCK.tsv'
+require_regular_mode "$haptics_build_tools" 644 'HAPTICS-BUILD-TOOLS.tsv'
 require_regular_mode "$haptics_checksum_manifest" 644 'haptics checksum manifest'
 require_regular_mode "$haptics_producer_bundle" 644 'haptics producer Git bundle'
 require_bounded_metadata_file "$haptics_lock" 'haptics source lock' 65536
+require_bounded_metadata_file "$haptics_build_tools" 'haptics build-tools manifest' 131072
 require_bounded_metadata_file "$haptics_checksum_manifest" 'haptics checksum manifest' 1048576
 declare -a haptics_lock_fields=(
   schema
   haptics-output-mode
   haptics-producer-commit
   haptics-producer-state
+  environment-policy
+  environment-policy-sha256
+  build-toolset-sha256
+  build-tools-manifest
+  build-tools-manifest-sha256
   aw86937-driver-sha256
   aw86937-build-source-sha256
   haptic-ram-firmware-sha256
@@ -910,7 +1022,7 @@ declare -a haptics_lock_fields=(
 require_exact_tsv_order "$haptics_lock" "${haptics_lock_fields[@]}"
 declare -A haptics_meta=()
 load_tsv "$haptics_lock" haptics_meta
-[ "${haptics_meta[schema]}" = tb321fu.haptics-source-lock/v2 ] ||
+[ "${haptics_meta[schema]}" = tb321fu.haptics-source-lock/v3 ] ||
   ci_die "unsupported haptics source-lock schema"
 [ "${haptics_meta[haptics-output-mode]}" = release-candidate ] ||
   ci_die 'haptics source lock is not a release candidate'
@@ -918,6 +1030,24 @@ load_tsv "$haptics_lock" haptics_meta
   ci_die "haptics producer commit mismatch"
 [ "${haptics_meta[haptics-producer-state]}" = clean ] ||
   ci_die "haptics producer source lock is not clean"
+[ "${haptics_meta[environment-policy]}" = "$HAPTICS_BUILD_ENVIRONMENT_POLICY" ] ||
+  ci_die 'haptics source lock has an unexpected build-environment policy'
+[[ ${haptics_meta[environment-policy-sha256]} =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die 'invalid haptics build-environment policy SHA-256'
+[ "${haptics_meta[environment-policy-sha256]}" = \
+    "$HAPTICS_BUILD_ENVIRONMENT_POLICY_SHA256" ] ||
+  ci_die 'haptics source lock environment-policy SHA-256 mismatch'
+[[ ${haptics_meta[build-toolset-sha256]} =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die 'invalid haptics build-toolset SHA-256'
+[ "${haptics_meta[build-tools-manifest]}" = HAPTICS-BUILD-TOOLS.tsv ] ||
+  ci_die 'haptics source lock names an unexpected build-tools manifest'
+[[ ${haptics_meta[build-tools-manifest-sha256]} =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die 'invalid haptics build-tools manifest SHA-256'
+verify_haptics_build_tools_manifest \
+  "$haptics_build_tools" \
+  "${haptics_meta[build-tools-manifest-sha256]}" \
+  "${haptics_meta[environment-policy-sha256]}" \
+  "${haptics_meta[build-toolset-sha256]}"
 for key in \
   aw86937-driver-sha256 \
   aw86937-build-source-sha256 \
@@ -988,6 +1118,7 @@ check_sha "$haptics_snapshot_helper" "${haptics_meta[haptic-test-helper-sha256]}
 declare -A expected_haptics_root=(
   ["$haptics_deb"]=1
   ["$haptics_lock"]=1
+  ["$haptics_build_tools"]=1
   ["$haptics_checksum_manifest"]=1
   ["$haptics_producer_bundle"]=1
   ["$haptics_snapshot"]=1
@@ -1003,6 +1134,7 @@ done < <(find "$haptics_root" -mindepth 1 -maxdepth 1 -print0)
 verify_haptics_checksum_manifest "$haptics_checksum_manifest" \
   "./$(basename -- "$haptics_deb")" \
   ./HAPTICS-SOURCE-LOCK.tsv \
+  ./HAPTICS-BUILD-TOOLS.tsv \
   ./HAPTICS-PRODUCER.bundle \
   ./HAPTICS-SOURCE-SNAPSHOT/source/haptics/daily-current/linux/drivers/input/misc/aw86937-y700.c \
   ./HAPTICS-SOURCE-SNAPSHOT/build/aw86937-haptics.c \
@@ -1215,6 +1347,7 @@ install -m 0644 "$kernel_bundle" "$stage/KERNEL-BUNDLE.tsv"
 install -m 0644 "$kernel_source_lock" "$stage/KERNEL-SOURCE-LOCK.tsv"
 install -m 0644 "$sensor_source_lock" "$stage/SENSOR-SOURCE-LOCK.tsv"
 install -m 0644 "$haptics_lock" "$stage/HAPTICS-SOURCE-LOCK.tsv"
+install -m 0644 "$haptics_build_tools" "$stage/HAPTICS-BUILD-TOOLS.tsv"
 install -m 0644 "$kernel_modules_manifest" "$stage/MODULES.sha256"
 install -m 0644 "$kernel_sdk_manifest" "$stage/KERNEL-SDK-MANIFEST.tsv"
 install -m 0644 "$kernel_toolchain_manifest" "$stage/KERNEL-TOOLCHAIN.tsv"
