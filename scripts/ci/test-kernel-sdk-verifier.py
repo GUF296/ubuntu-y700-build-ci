@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from unittest.mock import patch
 
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
@@ -311,6 +312,18 @@ def main() -> None:
             manifest_records(link_target=symlink_ratio_target),
         )
         verifier = load_verifier()
+        # Lower the budget on the ordinary fixture to test operation ordering.
+        # A member over budget must be rejected before its payload is opened.
+        with patch.object(verifier, "MAX_COMPRESSION_RATIO", 0), patch.object(
+            tarfile.TarFile, "extractfile", side_effect=AssertionError("payload opened before budget check")
+        ):
+            try:
+                verifier.archive_records(good_archive, time.monotonic() + 30)
+            except verifier.SDKError as exc:
+                if "compression ratio" not in str(exc):
+                    raise SystemExit(f"incorrect early budget rejection: {exc}") from exc
+            else:
+                raise SystemExit("zero test budget unexpectedly accepted a regular file")
         original_ratio = verifier.MAX_COMPRESSION_RATIO
         verifier.MAX_COMPRESSION_RATIO = 1
         try:

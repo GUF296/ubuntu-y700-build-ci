@@ -51,19 +51,19 @@ MAX_WORKFLOW_DISPATCH_INPUTS = 10
 APPROVED_KERNEL_SOURCE_PROFILE = {
     "KERNEL_ARTIFACT_ARCHIVE": (
         "https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/"
-        "tb321fu-kernel-bootstrap-570b90203d97-20260729.4/"
-        "tb321fu-kernel-artifacts-7.1.1-00009-g570b90203d97.tar.gz"
+        "tb321fu-kernel-bootstrap-11bbf0262857-20261120.1/"
+        "tb321fu-kernel-artifacts-7.1.1-00011-g11bbf0262857.tar.gz"
     ),
     "KERNEL_ARTIFACT_ARCHIVE_SHA256": (
-        "05f4a3e391988d8b6980b2c94304096e34e089661867f0c3b0f3048c54cba83c"
+        "ab71b3335e8a535a3e7f50dfc2c97f8932c1cddd91ec79a16188be8f08c6ce3b"
     ),
     "KERNEL_BUILD_ARCHIVE": (
         "https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/"
-        "tb321fu-kernel-bootstrap-570b90203d97-20260729.4/"
-        "tb321fu-kernel-build-sdk-7.1.1-00009-g570b90203d97.tar.gz"
+        "tb321fu-kernel-bootstrap-11bbf0262857-20261120.1/"
+        "tb321fu-kernel-build-sdk-7.1.1-00011-g11bbf0262857.tar.gz"
     ),
     "KERNEL_BUILD_ARCHIVE_SHA256": (
-        "7f9b12bd02c1155c9900a33c823d088e1a9f72689dea28c8ee582a31304c7c49"
+        "0b84cd9bec6c41d7c55c143cd7e945820971e4267aed66728126e6b96f753e87"
     ),
     "KERNEL_BOOTSTRAP_PRODUCER_COMMIT": (
         "cbc1b36c37c140271bb688c5b1a79b10e669ba2c"
@@ -78,11 +78,11 @@ APPROVED_KERNEL_SOURCE_PROFILE = {
 APPROVED_DEVICE_PROFILE = {
     "DEB_ARCHIVE": (
         "https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/"
-        "tb321fu-kernel-bootstrap-570b90203d97-20260729.4/"
-        "tb321fu-device-debs-7.1.1-00009-g570b90203d97.tar.gz"
+        "tb321fu-kernel-bootstrap-11bbf0262857-20261120.1/"
+        "tb321fu-device-debs-7.1.1-00011-g11bbf0262857.tar.gz"
     ),
     "DEB_ARCHIVE_SHA256": (
-        "1d9aec962398a4ee6876f013cf8348e57a76034c466c77df62a5bbba1488940a"
+        "16f905295d9c5644f3621e7c864da0e4653d724a4a8fe189aaaf5d302ce54490"
     ),
     "BUILD_TB321FU_CAMERA_STACK": "1",
     "CAMERA_STACK_ARCHIVE": "",
@@ -890,6 +890,20 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         if token not in combined_checksums_run:
             fail(f"combined checksum manifest omits Camera evidence: {token}")
 
+    release_lines = [
+        line.strip() for step in steps for line in str(step.get("run", "")).splitlines()
+        if "Release image streams:" in line
+    ]
+    if len(release_lines) != 1:
+        fail("release notes must describe the two archive streams")
+    stream_note = subprocess.run(
+        ["bash", "-euc", 'rootfs_stream_name=rootfs.img.7z; grub_stream_name=grub.img.7z; ' + release_lines[0]],
+        capture_output=True, text=True, check=False,
+    )
+    expected = "Release image streams: `rootfs.img.7z` and `grub.img.7z`; large streams may have contiguous `.NNN` parts.\n"
+    if stream_note.returncode or stream_note.stderr or stream_note.stdout != expected:
+        fail("release notes did not preserve the image stream names and split suffix")
+
     secret_paths: list[tuple[tuple[object, ...], str]] = []
     for path, value in scalar_nodes(data):
         if "${{ secrets." not in value:
@@ -902,12 +916,15 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         secret_paths.append((path, match.group(1)))
 
     rootfs_env = require_mapping(rootfs_step.get("env"), "rootfs build step env")
-    required = {"DEFAULT_USER_PASSWORD_HASH", "ROOT_PASSWORD_HASH"}
-    if not required.issubset(rootfs_env):
-        fail(f"rootfs step is missing secret env keys: {sorted(required - rootfs_env.keys())}")
-    for key in required:
-        if rootfs_env[key] != f"${{{{ secrets.{key} }}}}":
-            fail(f"{key} is not sourced directly from its repository secret")
+    required = {
+        "DEFAULT_USER_PASSWORD_HASH": "TB321FU_NOV2026_TEST_USER_PASSWORD_HASH",
+        "ROOT_PASSWORD_HASH": "ROOT_PASSWORD_HASH",
+    }
+    for key, secret_name in required.items():
+        if rootfs_env.get(key) != f"${{{{ secrets.{secret_name} }}}}":
+            fail(f"{key} must use the approved secret in the rootfs step")
+        if sum(name == secret_name for _, name in secret_paths) != 1:
+            fail(f"{secret_name} must only be exposed at the rootfs step")
 
     # GitHub renders an absent secret as an empty string. It must remain data,
     # never become shell syntax or a serialized workflow input.

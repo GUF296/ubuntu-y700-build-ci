@@ -979,6 +979,8 @@ validate_sdk_relative_path() {
   [ "$(LC_ALL=C printf '%s' "$relative" | tr -d '\040-\176' | wc -c)" -eq 0 ] ||
     ci_die 'kernel SDK manifest path must be printable ASCII'
   IFS=/ read -r -a sdk_components <<< "$relative"
+  [ "${#sdk_components[@]}" -le 128 ] ||
+    ci_die 'kernel SDK member path has too many components'
   [[ ${sdk_components[0]} != *:* ]] ||
     ci_die 'kernel SDK manifest contains an unsafe path'
   for component in "${sdk_components[@]}"; do
@@ -991,8 +993,8 @@ validate_sdk_relative_path() {
 write_kernel_sdk_manifest() {
   local root=$1 destination=$2 entry relative digest mode target special size path_list
   local mode_value normalized_mode expected_mode
-  local component
-  local -a sdk_link_components=()
+  local component resolved_depth
+  local -a sdk_link_components=() sdk_entry_components=()
   local record_count=0 total_regular_bytes=0
   local empty_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
@@ -1041,10 +1043,17 @@ write_kernel_sdk_manifest() {
         IFS=/ read -r -a sdk_link_components <<< "$target"
         [ "${#sdk_link_components[@]}" -le 128 ] ||
           ci_die 'kernel SDK symlink target has too many path components'
+        IFS=/ read -r -a sdk_entry_components <<< "$relative"
+        resolved_depth=$((${#sdk_entry_components[@]} - 1))
         for component in "${sdk_link_components[@]}"; do
           [ "${#component}" -le 255 ] ||
             ci_die 'kernel SDK symlink target has an oversized path component'
+          if [ -n "$component" ] && [ "$component" != . ]; then
+            resolved_depth=$((resolved_depth + 1))
+          fi
         done
+        [ "$resolved_depth" -le 128 ] ||
+          ci_die 'resolved kernel SDK symlink path has too many components'
         [ "$mode" = 777 ] ||
           ci_die 'kernel SDK symlink mode differs from the consumer contract'
         digest=$(printf '%s' "$target" | sha256sum | awk '{print $1}')
@@ -1083,7 +1092,7 @@ write_kernel_sdk_manifest() {
 write_kernel_sdk_archive() {
   local root=$1 destination=$2 file_list member_list size_file source_list symlink_list
   local entry relative resolved size
-  local archive_entry_count=0 source_regular_bytes=0 archive_bytes
+  local archive_entry_count=0 source_payload_bytes=0 archive_bytes
 
   [ -d "$root" ] || ci_die 'kernel SDK root is not a directory'
   symlink_list="$work/kernel-sdk-symlinks.list"
@@ -1116,30 +1125,32 @@ write_kernel_sdk_archive() {
       relative=${entry#./}
       validate_sdk_relative_path "$relative"
       printf '%s\0' "$entry" >> "$file_list"
-      if [ -f "$entry" ] && [ ! -L "$entry" ]; then
+      # On Linux lstat of a link reports its target's byte length. Both kinds
+      # of payload contribute to the consumer's archive expansion budget.
+      if [ -L "$entry" ] || [ -f "$entry" ]; then
         size=$(stat -c '%s' -- "$entry")
-        source_regular_bytes=$((source_regular_bytes + size))
-        [ "$source_regular_bytes" -le 34359738368 ] ||
-          ci_die 'kernel SDK archive regular-file total exceeds 32 GiB'
+        source_payload_bytes=$((source_payload_bytes + size))
+        [ "$source_payload_bytes" -le 34359738368 ] ||
+          ci_die 'kernel SDK archive payload total exceeds 32 GiB'
       fi
       archive_entry_count=$((archive_entry_count + 1))
       [ "$archive_entry_count" -le 200000 ] ||
         ci_die 'kernel SDK archive contains too many source entries'
     done < "$source_list"
     [ "$archive_entry_count" -gt 0 ] || ci_die 'kernel SDK archive source list is empty'
-    printf '%s\n' "$source_regular_bytes" > "$size_file"
+    printf '%s\n' "$source_payload_bytes" > "$size_file"
     "$TAR_BIN" --format=gnu --hard-dereference --null --no-recursion --sort=name \
       --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
       --files-from="$file_list" -cf - | "$GZIP_BIN" -6 -n > "$destination"
   )
   [ -s "$destination" ] || ci_die 'kernel SDK archive is empty'
-  source_regular_bytes=$(cat "$size_file")
-  [[ $source_regular_bytes =~ ^[0-9]+$ ]] ||
+  source_payload_bytes=$(cat "$size_file")
+  [[ $source_payload_bytes =~ ^[0-9]+$ ]] ||
     ci_die 'kernel SDK archive logical size record is invalid'
   archive_bytes=$(stat -c '%s' -- "$destination")
   [ "$archive_bytes" -le 2147483648 ] ||
     ci_die 'kernel SDK archive exceeds the 2 GiB consumer limit'
-  [ "$source_regular_bytes" -le $((archive_bytes * 1000)) ] ||
+  [ "$source_payload_bytes" -le $((archive_bytes * 1000)) ] ||
     ci_die 'kernel SDK archive compression ratio exceeds the consumer limit'
   "$TAR_BIN" -tzf "$destination" > "$member_list" ||
     ci_die 'cannot list kernel SDK archive'

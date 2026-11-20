@@ -7,18 +7,18 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly APPROVED_KERNEL_BOOTSTRAP_PRODUCER_COMMIT=cbc1b36c37c140271bb688c5b1a79b10e669ba2c
 readonly APPROVED_KERNEL_BOOTSTRAP_PRODUCER_TREE=0d84ed4c3d8cd13b70624e47800ae932cb80acac
 readonly APPROVED_KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256=f554dc63a60a8a5c31f7acac67ca654596d7ff006cdb6845be940e03ac0c3e90
-readonly APPROVED_KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/tb321fu-kernel-bootstrap-570b90203d97-20260729.4/tb321fu-kernel-artifacts-7.1.1-00009-g570b90203d97.tar.gz
-readonly APPROVED_KERNEL_ARTIFACT_ARCHIVE_SHA256=05f4a3e391988d8b6980b2c94304096e34e089661867f0c3b0f3048c54cba83c
-readonly APPROVED_KERNEL_BUILD_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/tb321fu-kernel-bootstrap-570b90203d97-20260729.4/tb321fu-kernel-build-sdk-7.1.1-00009-g570b90203d97.tar.gz
-readonly APPROVED_KERNEL_BUILD_ARCHIVE_SHA256=7f9b12bd02c1155c9900a33c823d088e1a9f72689dea28c8ee582a31304c7c49
-readonly APPROVED_DEVICE_DEB_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/tb321fu-kernel-bootstrap-570b90203d97-20260729.4/tb321fu-device-debs-7.1.1-00009-g570b90203d97.tar.gz
-readonly APPROVED_DEVICE_DEB_ARCHIVE_SHA256=1d9aec962398a4ee6876f013cf8348e57a76034c466c77df62a5bbba1488940a
+readonly APPROVED_KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/tb321fu-kernel-bootstrap-11bbf0262857-20261120.1/tb321fu-kernel-artifacts-7.1.1-00011-g11bbf0262857.tar.gz
+readonly APPROVED_KERNEL_ARTIFACT_ARCHIVE_SHA256=ab71b3335e8a535a3e7f50dfc2c97f8932c1cddd91ec79a16188be8f08c6ce3b
+readonly APPROVED_KERNEL_BUILD_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/tb321fu-kernel-bootstrap-11bbf0262857-20261120.1/tb321fu-kernel-build-sdk-7.1.1-00011-g11bbf0262857.tar.gz
+readonly APPROVED_KERNEL_BUILD_ARCHIVE_SHA256=0b84cd9bec6c41d7c55c143cd7e945820971e4267aed66728126e6b96f753e87
+readonly APPROVED_DEVICE_DEB_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/tb321fu-kernel-bootstrap-11bbf0262857-20261120.1/tb321fu-device-debs-7.1.1-00011-g11bbf0262857.tar.gz
+readonly APPROVED_DEVICE_DEB_ARCHIVE_SHA256=16f905295d9c5644f3621e7c864da0e4653d724a4a8fe189aaaf5d302ce54490
 readonly APPROVED_SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-remediation-20260829.1/tb321fu-sensor-debs_20260829.1_arm64.tar.gz
 readonly APPROVED_SENSOR_DEB_ARCHIVE_SHA256=3829d252d3e15e359cdcbe47fa99e7aa2975b29a98f132c5e04c5dfd936cc5bf
 readonly APPROVED_SENSOR_PRODUCER_COMMIT=7c93f418a2e828fc156e99ac605a9b70bdcbb477
-readonly APPROVED_HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20260627.2/tb321fu-haptics-debs_20260627.2_arm64.tar.gz
-readonly APPROVED_HAPTICS_DEB_ARCHIVE_SHA256=5a87f510ad07ba60a8a2a663a0782e6f186a56b1586d52c816425fab45b20a37
-readonly APPROVED_HAPTICS_PRODUCER_COMMIT=f25d3a29d83a3c8a2f63bcc56306818e5973f994
+readonly APPROVED_HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20261120.1/tb321fu-haptics-debs_20261120.1_arm64.tar.gz
+readonly APPROVED_HAPTICS_DEB_ARCHIVE_SHA256=dd6815d0384823dbe58015aa6c77d71b29065af3b9a49682ed5904ff76db41f9
+readonly APPROVED_HAPTICS_PRODUCER_COMMIT=d293ea86308e2427225385373466e2f9f1157309
 APPROVED_CAMERA_STACK_DEB_VERSION=$(python3 -I -B "$SCRIPT_DIR/camera-package-policy.py" version)
 readonly APPROVED_CAMERA_STACK_DEB_VERSION
 

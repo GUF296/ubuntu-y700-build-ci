@@ -37,7 +37,7 @@ The release/output controls and advanced override inputs are:
 - `boot_config`: optional GRUB/FAT boot overrides as `KEY=value` lines.
 - `source_config`: optional kernel/SDK input-profile overrides (URL, SHA-256 and producer identity) as `KEY=value` lines.
 
-The built-in rootfs/device archive values document the last tested release baseline. They predate the remediation bundle contract and are intentionally rejected by the new verifier unless replaced by a complete matching handoff. The built-in kernel source profile pins the canonical `20260729.4` bootstrap artifact, SDK and producer identity. A remediation build must use the complete matching rootfs and haptics URL/SHA override set documented below. If an advanced override input is filled, its `KEY=value` lines are appended after the built-in defaults and before the common UI fields are applied.
+This branch pins the November kernel bootstrap, matching haptics package and August sensor package in its workflow and release validator. Use these defaults for the November prerelease. The June release and its build parameters remain available under its original tag. Advanced config values precede the common UI fields.
 
 ## Rootfs Config
 
@@ -79,7 +79,7 @@ CHUNK_SIZE=
 KEEP_RAW_IMAGE=0
 ```
 
-Password hashes are repository secrets (`DEFAULT_USER_PASSWORD_HASH` and `ROOT_PASSWORD_HASH`), not config-file keys. The config parser rejects and does not serialize them.
+The November test branch reads the default user hash from the repository secret `TB321FU_NOV2026_TEST_USER_PASSWORD_HASH` in the rootfs build step. The runtime variable remains `DEFAULT_USER_PASSWORD_HASH`. The root password hash uses `ROOT_PASSWORD_HASH`. The config parser rejects password assignments. The rootfs build log and BUILD-INFO record OpenSSH authentication settings for the image user and root under a sample connection context.
 
 ## Boot Config
 
@@ -177,7 +177,7 @@ Set `INSTALL_FCITX5_CHINESE=0` in `rootfs_config` to opt out.
 The remediation workflow consumes prebuilt device deb archives that have already passed their producer gates:
 
 - `SENSOR_DEB_ARCHIVE` plus `SENSOR_DEB_ARCHIVE_SHA256`: dispatcher-approved archive containing exactly `qcom-sns-libssc`, `qcom-sns-hexagonrpc`, `qcom-sns-iio-sensor-proxy`, and `tb321fu-sensors` plus their source/checksum locks. The external archive SHA is the compiled-asset trust root.
-- `SENSOR_PRODUCER_COMMIT`: exact clean sensor-producer commit recorded in that source lock; remediation dispatches must set it explicitly so the historical default archive cannot be accepted accidentally. Matching this label proves lock consistency, not source derivation of the compiled DEBs; publish the commit and retain the producer run separately for rebuild comparison.
+- `SENSOR_PRODUCER_COMMIT`: exact clean sensor-producer commit recorded in that source lock; the workflow supplies the approved commit with the corresponding archive digest. Matching this label proves lock consistency, not source derivation of the compiled DEBs; publish the commit and retain the producer run separately for rebuild comparison.
 - `HAPTICS_DEB_ARCHIVE` plus `HAPTICS_DEB_ARCHIVE_SHA256`: exact six-root archive containing the verified `tb321fu-haptics` package, strict v4 `HAPTICS-SOURCE-LOCK.tsv`, ordered `HAPTICS-BUILD-TOOLS.tsv`, single-ref `HAPTICS-PRODUCER.bundle`, fixed nine-entry checksum manifest, and `HAPTICS-SOURCE-SNAPSHOT/` bound to the selected kernel bundle and its exact toolchain manifest.
 - `HAPTICS_PRODUCER_COMMIT`: exact clean haptics-producer commit recorded in that source lock.
 - `HAPTICS_MODULE_SHA256` and `HAPTICS_HELPER_BINARY_SHA256`: independently approved compiled-payload digests from the authenticated haptics producer run.
@@ -189,7 +189,7 @@ Recommended split:
 - `tb321fu-sensor-debs`: build from the upstream-derived `libssc`, `iio-sensor-proxy`, and `hexagonrpc` sources plus TB321FU patches/registry data, then release a sensor deb archive.
 - `tb321fu-haptics-debs`: build the AW86937 external module from the matching Linux source/build artifacts plus TB321FU haptics glue, then release a haptics deb archive.
 
-The historical defaults remain visible for baseline provenance only. They do not contain the complete remediation identity and are not accepted for a new remediation build.
+The November workflow defaults contain the complete kernel, device, sensor and haptics handoff. The tagged release validator checks their approved producer identities and digests.
 
 ## Remediation Bootstrap Handoff
 

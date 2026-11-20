@@ -162,6 +162,7 @@ def expected_data_members(kernel_release: str) -> dict[str, tuple[str, int]]:
     directories = {
         "",
         "etc",
+        "etc/modprobe.d",
         "etc/skel",
         "etc/skel/.config",
         "usr",
@@ -179,6 +180,7 @@ def expected_data_members(kernel_release: str) -> dict[str, tuple[str, int]]:
         "usr/libexec/tb321fu-haptics",
     }
     files = {
+        "etc/modprobe.d/tb321fu-haptics.conf": 0o644,
         "etc/skel/.config/plasmakeyboardrc": 0o644,
         "usr/bin/tb321fu-haptic-test": 0o755,
         "usr/lib/firmware/haptic_click.bin": 0o644,

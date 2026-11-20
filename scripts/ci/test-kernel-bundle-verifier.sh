@@ -22,6 +22,7 @@ kernel_producer_tree=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 kernel_producer_tree_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 sensor_commit=2222222222222222222222222222222222222222
 epoch=1784073600
+haptics_source_epoch=$((epoch + 60))
 haptic_ram_payload='fixture-haptic-ram'
 haptic_click_payload='fixture-haptic-click'
 haptics_helper_source_payload='fixture-haptics-helper-source'
@@ -259,7 +260,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 cat > bind-aw86937 <<'EOF_BIND'
 #!/bin/sh
 set -eu
-echo fixture-bind >/dev/null
+echo fixture-bind-@KERNEL_RELEASE@ >/dev/null
 EOF_BIND
 cat > tb321fu-haptics.service <<'EOF_SERVICE'
 [Unit]
@@ -268,6 +269,9 @@ EOF_SERVICE
 cat > 90-tb321fu-haptics.rules <<'EOF_UDEV'
 SUBSYSTEM=="input", TAG+="uaccess"
 EOF_UDEV
+cat > tb321fu-haptics.conf <<'EOF_MODPROBE'
+blacklist aw86937_y700
+EOF_MODPROBE
 cat > plasmakeyboardrc <<'EOF_CONF'
 [General]
 vibrationEnabled=true
@@ -294,8 +298,8 @@ EOF_MAINTAINER_TEMPLATE
   done
   git -C "$producer_root" add .
   env \
-    GIT_AUTHOR_DATE="@$epoch +0000" \
-    GIT_COMMITTER_DATE="@$epoch +0000" \
+    GIT_AUTHOR_DATE="@$haptics_source_epoch +0000" \
+    GIT_COMMITTER_DATE="@$haptics_source_epoch +0000" \
     git -C "$producer_root" commit -q -m fixture
   haptics_commit=$(git -C "$producer_root" rev-parse HEAD)
   git -C "$producer_root" branch -f tb321fu-haptics-producer "$haptics_commit"
@@ -872,8 +876,12 @@ EOF
     render_fixture_haptics_maintainer_template prerm.in "$root/DEBIAN/prerm"
     render_fixture_haptics_maintainer_template postrm.in "$root/DEBIAN/postrm"
     extract_fixture_heredoc EOF_BIND "$root/usr/libexec/tb321fu-haptics/bind-aw86937"
+    sed -i "s/@KERNEL_RELEASE@/$release/g" "$root/usr/libexec/tb321fu-haptics/bind-aw86937"
     extract_fixture_heredoc EOF_SERVICE "$root/usr/lib/systemd/system/tb321fu-haptics.service"
     extract_fixture_heredoc EOF_UDEV "$root/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
+    install -d -m 0755 "$root/etc/modprobe.d"
+    extract_fixture_heredoc EOF_MODPROBE "$root/etc/modprobe.d/tb321fu-haptics.conf"
+    chmod 0644 "$root/etc/modprobe.d/tb321fu-haptics.conf"
     extract_fixture_heredoc EOF_CONF "$root/etc/skel/.config/plasmakeyboardrc"
     chmod 0644 "$root/usr/lib/firmware/haptic_ram.bin" \
       "$root/usr/lib/firmware/haptic_click.bin" \
@@ -1180,7 +1188,7 @@ write_haptics_lock() {
     printf 'kernel-config-sha256\t%s\n' "$config_sha"
     printf 'kernel-build-input\tkernel-sdk-archive\n'
     printf 'kernel-build-archive-sha256\t%s\n' "$sdk_archive_sha"
-    printf 'source-date-epoch\t%s\n' "$epoch"
+    printf 'source-date-epoch\t%s\n' "$haptics_source_epoch"
   } > "$haptics_root/HAPTICS-SOURCE-LOCK.tsv"
 }
 
@@ -2235,8 +2243,8 @@ write_haptics_snapshot
 write_haptics_lock "$kernel_bundle_id"
 
 wrong_haptics_commit=$(env \
-  GIT_AUTHOR_DATE="@$epoch +0000" \
-  GIT_COMMITTER_DATE="@$epoch +0000" \
+  GIT_AUTHOR_DATE="@$haptics_source_epoch +0000" \
+  GIT_COMMITTER_DATE="@$haptics_source_epoch +0000" \
   git -C "$producer_root" commit-tree "$haptics_commit^{tree}" \
   -p "$haptics_commit" -m wrong-bundle-tip)
 git -C "$producer_root" branch -f tb321fu-haptics-producer "$wrong_haptics_commit"
@@ -2253,8 +2261,8 @@ sed -i \
 git -C "$producer_root" add scripts/ci/haptics-maintainer-scripts.sh
 hostile_helper_tree=$(git -C "$producer_root" write-tree)
 hostile_helper_commit=$(env \
-  GIT_AUTHOR_DATE="@$epoch +0000" \
-  GIT_COMMITTER_DATE="@$epoch +0000" \
+  GIT_AUTHOR_DATE="@$haptics_source_epoch +0000" \
+  GIT_COMMITTER_DATE="@$haptics_source_epoch +0000" \
   git -C "$producer_root" commit-tree "$hostile_helper_tree" \
     -p "$original_haptics_commit" -m hostile-template-override)
 git -C "$producer_root" reset --hard -q "$original_haptics_commit"
@@ -2276,8 +2284,8 @@ sed -i \
 git -C "$producer_root" add scripts/ci/haptics-maintainer-scripts.sh
 hostile_helper_tree=$(git -C "$producer_root" write-tree)
 hostile_helper_commit=$(env \
-  GIT_AUTHOR_DATE="@$epoch +0000" \
-  GIT_COMMITTER_DATE="@$epoch +0000" \
+  GIT_AUTHOR_DATE="@$haptics_source_epoch +0000" \
+  GIT_COMMITTER_DATE="@$haptics_source_epoch +0000" \
   git -C "$producer_root" commit-tree "$hostile_helper_tree" \
     -p "$original_haptics_commit" -m hostile-template-location)
 git -C "$producer_root" reset --hard -q "$original_haptics_commit"

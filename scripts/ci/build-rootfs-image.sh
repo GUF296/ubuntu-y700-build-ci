@@ -1601,6 +1601,21 @@ apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO
 
+# OpenSSH's config-dump mode evaluates Include and Match without starting sshd
+# or generating host keys. Capture the two accounts under the same connection
+# context, using documentation-only addresses and reporting only policy fields.
+for ssh_policy_user in "$DEFAULT_USER_NAME" root; do
+  LC_ALL=C chroot "$rootfs_dir" /usr/sbin/sshd -G \
+    -C "user=$ssh_policy_user,host=client.invalid,addr=192.0.2.2,laddr=192.0.2.1,lport=22" |
+    LC_ALL=C awk -v user="$ssh_policy_user" '
+      $1 ~ /^(passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication|permitrootlogin|authenticationmethods)$/ {
+        if (++seen[$1] != 1) exit 1
+        print "ssh_policy[" user "]." $1 "=" substr($0, index($0, " ") + 1)
+      }
+      END { if (length(seen) != 5) exit 1 }
+    ' | tee -a "$build_info"
+done
+
 rm -f \
   "$rootfs_dir/BUILD-INFO.txt" \
   "$rootfs_dir/SHA256SUMS" \

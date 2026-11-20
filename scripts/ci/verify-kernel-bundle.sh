@@ -1171,8 +1171,6 @@ done
   ci_die 'haptics kernel build archive SHA-256 mismatch'
 [[ ${haptics_meta[source-date-epoch]} =~ ^[0-9]{1,10}$ ]] ||
   ci_die "invalid haptics source-date-epoch"
-[ "${haptics_meta[source-date-epoch]}" = "${kernel_meta[source-date-epoch]}" ] ||
-  ci_die "haptics source-date-epoch mismatch"
 
 haptics_snapshot="$haptics_root/HAPTICS-SOURCE-SNAPSHOT"
 [ -d "$haptics_snapshot" ] && [ ! -L "$haptics_snapshot" ] ||
@@ -1247,7 +1245,7 @@ python3 "$SCRIPT_DIR/verify-haptics-deb-structure.py" \
   --control-tar "$haptics_control_tar" \
   --data-tar "$haptics_data_tar" \
   --kernel-release "${kernel_meta[kernel-release]}" \
-  --source-date-epoch "${haptics_meta[source-date-epoch]}" \
+  --source-date-epoch "${kernel_meta[source-date-epoch]}" \
   --extract-only || ci_die "bounded haptics DEB extraction failed"
 
 declare -a clean_git_env=(
@@ -1295,6 +1293,13 @@ haptics_fsck_output=$("${clean_git_env[@]}" git --git-dir="$haptics_bundle_repo"
   ci_die "haptics producer Git bundle object verification failed"
 [ -z "$haptics_fsck_output" ] ||
   ci_die "haptics producer Git bundle contains unreachable or unexpected objects"
+# The package uses the SDK epoch, while its source lock records the haptics
+# producer commit time. Verify each independently against its own identity.
+haptics_commit_epoch=$("${clean_git_env[@]}" git --git-dir="$haptics_bundle_repo" \
+  show -s --format=%ct "$EXPECTED_HAPTICS_PRODUCER_COMMIT") ||
+  ci_die "cannot read haptics producer commit timestamp"
+[ "${haptics_meta[source-date-epoch]}" = "$haptics_commit_epoch" ] ||
+  ci_die "haptics source-date-epoch mismatch"
 
 haptics_committed="$work/haptics-producer-committed"
 haptics_committed_driver="$haptics_committed/aw86937-y700.c"
@@ -1385,12 +1390,18 @@ declare -A haptics_template_targets=(
   [EOF_BIND]="$haptics_data/usr/libexec/tb321fu-haptics/bind-aw86937"
   [EOF_SERVICE]="$haptics_data/usr/lib/systemd/system/tb321fu-haptics.service"
   [EOF_UDEV]="$haptics_data/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
+  [EOF_MODPROBE]="$haptics_data/etc/modprobe.d/tb321fu-haptics.conf"
   [EOF_CONF]="$haptics_data/etc/skel/.config/plasmakeyboardrc"
 )
-for haptics_template in EOF_BIND EOF_SERVICE EOF_UDEV EOF_CONF; do
+for haptics_template in EOF_BIND EOF_SERVICE EOF_UDEV EOF_CONF EOF_MODPROBE; do
   haptics_expected_template="$work/haptics-template-$haptics_template"
   extract_haptics_heredoc \
     "$haptics_committed_builder" "$haptics_template" "$haptics_expected_template"
+  if [ "$haptics_template" = EOF_BIND ] && grep -Fq '@KERNEL_RELEASE@' "$haptics_expected_template"; then
+    render_haptics_maintainer_template "$haptics_expected_template" \
+      "$haptics_expected_template.rendered" "${kernel_meta[kernel-release]}"
+    haptics_expected_template=$haptics_expected_template.rendered
+  fi
   cmp -s "$haptics_expected_template" "${haptics_template_targets[$haptics_template]}" ||
     ci_die "haptics DEB payload differs from committed template: $haptics_template"
 done
@@ -1431,7 +1442,7 @@ python3 "$SCRIPT_DIR/verify-haptics-deb-structure.py" \
   --control-tar "$haptics_control_tar" \
   --data-tar "$haptics_data_tar" \
   --kernel-release "${kernel_meta[kernel-release]}" \
-  --source-date-epoch "${haptics_meta[source-date-epoch]}" ||
+  --source-date-epoch "${kernel_meta[source-date-epoch]}" ||
   ci_die "haptics DEB structure verification failed"
 stage="$work/stage"
 mkdir -p "$stage"

@@ -656,6 +656,13 @@ def _strict_tar_stream(descriptor: int, archive_bytes: int, deadline: float) -> 
         raw.close()
 
 
+def check_archive_payload_budget(total_bytes: int, archive_bytes: int) -> None:
+    if total_bytes > MAX_ARCHIVE_TOTAL_BYTES:
+        raise SDKError("SDK archive expands beyond the total size limit")
+    if total_bytes > archive_bytes * MAX_COMPRESSION_RATIO:
+        raise SDKError("SDK archive compression ratio exceeds the safety limit")
+
+
 def archive_records(
     archive: pathlib.Path, deadline: float
 ) -> tuple[dict[str, ManifestRecord], set[str]]:
@@ -773,8 +780,7 @@ def archive_records(
                 if member.size < 0 or member.size > MAX_ARCHIVE_FILE_BYTES:
                     raise SDKError(f"SDK archive member exceeds size limit: {member_path}")
                 total_bytes += member.size
-                if total_bytes > MAX_ARCHIVE_TOTAL_BYTES:
-                    raise SDKError("SDK archive expands beyond the total size limit")
+                check_archive_payload_budget(total_bytes, archive_bytes)
                 try:
                     source = handle.extractfile(member)
                     if source is None:
@@ -798,14 +804,11 @@ def archive_records(
                     raise SDKError(f"SDK archive symlink mode must be {SYMLINK_MODE:o}: {member_path}")
                 digest = digest_link_target(member.linkname, label="SDK archive")
                 total_bytes += len(member.linkname.encode("utf-8"))
-                if total_bytes > MAX_ARCHIVE_TOTAL_BYTES:
-                    raise SDKError("SDK archive expands beyond the total size limit")
+                check_archive_payload_budget(total_bytes, archive_bytes)
                 kind = "symlink"
                 link_targets[member_path] = member.linkname
             else:
                 raise SDKError(f"SDK archive has unsupported member type: {member_path}")
-            if total_bytes > archive_bytes * MAX_COMPRESSION_RATIO:
-                raise SDKError("SDK archive compression ratio exceeds the safety limit")
             records[member_path] = ManifestRecord(kind, digest, member.mode & 0o7777, member_path)
             member_kinds[member_path] = kind
         validate_archive_namespace(member_kinds, records, link_targets, deadline)

@@ -1512,6 +1512,15 @@ set -e
 grep -Fq 'kernel SDK manifest path must be printable ASCII' \
   <<<"$non_ascii_sdk_path_output" ||
   fail "non-ASCII kernel SDK path failed at the wrong boundary"
+boundary_sdk_path=$(printf 'd/%.0s' {1..127}; printf d)
+bash -c '. "$1"; validate_sdk_relative_path "$2"' bash "$sdk_archive_function_file" "$boundary_sdk_path" ||
+  fail "kernel SDK producer rejected a 128-component member"
+if rejected_depth=$(bash -c '. "$1"; validate_sdk_relative_path "$2"' \
+  bash "$sdk_archive_function_file" "$boundary_sdk_path/d" 2>&1); then
+  fail "kernel SDK producer accepted a 129-component member"
+fi
+grep -Fq 'kernel SDK member path has too many components' <<<"$rejected_depth" ||
+  fail "kernel SDK member depth failed at the wrong boundary"
 sdk_manifest_root="$fixture/sdk-manifest-root"
 sdk_function_work="$fixture/sdk-function-work"
 mkdir -p "$sdk_function_work"
@@ -1581,6 +1590,25 @@ for target_kind in oversized deep; do
   grep -Fq "$expected_sdk_link_error" <<<"$sdk_link_output" ||
     fail "kernel SDK $target_kind symlink target failed at the wrong boundary"
 done
+check_link_depth_manifest() (
+  . "$sdk_manifest_function_file"
+  work=$sdk_function_work
+  FIND_BIN=/usr/bin/find
+  SORT_BIN=/usr/bin/sort
+  READLINK_BIN=/usr/bin/readlink
+  write_kernel_sdk_manifest "$sdk_manifest_root" "$fixture/sdk-boundary-link.tsv"
+)
+boundary_link_parent="$sdk_manifest_root/include/config"
+boundary_link_target=$(printf 'd/%.0s' {1..125}; printf d)
+ln -s -- "./$boundary_link_target" "$boundary_link_parent/valid-depth"
+check_link_depth_manifest || fail "kernel SDK producer rejected a 128-component resolved link"
+ln -s -- "$boundary_link_target/d" "$boundary_link_parent/excess-depth"
+if rejected_depth=$(check_link_depth_manifest 2>&1); then
+  fail "kernel SDK producer accepted a 129-component resolved link"
+fi
+grep -Fq 'resolved kernel SDK symlink path has too many components' <<<"$rejected_depth" ||
+  fail "kernel SDK resolved link depth failed at the wrong boundary"
+rm -- "$boundary_link_parent/valid-depth" "$boundary_link_parent/excess-depth"
 sdk_root="$fixture/sdk-root"
 sdk_archive_fixture="$fixture/sdk-fixture.tar.gz"
 mkdir -p "$sdk_root/entries" "$sdk_function_work"
@@ -1591,6 +1619,7 @@ for sdk_member in {000..127}; do
   printf '%s\n' "$sdk_member" > "$sdk_root/entries/member-$sdk_member"
 done
 ln -s . "$sdk_root/source"
+ln -s payload.txt "$sdk_root/payload-link"
 (
   # shellcheck source=/dev/null
   . "$sdk_archive_function_file"
@@ -1602,6 +1631,9 @@ ln -s . "$sdk_root/source"
   GZIP_BIN=/usr/bin/gzip
   write_kernel_sdk_archive "$sdk_root" "$sdk_archive_fixture"
 )
+expected_payload_size=$(find "$sdk_root" \( -type f -o -type l \) ! -name source -printf '%s\n' | awk '{total += $1} END {print total}')
+[ "$(cat "$sdk_function_work/kernel-sdk-uncompressed-size")" = "$expected_payload_size" ] ||
+  fail "kernel SDK archive budget omitted regular file or retained link bytes"
 for failed_tool in find sort; do
   set +e
   archive_enumeration_output=$(
@@ -1635,7 +1667,7 @@ for failed_tool in find sort; do
 done
 sdk_archive_members="$fixture/sdk-archive-members.list"
 tar -tzf "$sdk_archive_fixture" > "$sdk_archive_members"
-[ "$(wc -l < "$sdk_archive_members")" -eq 132 ] ||
+[ "$(wc -l < "$sdk_archive_members")" -eq 133 ] ||
   fail "kernel SDK archive member listing was incomplete or duplicated members"
 grep -Fxq './payload.txt' "$sdk_archive_members" ||
   fail "kernel SDK archive omitted its root payload"
