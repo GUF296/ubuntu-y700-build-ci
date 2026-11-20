@@ -42,6 +42,8 @@ packager_index_mode=$(git -C "$repo_root" ls-files --stage -- "$packager_relativ
   fail "producer root .gitignore must be tracked with mode 100644"
 bash -n "$packager"
 python3 "$SCRIPT_DIR/test-kernel-bundle-metadata.py"
+python3 "$SCRIPT_DIR/test-kernel-sdk-verifier.py"
+python3 "$SCRIPT_DIR/test-kernel-modules-deb-verifier.py"
 bash "$SCRIPT_DIR/test-kernel-bundle-verifier.sh"
 
 for token in \
@@ -1458,6 +1460,10 @@ grep -Fxq 'must-survive' "$cleanup_regular_candidate" ||
 
 sdk_archive_function=$(sed -n '/^write_kernel_sdk_archive() {$/,/^}$/p' "$packager")
 [ -n "$sdk_archive_function" ] || fail "unable to extract kernel SDK archive function"
+sdk_manifest_function=$(sed -n '/^write_kernel_sdk_manifest() {$/,/^}$/p' "$packager")
+[ -n "$sdk_manifest_function" ] || fail "unable to extract kernel SDK manifest function"
+grep -Fq "schema\\ttb321fu.kernel-sdk-manifest/v2" <<<"$sdk_manifest_function" ||
+  fail "kernel SDK producer does not emit the explicit-directory v2 schema"
 sdk_archive_function_flat=${sdk_archive_function//$'\n'/ }
 if grep -Eq '(-t[a-z]*f|--list)[^|]*[|][[:space:]]*(grep|head).*-[^[:space:]]*q' \
   <<<"$sdk_archive_function_flat"; then
@@ -1477,6 +1483,13 @@ sdk_path_validation_function=$(sed -n '/^validate_sdk_relative_path() {$/,/^}$/p
   printf '%s\n' "$sdk_path_validation_function"
   printf '%s\n' "$sdk_archive_function"
 } > "$sdk_archive_function_file"
+sdk_manifest_function_file="$fixture/write-kernel-sdk-manifest-function.sh"
+{
+  printf '%s\n' 'set -o pipefail'
+  printf '%s\n' 'ci_die() { printf "fixture error: %s\\n" "$*" >&2; exit 1; }'
+  printf '%s\n' "$sdk_path_validation_function"
+  printf '%s\n' "$sdk_manifest_function"
+} > "$sdk_manifest_function_file"
 for unsafe_sdk_path in 'directory\hostile' 'drive:escape/member'; do
   set +e
   unsafe_sdk_path_output=$(bash -c '. "$1"; validate_sdk_relative_path "$2"' \
@@ -1499,8 +1512,76 @@ set -e
 grep -Fq 'kernel SDK manifest path must be printable ASCII' \
   <<<"$non_ascii_sdk_path_output" ||
   fail "non-ASCII kernel SDK path failed at the wrong boundary"
-sdk_root="$fixture/sdk-root"
+sdk_manifest_root="$fixture/sdk-manifest-root"
 sdk_function_work="$fixture/sdk-function-work"
+mkdir -p "$sdk_function_work"
+mkdir -p \
+  "$sdk_manifest_root/include/config" \
+  "$sdk_manifest_root/include/generated"
+printf 'CONFIG_FIXTURE=y\n' > "$sdk_manifest_root/.config"
+printf 'fixture\n' > "$sdk_manifest_root/Module.symvers"
+printf 'fixture\n' > "$sdk_manifest_root/include/config/kernel.release"
+printf '#define CONFIG_FIXTURE 1\n' > \
+  "$sdk_manifest_root/include/generated/autoconf.h"
+printf '#define UTS_RELEASE "fixture"\n' > \
+  "$sdk_manifest_root/include/generated/utsrelease.h"
+find "$sdk_manifest_root" -type d -exec chmod 0755 {} +
+find "$sdk_manifest_root" -type f -exec chmod 0644 {} +
+for failed_tool in find sort; do
+  set +e
+  manifest_enumeration_output=$(
+    bash -o pipefail -c '
+      . "$1"
+      work=$2
+      FIND_BIN=$3
+      SORT_BIN=$4
+      READLINK_BIN=/usr/bin/readlink
+      write_kernel_sdk_manifest "$5" "$6"
+    ' bash "$sdk_manifest_function_file" "$sdk_function_work" \
+      "$([ "$failed_tool" = find ] && printf /usr/bin/false || printf /usr/bin/find)" \
+      "$([ "$failed_tool" = sort ] && printf /usr/bin/false || printf /usr/bin/sort)" \
+      "$sdk_manifest_root" "$fixture/sdk-manifest-$failed_tool.tsv" 2>&1
+  )
+  manifest_enumeration_status=$?
+  set -e
+  [ "$manifest_enumeration_status" -ne 0 ] ||
+    fail "kernel SDK manifest hid a $failed_tool enumeration failure"
+  grep -Fq 'cannot enumerate the kernel SDK manifest namespace' \
+    <<<"$manifest_enumeration_output" ||
+    fail "kernel SDK manifest $failed_tool failure was not normalized"
+done
+oversized_sdk_link_target=$(printf '%0256d' 0 | tr 0 x)
+deep_sdk_link_target=$(printf 'd/%.0s' {1..128}; printf d)
+for target_kind in oversized deep; do
+  if [ "$target_kind" = oversized ]; then
+    hostile_sdk_link_target=$oversized_sdk_link_target
+    expected_sdk_link_error='kernel SDK symlink target has an oversized path component'
+  else
+    hostile_sdk_link_target=$deep_sdk_link_target
+    expected_sdk_link_error='kernel SDK symlink target has too many path components'
+  fi
+  ln -s -- "$hostile_sdk_link_target" "$sdk_manifest_root/hostile-link"
+  set +e
+  sdk_link_output=$(
+    bash -o pipefail -c '
+      . "$1"
+      work=$2
+      FIND_BIN=/usr/bin/find
+      SORT_BIN=/usr/bin/sort
+      READLINK_BIN=/usr/bin/readlink
+      write_kernel_sdk_manifest "$3" "$4"
+    ' bash "$sdk_manifest_function_file" "$sdk_function_work" \
+      "$sdk_manifest_root" "$fixture/sdk-manifest-hostile-link.tsv" 2>&1
+  )
+  sdk_link_status=$?
+  set -e
+  rm -- "$sdk_manifest_root/hostile-link"
+  [ "$sdk_link_status" -ne 0 ] ||
+    fail "kernel SDK producer accepted a $target_kind symlink target"
+  grep -Fq "$expected_sdk_link_error" <<<"$sdk_link_output" ||
+    fail "kernel SDK $target_kind symlink target failed at the wrong boundary"
+done
+sdk_root="$fixture/sdk-root"
 sdk_archive_fixture="$fixture/sdk-fixture.tar.gz"
 mkdir -p "$sdk_root/entries" "$sdk_function_work"
 printf 'payload\n' > "$sdk_root/payload.txt"
@@ -1521,6 +1602,37 @@ ln -s . "$sdk_root/source"
   GZIP_BIN=/usr/bin/gzip
   write_kernel_sdk_archive "$sdk_root" "$sdk_archive_fixture"
 )
+for failed_tool in find sort; do
+  set +e
+  archive_enumeration_output=$(
+    bash -o pipefail -c '
+      . "$1"
+      work=$2
+      SOURCE_DATE_EPOCH=1700000000
+      FIND_BIN=$3
+      SORT_BIN=$4
+      TAR_BIN=/usr/bin/tar
+      GZIP_BIN=/usr/bin/gzip
+      write_kernel_sdk_archive "$5" "$6"
+    ' bash "$sdk_archive_function_file" "$sdk_function_work" \
+      "$([ "$failed_tool" = find ] && printf /usr/bin/false || printf /usr/bin/find)" \
+      "$([ "$failed_tool" = sort ] && printf /usr/bin/false || printf /usr/bin/sort)" \
+      "$sdk_root" "$fixture/sdk-archive-$failed_tool.tar.gz" 2>&1
+  )
+  archive_enumeration_status=$?
+  set -e
+  [ "$archive_enumeration_status" -ne 0 ] ||
+    fail "kernel SDK archive hid a $failed_tool enumeration failure"
+  if [ "$failed_tool" = find ]; then
+    grep -Fq 'cannot enumerate kernel SDK symlinks' \
+      <<<"$archive_enumeration_output" ||
+      fail "kernel SDK symlink enumeration failure was not normalized"
+  else
+    grep -Fq 'cannot enumerate kernel SDK archive sources' \
+      <<<"$archive_enumeration_output" ||
+      fail "kernel SDK archive source enumeration failure was not normalized"
+  fi
+done
 sdk_archive_members="$fixture/sdk-archive-members.list"
 tar -tzf "$sdk_archive_fixture" > "$sdk_archive_members"
 [ "$(wc -l < "$sdk_archive_members")" -eq 132 ] ||
@@ -1544,14 +1656,18 @@ for sdk_limit_token in \
   'kernel SDK manifest has too many records' \
   'kernel SDK manifest exceeds the 16 MiB consumer limit' \
   'kernel SDK symlink target must be bounded printable ASCII' \
+  'kernel SDK symlink target has too many path components' \
+  'kernel SDK symlink target has an oversized path component' \
   'kernel SDK archive contains too many source entries' \
   'kernel SDK archive contains too many members' \
+  'kernel SDK archive exceeds the 2 GiB consumer limit' \
   'kernel modules manifest has too many records' \
   'kernel modules manifest exceeds the 16 MiB consumer limit' \
   '[ "$size" -le 8589934592 ]' \
   '[ "$total_regular_bytes" -le 34359738368 ]' \
   '[ "$record_count" -le 200000 ]' \
   '[ "$archive_entry_count" -le 200000 ]' \
+  '[ "$archive_bytes" -le 2147483648 ]' \
   '[ "$(wc -l < "$member_list")" -le 200000 ]' \
   '[ "$modules_manifest_file_count" -le 400000 ]' \
   '"$TAR_BIN" --format=gnu --hard-dereference --null --no-recursion'; do
@@ -2052,18 +2168,47 @@ cat > "$valid_dts" <<'EOF'
 /dts-v1/;
 
 / {
-  fixture-i2c {
-    compatible = "qcom,geni-i2c";
-    status = "okay";
-    #address-cells = <1>;
-    #size-cells = <0>;
-    haptics-right@5a { compatible = "lenovo,tb321fu-aw86937", "awinic,aw86937"; reg = <0x5a>; label = "aw86937-haptics-right"; status = "okay"; };
-    haptics-left@5b { compatible = "lenovo,tb321fu-aw86937", "awinic,aw86937"; reg = <0x5b>; label = "aw86937-haptics-left"; };
+  compatible = "lenovo,tb321fu", "qcom,sm8650";
+  #address-cells = <2>;
+  #size-cells = <2>;
+
+  soc@0 {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    ranges;
+
+    geniqup@ac0000 {
+      compatible = "qcom,geni-se-qup";
+      reg = <0 0x00ac0000 0 0x2000>;
+      #address-cells = <2>;
+      #size-cells = <2>;
+
+      i2c@a9c000 {
+        compatible = "qcom,geni-i2c";
+        reg = <0 0x00a9c000 0 0x4000>;
+        status = "okay";
+        #address-cells = <1>;
+        #size-cells = <0>;
+        haptics-right@5a { compatible = "lenovo,tb321fu-aw86937", "awinic,aw86937"; reg = <0x5a>; label = "aw86937-haptics-right"; status = "okay"; };
+        haptics-left@5b { compatible = "lenovo,tb321fu-aw86937", "awinic,aw86937"; reg = <0x5b>; label = "aw86937-haptics-left"; };
+      };
+    };
   };
 };
 EOF
 dtc -q -I dts -O dtb -o "$valid_dtb" "$valid_dts"
 verify_dtb_fixture "$valid_dtb"
+
+wrong_root_compatible_dts="$fixture/wrong-root-compatible-aw86937.dts"
+wrong_root_compatible_dtb="$fixture/wrong-root-compatible-aw86937.dtb"
+sed 's/"lenovo,tb321fu", "qcom,sm8650"/"lenovo,tb321fu", "qcom,sm8550"/' \
+  "$valid_dts" > "$wrong_root_compatible_dts"
+dtc -q -I dts -O dtb -o "$wrong_root_compatible_dtb" \
+  "$wrong_root_compatible_dts"
+expect_dtb_failure \
+  'root-compatible-drift AW86937 DTB' \
+  'compiled DTB root compatible mismatch' \
+  "$wrong_root_compatible_dtb"
 
 missing_left_dts="$fixture/missing-left-aw86937.dts"
 missing_left_dtb="$fixture/missing-left-aw86937.dtb"
@@ -2100,8 +2245,58 @@ sed 's/compatible = "qcom,geni-i2c"/compatible = "fixture,not-i2c"/' \
 dtc -q -I dts -O dtb -o "$wrong_parent_dtb" "$wrong_parent_dts"
 expect_dtb_failure \
   'non-I2C-parent AW86937 DTB' \
-  'compiled DTB AW86937 parent is not a Qualcomm GENI I2C controller' \
+  'compiled DTB canonical I2C controller compatible mismatch' \
   "$wrong_parent_dtb"
+
+wrong_wrapper_compatible_dts="$fixture/wrong-wrapper-compatible-aw86937.dts"
+wrong_wrapper_compatible_dtb="$fixture/wrong-wrapper-compatible-aw86937.dtb"
+sed 's/compatible = "qcom,geni-se-qup"/compatible = "fixture,not-geni-wrapper"/' \
+  "$valid_dts" > "$wrong_wrapper_compatible_dts"
+dtc -q -I dts -O dtb -o "$wrong_wrapper_compatible_dtb" \
+  "$wrong_wrapper_compatible_dts"
+expect_dtb_failure \
+  'wrong-compatible GENI wrapper DTB' \
+  'compiled DTB canonical GENI wrapper compatible mismatch' \
+  "$wrong_wrapper_compatible_dtb"
+
+wrong_wrapper_reg_dts="$fixture/wrong-wrapper-reg-aw86937.dts"
+wrong_wrapper_reg_dtb="$fixture/wrong-wrapper-reg-aw86937.dtb"
+sed 's/reg = <0 0x00ac0000 0 0x2000>/reg = <0 0x00ac0000 0 0x3000>/' \
+  "$valid_dts" > "$wrong_wrapper_reg_dts"
+dtc -q -I dts -O dtb -o "$wrong_wrapper_reg_dtb" "$wrong_wrapper_reg_dts"
+expect_dtb_failure \
+  'wrong-reg GENI wrapper DTB' \
+  'compiled DTB canonical GENI wrapper reg mismatch' \
+  "$wrong_wrapper_reg_dtb"
+
+wrong_bus_reg_dts="$fixture/wrong-bus-reg-aw86937.dts"
+wrong_bus_reg_dtb="$fixture/wrong-bus-reg-aw86937.dtb"
+sed 's/reg = <0 0x00a9c000 0 0x4000>/reg = <0 0x00a9c000 0 0x5000>/' \
+  "$valid_dts" > "$wrong_bus_reg_dts"
+dtc -q -I dts -O dtb -o "$wrong_bus_reg_dtb" "$wrong_bus_reg_dts"
+expect_dtb_failure \
+  'wrong-reg canonical I2C DTB' \
+  'compiled DTB canonical I2C controller reg mismatch' \
+  "$wrong_bus_reg_dtb"
+
+wrong_bus_path_dts="$fixture/wrong-bus-path-aw86937.dts"
+wrong_bus_path_dtb="$fixture/wrong-bus-path-aw86937.dtb"
+sed 's/i2c@a9c000/i2c@a9d000/' "$valid_dts" > "$wrong_bus_path_dts"
+dtc -q -I dts -O dtb -o "$wrong_bus_path_dtb" "$wrong_bus_path_dts"
+expect_dtb_failure \
+  'wrong-address-path I2C DTB' \
+  'compiled DTB AW86937 nodes are not on the canonical TB321FU I2C bus' \
+  "$wrong_bus_path_dtb"
+
+wrong_wrapper_path_dts="$fixture/wrong-wrapper-path-aw86937.dts"
+wrong_wrapper_path_dtb="$fixture/wrong-wrapper-path-aw86937.dtb"
+sed 's/geniqup@ac0000/fake-geniqup@ac0000/' \
+  "$valid_dts" > "$wrong_wrapper_path_dts"
+dtc -q -I dts -O dtb -o "$wrong_wrapper_path_dtb" "$wrong_wrapper_path_dts"
+expect_dtb_failure \
+  'fake-path GENI wrapper DTB' \
+  'compiled DTB AW86937 nodes are not on the canonical TB321FU I2C bus' \
+  "$wrong_wrapper_path_dtb"
 
 disabled_parent_dts="$fixture/disabled-parent-aw86937.dts"
 disabled_parent_dtb="$fixture/disabled-parent-aw86937.dtb"
@@ -2110,8 +2305,38 @@ sed '0,/status = "okay"/s//status = "disabled"/' \
 dtc -q -I dts -O dtb -o "$disabled_parent_dtb" "$disabled_parent_dts"
 expect_dtb_failure \
   'disabled-parent AW86937 DTB' \
-  'compiled DTB AW86937 parent status is not okay' \
+  'compiled DTB ancestor status is not okay: /soc@0/geniqup@ac0000/i2c@a9c000' \
   "$disabled_parent_dtb"
+
+disabled_root_dts="$fixture/disabled-root-aw86937.dts"
+disabled_root_dtb="$fixture/disabled-root-aw86937.dtb"
+sed '0,/compatible = "lenovo,tb321fu"/s//status = "disabled"; compatible = "lenovo,tb321fu"/' \
+  "$valid_dts" > "$disabled_root_dts"
+dtc -q -I dts -O dtb -o "$disabled_root_dtb" "$disabled_root_dts"
+expect_dtb_failure \
+  'disabled-root AW86937 DTB' \
+  'compiled DTB ancestor status is not okay: /' \
+  "$disabled_root_dtb"
+
+disabled_soc_dts="$fixture/disabled-soc-aw86937.dts"
+disabled_soc_dtb="$fixture/disabled-soc-aw86937.dtb"
+sed 's/soc@0 {/soc@0 { status = "disabled";/' \
+  "$valid_dts" > "$disabled_soc_dts"
+dtc -q -I dts -O dtb -o "$disabled_soc_dtb" "$disabled_soc_dts"
+expect_dtb_failure \
+  'disabled-soc AW86937 DTB' \
+  'compiled DTB ancestor status is not okay: /soc@0' \
+  "$disabled_soc_dtb"
+
+disabled_wrapper_dts="$fixture/disabled-wrapper-aw86937.dts"
+disabled_wrapper_dtb="$fixture/disabled-wrapper-aw86937.dtb"
+sed 's/geniqup@ac0000 {/geniqup@ac0000 { status = "disabled";/' \
+  "$valid_dts" > "$disabled_wrapper_dts"
+dtc -q -I dts -O dtb -o "$disabled_wrapper_dtb" "$disabled_wrapper_dts"
+expect_dtb_failure \
+  'disabled-wrapper AW86937 DTB' \
+  'compiled DTB ancestor status is not okay: /soc@0/geniqup@ac0000' \
+  "$disabled_wrapper_dtb"
 
 disabled_child_dts="$fixture/disabled-child-aw86937.dts"
 disabled_child_dtb="$fixture/disabled-child-aw86937.dtb"

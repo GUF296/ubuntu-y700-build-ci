@@ -8,7 +8,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
 readonly CANONICAL_KERNEL_BOOTSTRAP_PRODUCER_REPOSITORY=GUF296/ubuntu-y700-build-ci
 readonly HAPTICS_BUILD_ENVIRONMENT_POLICY=isolated-allowlist-v1
-readonly HAPTICS_BUILD_ENVIRONMENT_POLICY_SHA256=9c1a0bfc44acbcde4833637698aaa59b8c386f3138f79486001ce2003f7095cd
+readonly HAPTICS_BUILD_ENVIRONMENT_POLICY_SHA256=4ff7d79a3d0f3513ccb2a58ee6ba68a066c5c75079b17235721be911cf7fcfb5
 
 usage() {
   cat <<'EOF'
@@ -17,6 +17,11 @@ Usage: verify-kernel-bundle.sh
 Required environment:
   KERNEL_ARTIFACT_ARCHIVE
   KERNEL_ARTIFACT_ARCHIVE_SHA256
+  KERNEL_BUILD_ARCHIVE
+  KERNEL_BUILD_ARCHIVE_SHA256
+  KERNEL_BOOTSTRAP_PRODUCER_COMMIT
+  KERNEL_BOOTSTRAP_PRODUCER_TREE
+  KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256
   DEB_ARCHIVE
   DEB_ARCHIVE_SHA256
   SENSOR_DEB_ARCHIVE
@@ -43,12 +48,17 @@ case "${1:-}" in
 esac
 [ "$#" -eq 0 ] || { usage >&2; exit 2; }
 
-for command in bash dash env sha256sum find sort cmp dpkg dpkg-deb realpath install awk python3 head grep stat git sed tr; do
+for command in bash dash env sha256sum find sort cmp dpkg dpkg-deb realpath install awk python3 head grep stat git sed tr fdtget; do
   ci_require_cmd "$command"
 done
 
 : "${KERNEL_ARTIFACT_ARCHIVE:?set KERNEL_ARTIFACT_ARCHIVE}"
 : "${KERNEL_ARTIFACT_ARCHIVE_SHA256:?set KERNEL_ARTIFACT_ARCHIVE_SHA256}"
+: "${KERNEL_BUILD_ARCHIVE:?set KERNEL_BUILD_ARCHIVE}"
+: "${KERNEL_BUILD_ARCHIVE_SHA256:?set KERNEL_BUILD_ARCHIVE_SHA256}"
+: "${KERNEL_BOOTSTRAP_PRODUCER_COMMIT:?set KERNEL_BOOTSTRAP_PRODUCER_COMMIT}"
+: "${KERNEL_BOOTSTRAP_PRODUCER_TREE:?set KERNEL_BOOTSTRAP_PRODUCER_TREE}"
+: "${KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256:?set KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256}"
 : "${DEB_ARCHIVE:?set DEB_ARCHIVE}"
 : "${DEB_ARCHIVE_SHA256:?set DEB_ARCHIVE_SHA256}"
 : "${SENSOR_DEB_ARCHIVE:?set SENSOR_DEB_ARCHIVE}"
@@ -66,10 +76,17 @@ DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
 MODINFO=${MODINFO:-modinfo}
 
 [[ $KERNEL_ARTIFACT_ARCHIVE_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid kernel archive SHA-256"
+[[ $KERNEL_BUILD_ARCHIVE_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid kernel SDK archive SHA-256"
 [[ $DEB_ARCHIVE_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid device archive SHA-256"
 [[ $SENSOR_DEB_ARCHIVE_SHA256 =~ ^[0-9A-Fa-f]{64}$ ]] || ci_die "invalid sensor archive SHA-256"
 [[ $EXPECTED_SENSOR_PRODUCER_COMMIT =~ ^[0-9a-f]{40}$ ]] ||
   ci_die "EXPECTED_SENSOR_PRODUCER_COMMIT must be 40 lowercase hex characters"
+[[ $KERNEL_BOOTSTRAP_PRODUCER_COMMIT =~ ^[0-9a-f]{40}$ ]] ||
+  ci_die "KERNEL_BOOTSTRAP_PRODUCER_COMMIT must be 40 lowercase hex characters"
+[[ $KERNEL_BOOTSTRAP_PRODUCER_TREE =~ ^[0-9a-f]{40}$ ]] ||
+  ci_die "KERNEL_BOOTSTRAP_PRODUCER_TREE must be 40 lowercase hex characters"
+[[ $KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256 =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die "KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256 must be 64 lowercase hex characters"
 [[ $EXPECTED_HAPTICS_PRODUCER_COMMIT =~ ^[0-9a-f]{40}$ ]] ||
   ci_die "EXPECTED_HAPTICS_PRODUCER_COMMIT must be 40 lowercase hex characters"
 [[ $EXPECTED_HAPTICS_MODULE_SHA256 =~ ^[0-9a-f]{64}$ ]] ||
@@ -115,6 +132,7 @@ cleanup() {
 trap cleanup EXIT
 
 kernel_archive="$work/kernel-artifacts.archive"
+kernel_sdk_archive="$work/kernel-build-sdk.archive"
 device_archive="$work/device-debs.archive"
 sensor_archive="$work/sensor-debs.archive"
 haptics_archive="$work/haptics-debs.archive"
@@ -125,6 +143,7 @@ haptics_root="$work/haptics-debs"
 
 ci_download "$KERNEL_ARTIFACT_ARCHIVE" "$kernel_archive" "$KERNEL_ARTIFACT_ARCHIVE_SHA256"
 ci_extract_archive "$kernel_archive" "$kernel_root"
+ci_download "$KERNEL_BUILD_ARCHIVE" "$kernel_sdk_archive" "$KERNEL_BUILD_ARCHIVE_SHA256"
 ci_download "$DEB_ARCHIVE" "$device_archive" "$DEB_ARCHIVE_SHA256"
 ci_extract_archive "$device_archive" "$device_root"
 ci_download "$SENSOR_DEB_ARCHIVE" "$sensor_archive" "$SENSOR_DEB_ARCHIVE_SHA256"
@@ -150,15 +169,22 @@ find_unique_file() {
 }
 
 validate_device_package_namespace() {
-  local invalid deb package
+  local canonical_modules_deb=$1 invalid deb package
   declare -A package_owner=()
 
   invalid=$(find "$device_root" -mindepth 1 -name '*.deb' ! -type f -print -quit)
   [ -z "$invalid" ] ||
     ci_die "device archive contains a non-regular DEB path: $invalid"
   while IFS= read -r -d '' deb; do
-    package=$(dpkg-deb -f "$deb" Package) ||
-      ci_die "cannot read device DEB package identity: $deb"
+    if [ "$deb" = "$canonical_modules_deb" ]; then
+      # Reserve the namespace by the unique canonical basename. The bounded
+      # raw verifier below proves the complete package identity and bytes
+      # before any normalized dpkg consumer can inspect this DEB.
+      package=y700-daily-kernel-modules
+    else
+      package=$(dpkg-deb -f "$deb" Package) ||
+        ci_die "cannot read device DEB package identity: $deb"
+    fi
     case "$package" in
       qcom-sns-libssc|qcom-sns-hexagonrpc|qcom-sns-iio-sensor-proxy|tb321fu-sensors|y700-sensors|\
       tb321fu-haptics|tb321fu-haptics-common|tb321fu-haptics-modules-*|y700-haptics)
@@ -329,30 +355,36 @@ haptics_build_environment_policy_sha256() {
     'producer-environment=env-i-script-allowlist' \
     'transport-environment=http_proxy,https_proxy,no_proxy' \
     'dynamic-kbuild-environment=discarded' \
-    'source-date-epoch=explicit' \
+    'source-date-epoch=explicit,range=0..15032385535,filesystem-roundtrip-required' \
     'debian-compression=xz,level=6,threads=1,uniform=yes' \
     'kbuild-path=private-locked-tool-directory-v1' \
     'kbuild-shell=absolute-locked-dash-v1' \
-    'command-resolution=absolute-recorded-paths' \
+    'kbuild-tool-invocation=private-canonical-command-symlink-v1' \
+    'kbuild-kernelrelease=verified-sdk-command-line-v1' \
+    'kbuild-compile-identity=verified-bundle-or-epoch-command-line-v1' \
+    'external-module-path-mapping=module-source,kernel-source,kernel-build-to-fixed-prefixes-v1' \
+    'command-invocation=locked-command-path-resolved-target-v1' \
     'generated-kernel-host-tools=absolute-private-path,sha256,pre-and-post-use-verification' \
-    'tool-identity=absolute-realpath,sha256,version,post-use-verification' |
+    'tool-metadata=target:regular-file,mode-0755,nlink-1;command:regular-file-mode-0755-or-symlink-mode-0777,nlink-1;under-/usr-or-/bin-or-/sbin:uid-0,gid-0' \
+    'tool-identity=absolute-command-path,absolute-realpath,sha256,version,target-and-command-mode-uid-gid-nlink-type,pre-and-post-use-verification' |
     sha256sum | awk '{print $1}'
 }
 
 verify_haptics_build_tools_manifest() {
   local manifest=$1 expected_manifest_sha=$2 expected_policy_sha=$3
   local expected_toolset_sha=$4
-  local index line kind logical_name path digest version extra without_tabs
+  local index line kind logical_name command_path resolved_path digest version
+  local extra without_tabs path_role candidate_path
   local actual_policy_sha actual_toolset_sha tool_records
   local -a lines=() tool_lines=()
   local -a expected_tools=(
-    bash dash env readlink realpath basename dirname date mktemp mkdir rm chmod cp mv
+    bash dash env readlink realpath basename dirname date sleep timeout mktemp mkdir rm chmod cp mv
     ln cat find install touch stat awk grep sed sort cut cmp tee tr wc git curl
-    python3 make gcc as ld ar rsync dpkg dpkg-deb sha256sum
+    python3 make flex bison m4 gcc as ld ar rsync dpkg dpkg-deb sha256sum
     aarch64-linux-gnu-gcc aarch64-linux-gnu-cpp aarch64-linux-gnu-as
     aarch64-linux-gnu-ld aarch64-linux-gnu-ar aarch64-linux-gnu-nm
     aarch64-linux-gnu-objcopy aarch64-linux-gnu-objdump
-    aarch64-linux-gnu-readelf aarch64-linux-gnu-strip kmod tar gzip xz
+    aarch64-linux-gnu-readelf aarch64-linux-gnu-strip modinfo tar gzip xz
     sh bc getconf sha1sum uname head expr uniq xargs
   )
 
@@ -360,10 +392,10 @@ verify_haptics_build_tools_manifest() {
   require_bounded_metadata_file "$manifest" 'haptics build-tools manifest' 131072
   mapfile -t lines < "$manifest"
   [ "${#lines[@]}" -eq "$((4 + ${#expected_tools[@]}))" ] ||
-    ci_die 'haptics build-tools manifest must contain exactly four headers and 64 tool records'
-  [ "${#expected_tools[@]}" -eq 64 ] ||
+    ci_die 'haptics build-tools manifest must contain exactly four headers and 69 tool records'
+  [ "${#expected_tools[@]}" -eq 69 ] ||
     ci_die 'internal haptics build-tools inventory count mismatch'
-  [ "${lines[0]}" = $'schema\ttb321fu.haptics-build-tools/v1' ] ||
+  [ "${lines[0]}" = $'schema\ttb321fu.haptics-build-tools/v2' ] ||
     ci_die 'unsupported haptics build-tools manifest schema'
   [ "${lines[1]}" = $'environment-policy\tisolated-allowlist-v1' ] ||
     ci_die 'haptics build-tools manifest has an unexpected environment policy'
@@ -375,25 +407,31 @@ verify_haptics_build_tools_manifest() {
   for index in "${!expected_tools[@]}"; do
     line=${lines[$((index + 4))]}
     without_tabs=${line//$'\t'/}
-    [ "$(( ${#line} - ${#without_tabs} ))" -eq 4 ] ||
-      ci_die "haptics build-tool record must contain exactly five TSV fields at line $((index + 5))"
-    IFS=$'\t' read -r kind logical_name path digest version extra <<<"$line"
+    [ "$(( ${#line} - ${#without_tabs} ))" -eq 5 ] ||
+      ci_die "haptics build-tool record must contain exactly six TSV fields at line $((index + 5))"
+    IFS=$'\t' read -r kind logical_name command_path resolved_path digest version extra <<<"$line"
     [ "$kind" = tool ] && [ "$logical_name" = "${expected_tools[$index]}" ] &&
       [ -z "$extra" ] ||
       ci_die "unexpected haptics build-tool order at line $((index + 5))"
-    [ -n "$path" ] && [ "${#path}" -le 4096 ] ||
-      ci_die "invalid haptics build-tool path: $logical_name"
-    LC_ALL=C grep -Eq '^[ -~]+$' <<<"$path" ||
-      ci_die "invalid haptics build-tool path: $logical_name"
-    case "$path" in
-      /usr/sbin/*|/usr/bin/*|/sbin/*|/bin/*) ;;
-      *) ci_die "haptics build-tool path is outside the canonical producer PATH: $logical_name" ;;
-    esac
-    case "$path" in
-      *//*|*/./*|*/../*|*/.|*/..|*\\*)
-        ci_die "unsafe haptics build-tool path: $logical_name"
-        ;;
-    esac
+    for path_role in invocation resolved-target; do
+      case "$path_role" in
+        invocation) candidate_path=$command_path ;;
+        resolved-target) candidate_path=$resolved_path ;;
+      esac
+      [ -n "$candidate_path" ] && [ "${#candidate_path}" -le 4096 ] ||
+        ci_die "invalid haptics build-tool $path_role path: $logical_name"
+      LC_ALL=C grep -Eq '^[ -~]+$' <<<"$candidate_path" ||
+        ci_die "invalid haptics build-tool $path_role path: $logical_name"
+      case "$candidate_path" in
+        /usr/sbin/*|/usr/bin/*|/sbin/*|/bin/*) ;;
+        *) ci_die "haptics build-tool $path_role path is outside the canonical producer PATH: $logical_name" ;;
+      esac
+      case "$candidate_path" in
+        *//*|*/./*|*/../*|*/.|*/..|*\\*)
+          ci_die "unsafe haptics build-tool $path_role path: $logical_name"
+          ;;
+      esac
+    done
     [[ $digest =~ ^[0-9a-f]{64}$ ]] ||
       ci_die "invalid haptics build-tool SHA-256: $logical_name"
     [ -n "$version" ] && [ "${#version}" -le 240 ] &&
@@ -740,7 +778,6 @@ validate_sensor_archive() {
   sensor_package_version=$common_version
 }
 
-validate_device_package_namespace
 find_unique_file kernel_bundle "$kernel_root" KERNEL-BUNDLE.tsv 'kernel KERNEL-BUNDLE.tsv'
 find_unique_file device_bundle "$device_root" KERNEL-BUNDLE.tsv 'device KERNEL-BUNDLE.tsv'
 find_unique_file kernel_source_lock "$kernel_root" SOURCE-LOCK.tsv 'kernel SOURCE-LOCK.tsv'
@@ -756,6 +793,7 @@ find_unique_file kernel_image "$kernel_root" Image 'kernel Image'
 find_unique_file kernel_dtb "$kernel_root" "$DTB_NAME" "kernel $DTB_NAME"
 find_unique_file kernel_config "$kernel_root" kernel.config 'kernel config'
 find_unique_file modules_deb "$device_root" 'y700-daily-kernel-modules_*.deb' 'kernel modules DEB'
+validate_device_package_namespace "$modules_deb"
 find_unique_file baseline_rootfs_deb "$device_root" 'y700-daily-rootfs-overlay_*.deb' 'baseline rootfs DEB'
 find_unique_file baseline_compat_archive "$device_root" 'y700-compat1-extra-rootfs-overlay.tar.gz' 'baseline compat archive'
 validate_root_file_set "$kernel_root" kernel \
@@ -850,6 +888,8 @@ load_tsv "$kernel_source_lock" source_lock
 [ "${source_lock[modules_deb_sha256]}" = "${kernel_meta[kernel-modules-deb-sha256]}" ] || ci_die "source lock modules DEB mismatch"
 [ "${source_lock[modules_manifest_sha256]}" = "${kernel_meta[kernel-modules-manifest-sha256]}" ] || ci_die "source lock modules manifest mismatch"
 [ "${source_lock[kernel_sdk_archive_sha256]}" = "${kernel_meta[kernel-sdk-archive-sha256]}" ] || ci_die "source lock kernel SDK archive mismatch"
+[ "${source_lock[kernel_sdk_archive_sha256]}" = "${KERNEL_BUILD_ARCHIVE_SHA256,,}" ] ||
+  ci_die "kernel SDK input SHA-256 differs from the source lock"
 [ "${source_lock[kernel_sdk_manifest_sha256]}" = "${kernel_meta[kernel-sdk-manifest-sha256]}" ] || ci_die "source lock kernel SDK manifest mismatch"
 [ "${source_lock[kernel_toolchain_manifest_sha256]}" = "${kernel_meta[kernel-toolchain-manifest-sha256]}" ] || ci_die "source lock kernel toolchain manifest mismatch"
 [ "${source_lock[kbuild_flags_sha256]}" = "${kernel_meta[kbuild-flags-sha256]}" ] || ci_die "source lock Kbuild flags mismatch"
@@ -864,6 +904,12 @@ done
 [[ ${source_lock[producer_tree]} =~ ^[0-9a-f]{40}$ ]] || ci_die 'invalid kernel source-lock producer tree'
 [[ ${source_lock[producer_tree_sha256]} =~ ^[0-9a-f]{64}$ ]] ||
   ci_die 'invalid kernel source-lock producer tree SHA-256'
+[ "${source_lock[producer_commit]}" = "$KERNEL_BOOTSTRAP_PRODUCER_COMMIT" ] ||
+  ci_die 'kernel source-lock producer commit differs from the approved input'
+[ "${source_lock[producer_tree]}" = "$KERNEL_BOOTSTRAP_PRODUCER_TREE" ] ||
+  ci_die 'kernel source-lock producer tree differs from the approved input'
+[ "${source_lock[producer_tree_sha256]}" = "$KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256" ] ||
+  ci_die 'kernel source-lock producer tree SHA-256 differs from the approved input'
 [ "${source_lock[producer_state]}" = clean ] || ci_die 'kernel source-lock producer state is not clean'
 [[ ${source_lock[modules_manifest_file_count]} =~ ^[1-9][0-9]{0,8}$ ]] ||
   ci_die 'invalid kernel source-lock modules manifest file count'
@@ -898,27 +944,46 @@ check_sha "$kernel_config" "${source_lock[config_sha256]}" 'kernel config'
 check_sha "$modules_deb" "${source_lock[modules_deb_sha256]}" 'kernel modules DEB'
 check_sha "$baseline_rootfs_deb" "${source_lock[baseline_rootfs_sha256]}" 'baseline rootfs DEB'
 check_sha "$baseline_compat_archive" "${source_lock[baseline_compat_sha256]}" 'baseline compat archive'
+ci_verify_tb321fu_haptics_dtb "$kernel_dtb" "$(command -v fdtget)"
+[ -f "$SCRIPT_DIR/verify-kernel-sdk.py" ] && [ ! -L "$SCRIPT_DIR/verify-kernel-sdk.py" ] ||
+  ci_die 'kernel SDK archive verifier is missing or unsafe'
+python3 -I "$SCRIPT_DIR/verify-kernel-sdk.py" --archive-only \
+  "$kernel_sdk_archive" "$kernel_sdk_manifest" \
+  --kernel-release "${kernel_meta[kernel-release]}" ||
+  ci_die 'kernel SDK archive does not match the bound manifest'
+rm -f -- "$kernel_sdk_archive"
 
 sensor_source_lock=
 sensor_package_version=
 validate_sensor_archive "$sensor_root"
 
-[ "$(dpkg-deb -f "$modules_deb" Package)" = y700-daily-kernel-modules ] || ci_die "unexpected kernel modules package name"
-[ "$(dpkg-deb -f "$modules_deb" Architecture)" = arm64 ] || ci_die "unexpected kernel modules package architecture"
-device_data_tar="$work/device-data.tar"
+[ "$(basename -- "$modules_deb")" = "y700-daily-kernel-modules_${kernel_meta[kernel-release]}_arm64.deb" ] ||
+  ci_die "kernel modules DEB filename does not bind the kernel release"
+device_tar_output="$work/kernel-modules-verified"
+device_data_tar="$device_tar_output/data.tar"
 device_data="$work/device-data"
-device_control_tar="$work/device-control.tar"
+device_control_tar="$device_tar_output/control.tar"
 device_control="$work/device-control"
-dpkg-deb --fsys-tarfile "$modules_deb" > "$device_data_tar"
+kernel_modules_deb_verifier="$SCRIPT_DIR/verify-kernel-modules-deb.py"
+[ -f "$kernel_modules_deb_verifier" ] && [ ! -L "$kernel_modules_deb_verifier" ] ||
+  ci_die "kernel modules raw DEB verifier is missing or unsafe"
+python3 -I "$kernel_modules_deb_verifier" \
+  --deb "$modules_deb" \
+  --kernel-release "${kernel_meta[kernel-release]}" \
+  --package-version "${kernel_meta[kernel-release]}" \
+  --source-date-epoch "${source_lock[source_date_epoch]}" \
+  --output-directory "$device_tar_output" ||
+  ci_die "kernel modules DEB violates the canonical raw package contract"
 ci_extract_archive "$device_data_tar" "$device_data"
+rm -f -- "$device_data_tar"
 [ -z "$(find "$device_data" -type d ! -perm 0755 -print -quit)" ] ||
   ci_die "kernel modules DEB contains a non-0755 data directory"
 [ -z "$(find "$device_data" -type f ! -perm 0644 -print -quit)" ] ||
   ci_die "kernel modules DEB contains a non-0644 data file"
 [ -z "$(find "$device_data" ! -type d ! -type f -print -quit)" ] ||
   ci_die "kernel modules DEB data contains a non-regular member"
-dpkg-deb --ctrl-tarfile "$modules_deb" > "$device_control_tar"
 ci_extract_archive "$device_control_tar" "$device_control"
+rm -f -- "$device_control_tar"
 [ -z "$(find "$device_control" -type d ! -perm 0755 -print -quit)" ] ||
   ci_die "kernel modules DEB contains a non-0755 control directory"
 [ -z "$(find "$device_control" ! -type d ! -type f -print -quit)" ] ||
@@ -927,6 +992,21 @@ ci_extract_archive "$device_control_tar" "$device_control"
   ci_die "kernel modules DEB control must be mode 0644"
 [ "$(stat -c '%a' "$device_control/postinst")" = 755 ] ||
   ci_die "kernel modules DEB postinst must be mode 0755"
+control_member_list="$work/kernel-modules.control-members"
+find "$device_control" -mindepth 1 -printf '%P\n' | LC_ALL=C sort > "$control_member_list"
+printf '%s\n' control postinst | cmp -s - "$control_member_list" ||
+  ci_die "kernel modules DEB control archive must contain only control and postinst"
+expected_postinst="$work/kernel-modules.postinst.expected"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'set -e' \
+  "current_release='${kernel_meta[kernel-release]}'" \
+  'if command -v depmod >/dev/null 2>&1; then' \
+  '  depmod "$current_release"' \
+  'fi' \
+  'exit 0' > "$expected_postinst"
+cmp -s "$expected_postinst" "$device_control/postinst" ||
+  ci_die "kernel modules DEB postinst differs from the canonical lifecycle contract"
 while IFS= read -r -d '' control_file; do
   case $(basename -- "$control_file") in
     preinst|postinst|prerm|postrm|config)
@@ -944,6 +1024,15 @@ modules_parent="$device_data/usr/lib/modules"
 mapfile -d '' -t module_dirs < <(find "$modules_parent" -mindepth 1 -maxdepth 1 -type d -print0)
 [ "${#module_dirs[@]}" -eq 1 ] || ci_die "kernel modules DEB must contain exactly one release"
 [ "$(basename -- "${module_dirs[0]}")" = "${kernel_meta[kernel-release]}" ] || ci_die "kernel modules directory release mismatch"
+unexpected_data_member=$(find "$device_data" -mindepth 1 \
+  ! -path "$device_data/usr" \
+  ! -path "$device_data/usr/lib" \
+  ! -path "$modules_parent" \
+  ! -path "${module_dirs[0]}" \
+  ! -path "${module_dirs[0]}/*" \
+  -print -quit)
+[ -z "$unexpected_data_member" ] ||
+  ci_die "kernel modules DEB contains payload outside the exact release tree: $unexpected_data_member"
 module_count=0
 kernel_vermagic=
 while IFS= read -r -d '' module; do
@@ -1012,6 +1101,7 @@ declare -a haptics_lock_fields=(
   aw86937-module-sha256
   haptic-test-helper-binary-sha256
   kernel-bundle-id
+  kernel-toolchain-manifest-sha256
   kernel-release
   kernel-source-commit
   kernel-config-sha256
@@ -1022,7 +1112,7 @@ declare -a haptics_lock_fields=(
 require_exact_tsv_order "$haptics_lock" "${haptics_lock_fields[@]}"
 declare -A haptics_meta=()
 load_tsv "$haptics_lock" haptics_meta
-[ "${haptics_meta[schema]}" = tb321fu.haptics-source-lock/v3 ] ||
+[ "${haptics_meta[schema]}" = tb321fu.haptics-source-lock/v4 ] ||
   ci_die "unsupported haptics source-lock schema"
 [ "${haptics_meta[haptics-output-mode]}" = release-candidate ] ||
   ci_die 'haptics source lock is not a release candidate'
@@ -1065,6 +1155,11 @@ done
     "$EXPECTED_HAPTICS_HELPER_BINARY_SHA256" ] ||
   ci_die "haptics helper binary SHA-256 differs from the external expected digest"
 [ "${haptics_meta[kernel-bundle-id]}" = "${kernel_meta[kernel-bundle-id]}" ] || ci_die "haptics kernel-bundle-id mismatch"
+[[ ${haptics_meta[kernel-toolchain-manifest-sha256]} =~ ^[0-9a-f]{64}$ ]] ||
+  ci_die "invalid haptics kernel toolchain manifest SHA-256"
+[ "${haptics_meta[kernel-toolchain-manifest-sha256]}" = \
+  "${kernel_meta[kernel-toolchain-manifest-sha256]}" ] ||
+  ci_die "haptics kernel toolchain manifest SHA-256 mismatch"
 [ "${haptics_meta[kernel-release]}" = "${kernel_meta[kernel-release]}" ] || ci_die "haptics kernel-release mismatch"
 [ "${haptics_meta[kernel-source-commit]}" = "${kernel_meta[kernel-source-commit]}" ] || ci_die "haptics kernel-source-commit mismatch"
 [ "${haptics_meta[kernel-config-sha256]}" = "${kernel_meta[kernel-config-sha256]}" ] || ci_die "haptics kernel-config-sha256 mismatch"
@@ -1393,17 +1488,27 @@ fi
   printf 'kernel-module-count\t%s\n' "$module_count"
 } > "$stage/VERIFIED-BUNDLE.tsv"
 
+declare -A verified_input_seen=()
 write_verified_input() {
   local key=$1 value=$2
+  [[ $key =~ ^[a-z0-9][a-z0-9-]*$ ]] || ci_die "invalid verified input key: $key"
+  [ -z "${verified_input_seen[$key]+present}" ] || ci_die "duplicate verified input key: $key"
   case "$value" in
     *$'\t'*|*$'\r'*|*$'\n'*) ci_die "verified input contains a TSV control character: $key" ;;
   esac
+  verified_input_seen[$key]=1
   printf '%s\t%s\n' "$key" "$value"
 }
 {
-  write_verified_input schema tb321fu.verified-inputs/v1
+  write_verified_input schema tb321fu.verified-inputs/v2
   write_verified_input kernel-artifact-archive "$KERNEL_ARTIFACT_ARCHIVE"
   write_verified_input kernel-artifact-archive-sha256 "${KERNEL_ARTIFACT_ARCHIVE_SHA256,,}"
+  write_verified_input kernel-build-archive "$KERNEL_BUILD_ARCHIVE"
+  write_verified_input kernel-build-archive-sha256 "${KERNEL_BUILD_ARCHIVE_SHA256,,}"
+  write_verified_input kernel-bootstrap-producer-commit "$KERNEL_BOOTSTRAP_PRODUCER_COMMIT"
+  write_verified_input kernel-bootstrap-producer-tree "$KERNEL_BOOTSTRAP_PRODUCER_TREE"
+  write_verified_input kernel-bootstrap-producer-tree-sha256 \
+    "$KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256"
   write_verified_input device-deb-archive "$DEB_ARCHIVE"
   write_verified_input device-deb-archive-sha256 "${DEB_ARCHIVE_SHA256,,}"
   write_verified_input sensor-deb-archive "$SENSOR_DEB_ARCHIVE"

@@ -5,18 +5,37 @@
 /* SPDX-License-Identifier: MIT */
 
 #include <array>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <cstddef>
+#include <condition_variable>
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
+#include <cmath>
+#include <cstdlib>
+#include <deque>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <numeric>
 #include <optional>
+#include <poll.h>
+#include <pwd.h>
+#include <spawn.h>
+#include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <spa/support/plugin.h>
@@ -53,20 +72,55 @@
 
 using namespace libcamera;
 
+extern char **environ;
+
 namespace {
+
+struct impl;
+struct port;
+static int camera_remove_source_invoke(struct spa_loop *, bool, uint32_t,
+		const void *, size_t, void *);
+static int camera_add_source_invoke(struct spa_loop *, bool, uint32_t,
+		const void *, size_t, void *);
+static void y700_display_rotation_cleanup(struct impl *);
+static int clear_buffers_locked(struct port *port);
+static int finalize_impl_resources(struct impl *impl);
 
 #define MAX_BUFFERS	32
 #define MASK_BUFFERS	31
+#define COMPLETION_RING_SIZE	64
+#define COMPLETION_RING_MASK	(COMPLETION_RING_SIZE - 1)
 
 #define BUFFER_FLAG_OUTSTANDING	(1<<0)
 
+template<typename T>
+static bool naturally_aligned(const void *data)
+{
+	return data == nullptr ||
+		(reinterpret_cast<std::uintptr_t>(data) % alignof(T)) == 0;
+}
+
 struct buffer {
-	uint32_t id;
-	uint32_t flags;
-	struct spa_list link;
-	struct spa_buffer *outbuf;
-	struct spa_meta_header *h;
-	struct spa_meta_videotransform *videotransform;
+	uint32_t id = 0;
+	uint32_t flags = 0;
+	struct spa_list link = {};
+	struct spa_buffer *outbuf = nullptr;
+	struct spa_meta *validated_metas = nullptr;
+	uint32_t validated_n_metas = 0;
+	struct spa_data *validated_datas = nullptr;
+	uint32_t validated_n_datas = 0;
+	std::array<struct spa_chunk *, MAX_BUFFERS> validated_chunks{};
+	std::array<uint32_t, MAX_BUFFERS> validated_types{};
+	std::array<uint32_t, MAX_BUFFERS> validated_flags{};
+	std::array<int64_t, MAX_BUFFERS> validated_fds{};
+	std::array<uint32_t, MAX_BUFFERS> validated_mapoffsets{};
+	std::array<uint32_t, MAX_BUFFERS> validated_maxsizes{};
+	std::array<int32_t, MAX_BUFFERS> validated_strides{};
+	std::array<uint32_t, MAX_BUFFERS> first_planes{};
+	std::array<uint32_t, MAX_BUFFERS> plane_counts{};
+	struct spa_meta_header *h = nullptr;
+	struct spa_meta_videotransform *videotransform = nullptr;
+	bool queued = false;
 };
 
 struct port {
@@ -74,7 +128,10 @@ struct port {
 
 	std::optional<spa_video_info> current_format;
 
-	struct spa_fraction rate = {};
+	/* Keep a valid clock rate until the first negotiated format arrives.  A
+	 * zero denominator is later used by the pacing/DLL path and can turn a
+	 * normal startup into undefined timing behaviour. */
+	struct spa_fraction rate = { 1, 30 };
 	StreamConfiguration streamConfig;
 
 	uint32_t buffers_blocks = 1;
@@ -87,8 +144,9 @@ struct port {
 		SPA_PORT_CHANGE_MASK_PROPS | SPA_PORT_CHANGE_MASK_PARAMS;
 	struct spa_port_info info = SPA_PORT_INFO_INIT();
 	struct spa_io_buffers *io = nullptr;
+	std::size_t io_size = 0;
 	struct spa_io_sequence *control = nullptr;
-	uint32_t control_size;
+	uint32_t control_size = 0;
 #define PORT_PropInfo	0
 #define PORT_EnumFormat	1
 #define PORT_Meta	2
@@ -122,7 +180,6 @@ struct port {
 };
 
 struct impl {
-	struct spa_handle handle;
 	struct spa_node node = {};
 
 	struct spa_log *log;
@@ -147,18 +204,68 @@ struct impl {
 	std::array<port, 1> out_ports;
 
 	struct spa_io_position *position = nullptr;
+	std::size_t position_size = 0;
 	struct spa_io_clock *clock = nullptr;
+	std::size_t clock_size = 0;
 
 	struct spa_latency_info latency[2];
 
 	std::shared_ptr<CameraManager> manager;
 	std::shared_ptr<Camera> camera;
-	const std::unique_ptr<CameraConfiguration> config;
+	/* The configuration object is replaced only after a candidate has been
+	 * validated and configured successfully.  Keeping ownership mutable lets
+	 * format renegotiation retain the old object for rollback. */
+	std::unique_ptr<CameraConfiguration> config;
+	/* A failed format transaction may leave the candidate allocator alive while
+	 * the previous configuration is retained for diagnostics/terminal cleanup.
+	 * Keep that second owner explicit instead of letting a local rollback object
+	 * dangle when allocator retirement fails. */
+	std::unique_ptr<CameraConfiguration> rollback_config;
+	bool format_transaction_failed = false;
 
 	FrameBufferAllocator allocator;
 	std::vector<std::unique_ptr<libcamera::Request>> requestPool;
 	spa_ringbuffer completed_requests_rb = SPA_RINGBUFFER_INIT();
-	std::array<libcamera::Request *, MAX_BUFFERS> completed_requests;
+	std::array<libcamera::Request *, COMPLETION_RING_SIZE> completed_requests{};
+	/* The libcamera signal may run concurrently with the PipeWire data loop.
+	 * This lock protects ring slots and the eventfd lifetime. */
+	std::mutex completion_mutex;
+	std::condition_variable completion_cv;
+	unsigned int callbacks_inflight = 0;
+	unsigned int processes_inflight = 0;
+	bool stopping = false;
+	std::atomic<int> completion_error{0};
+	/* Provider ownership is observed by lifecycle and data-loop threads.  Keep
+	 * the spa_source fields for PipeWire, but mirror their state atomically so
+	 * terminal-clear checks never infer ownership from an unlocked field. */
+	std::atomic<bool> signal_connected{false};
+	std::atomic<bool> source_registered{false};
+	std::atomic<int> source_fd{-1};
+	/* Buffer metadata is touched by both the PipeWire data loop and libcamera
+	 * completion delivery.  It cannot use lifecycle_mutex because stop() waits
+	 * for those callbacks while holding the lifecycle transaction. */
+	std::mutex buffer_mutex;
+	std::mutex controls_mutex;
+	std::recursive_mutex callbacks_mutex;
+	/* Serialize queueRequest() against camera start/stop without making a
+	 * completion callback wait for lifecycle_mutex. */
+	std::mutex camera_io_mutex;
+	/* All synchronous node/lifecycle entry points serialize against one
+	 * another.  Completion callbacks use completion_mutex and never wait for
+	 * this lock, so a stop issued from a foreign thread cannot deadlock the
+	 * data-loop callback. */
+	std::recursive_mutex lifecycle_mutex;
+	/* Display rotation is session-local state.  Keep it per node so multiple
+	 * camera instances cannot share a stale inotify descriptor or cache. */
+	std::mutex rotation_mutex;
+	int display_rotation_cached = 1;
+	bool display_rotation_initialized = false;
+	bool display_rotation_refresh_pending = true;
+	std::chrono::steady_clock::time_point display_rotation_retry_after{};
+	int display_rotation_inotify_fd = -1;
+	int display_rotation_inotify_wd = -1;
+	std::string display_rotation_config_dir;
+	pid_t display_rotation_child_pid = -1;
 
 	void requestComplete(libcamera::Request *request);
 
@@ -166,8 +273,9 @@ struct impl {
 
 	ControlList ctrls;
 	ControlList initial_controls;
-	bool active = false;
+	std::atomic<bool> active{false};
 	bool acquired = false;
+	std::atomic<bool> camera_started{false};
 
 	impl(spa_log *log, spa_loop *data_loop, spa_system *system,
 	     std::shared_ptr<CameraManager> manager, std::shared_ptr<Camera> camera,
@@ -175,43 +283,264 @@ struct impl {
 
 	struct spa_dll dll;
 
-	void stop()
+	int stop(bool keep_stopping = false)
 	{
-		spa_loop_locked(
-			data_loop,
-			[](spa_loop *, bool, uint32_t, const void *, size_t, void *user_data) {
-				auto *self = static_cast<impl *>(user_data);
-
-				if (self->source.loop)
-					spa_loop_remove_source(self->data_loop, &self->source);
-
-				return 0;
-			},
-			0, nullptr, 0, this
-		);
-
-		camera->requestCompleted.disconnect(this, &impl::requestComplete);
-
-		if (int res = camera->stop(); res < 0) {
-			spa_log_warn(log, "failed to stop camera %s: %s",
-					 camera->id().c_str(), spa_strerror(res));
+		std::lock_guard<std::recursive_mutex> lifecycle_guard(lifecycle_mutex);
+		int first_error = 0;
+		{
+			std::lock_guard<std::mutex> guard(completion_mutex);
+			/* Reject new producers before disconnecting the signal.  A producer
+			 * already inside requestComplete is accounted for below. */
+			stopping = true;
+			active.store(false, std::memory_order_release);
 		}
 
-		if (source.fd >= 0)
-			spa_system_close(system, std::exchange(source.fd, -1));
+		/* Source removal must run in the data-loop context.  Do not destroy the
+		 * eventfd or request graph until the callback activity guard below has
+		 * observed quiescence. */
+		int remove_res = 0;
+		for (unsigned int attempt = 0;
+			source_registered.load(std::memory_order_acquire) && attempt < 3;
+			++attempt) {
+			if (!data_loop) {
+				remove_res = -EINVAL;
+				break;
+			}
+			remove_res = spa_loop_invoke(
+				data_loop,
+				camera_remove_source_invoke,
+				0, nullptr, 0, true, this);
+			if (remove_res >= 0 &&
+				!source_registered.load(std::memory_order_acquire))
+				break;
+		}
+		if (source_registered.load(std::memory_order_acquire)) {
+			if (!first_error)
+				first_error = remove_res < 0 ? remove_res : -EBUSY;
+			if (log)
+				spa_log_warn(log, "failed to remove camera event source: %s",
+					spa_strerror(first_error));
+			}
+			{
+				std::unique_lock<std::mutex> lock(completion_mutex);
+				/* A data-loop process invocation never takes lifecycle_mutex.  Wait for
+				 * every invocation which crossed the stopping latch before changing the
+				 * camera or allocator state. */
+				if (!completion_cv.wait_for(lock, std::chrono::seconds(5),
+					[this] { return processes_inflight == 0; })) {
+					if (!first_error)
+						first_error = -ETIMEDOUT;
+					return first_error;
+				}
+			}
+		if (camera && camera_started.load(std::memory_order_acquire)) {
+			std::lock_guard<std::mutex> camera_guard(camera_io_mutex);
+			if (int res = camera->stop(); res < 0) {
+				if (!first_error)
+					first_error = res;
+				if (log)
+					spa_log_warn(log, "failed to stop camera %s: %s",
+							 camera->id().c_str(), spa_strerror(res));
+			} else {
+				camera_started.store(false, std::memory_order_release);
+			}
+		}
+		/* Camera::stop() completes every pending request synchronously in this
+		 * libcamera version.  Keep the signal connected through that boundary so
+		 * cancellation callbacks are accounted for, then prevent future emits. */
+		if (camera && !camera_started.load(std::memory_order_acquire) &&
+			signal_connected.load(std::memory_order_acquire)) {
+			camera->requestCompleted.disconnect(this, &impl::requestComplete);
+			signal_connected.store(false, std::memory_order_release);
+		}
+		{
+			std::unique_lock<std::mutex> lock(completion_mutex);
+			/* A broken callback must never make clear() wait forever.  Keep
+			 * ownership of every resource when the bounded quiescence wait fails;
+			 * the caller can retry stop() after the provider has settled. */
+				if (!completion_cv.wait_for(lock, std::chrono::seconds(5),
+					[this] {
+						return callbacks_inflight == 0 && processes_inflight == 0;
+					})) {
+				if (!first_error)
+					first_error = -ETIMEDOUT;
+				return first_error;
+			}
 
-		completed_requests_rb = SPA_RINGBUFFER_INIT();
-		active = false;
+			if (source_registered.load(std::memory_order_acquire) ||
+				camera_started.load(std::memory_order_acquire) ||
+				signal_connected.load(std::memory_order_acquire)) {
+				if (!first_error)
+					first_error = -EBUSY;
+				return first_error;
+			}
 
-		for (auto& p : out_ports)
-			spa_list_init(&p.queue);
+			const int fd = source_fd.load(std::memory_order_acquire);
+			if (fd >= 0 && system) {
+				const int res = spa_system_close(system, fd);
+				if (res < 0) {
+					if (!first_error)
+						first_error = res;
+					/* Keep the descriptor and ring intact.  A later retry is the
+					 * only safe point at which it may be closed. */
+					return first_error;
+				}
+				source.fd = -1;
+				source_fd.store(-1, std::memory_order_release);
+			} else {
+				source.fd = -1;
+				source_fd.store(-1, std::memory_order_release);
+			}
+			source.func = nullptr;
+			source.data = nullptr;
+			source.mask = 0;
+			source.rmask = 0;
+
+			/* Requests already handed to the completion ring still own their
+			 * libcamera buffers. Reuse them before dropping the ring. */
+			for (auto *request : completed_requests) {
+				if (request)
+					request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+			}
+			completed_requests.fill(nullptr);
+			completed_requests_rb = SPA_RINGBUFFER_INIT();
+			/* A failed transition leaves the latch set and therefore prevents a
+			 * new request from racing the caller's retry. */
+			stopping = keep_stopping || first_error < 0;
+		}
+
+		{
+			std::lock_guard<std::mutex> buffer_guard(buffer_mutex);
+			for (auto& p : out_ports) {
+				spa_list_init(&p.queue);
+				for (uint32_t i = 0; i < p.n_buffers && i < MAX_BUFFERS; ++i) {
+					SPA_FLAG_CLEAR(p.buffers[i].flags, BUFFER_FLAG_OUTSTANDING);
+					p.buffers[i].queued = false;
+					spa_list_init(&p.buffers[i].link);
+				}
+			}
+		}
+		if (first_error < 0)
+			return first_error;
+		if (!keep_stopping) {
+			std::lock_guard<std::mutex> guard(completion_mutex);
+			stopping = false;
+		}
+		return 0;
 	}
 };
+
+/* Both process() and port_reuse_buffer() run on the data loop.  They must
+ * retire before stop() changes provider ownership, but cannot acquire the
+ * lifecycle mutex: stop() holds it while synchronously invoking that loop. */
+struct process_activity_guard {
+	struct impl *self;
+	bool stopping;
+	explicit process_activity_guard(struct impl *impl)
+		: self(impl)
+	{
+		std::lock_guard<std::mutex> lock(self->completion_mutex);
+		++self->processes_inflight;
+		stopping = self->stopping;
+	}
+	process_activity_guard(const process_activity_guard &) = delete;
+	process_activity_guard &operator=(const process_activity_guard &) = delete;
+	~process_activity_guard()
+	{
+		std::lock_guard<std::mutex> lock(self->completion_mutex);
+		if (self->processes_inflight > 0)
+			--self->processes_inflight;
+		if (self->processes_inflight == 0)
+			self->completion_cv.notify_all();
+	}
+};
+
+class stopping_transaction_guard {
+public:
+	explicit stopping_transaction_guard(struct impl *impl)
+		: impl_(impl)
+	{
+	}
+	stopping_transaction_guard(const stopping_transaction_guard &) = delete;
+	stopping_transaction_guard &operator=(const stopping_transaction_guard &) = delete;
+
+	~stopping_transaction_guard()
+	{
+		finish();
+	}
+
+	void finish()
+	{
+		if (impl_ == nullptr)
+			return;
+		std::lock_guard<std::mutex> guard(impl_->completion_mutex);
+		impl_->stopping = false;
+		impl_ = nullptr;
+	}
+
+	/* Leave the lifecycle latch asserted when rollback cannot retire provider
+	 * ownership.  The caller may then retry teardown, but no new producer can
+	 * race the still-live candidate allocator/configuration. */
+	void abandon()
+	{
+		if (impl_ == nullptr)
+			return;
+		std::lock_guard<std::mutex> guard(impl_->completion_mutex);
+		impl_->stopping = true;
+		impl_->active.store(false, std::memory_order_release);
+		impl_ = nullptr;
+	}
+
+private:
+	struct impl *impl_;
+};
+
+static int camera_remove_source_on_data_loop(struct impl *self)
+{
+	if (self == nullptr || self->data_loop == nullptr)
+		return -EINVAL;
+	if (!self->source.loop) {
+		self->source_registered.store(false, std::memory_order_release);
+		return 0;
+	}
+	const int result = spa_loop_remove_source(self->data_loop, &self->source);
+	self->source_registered.store(self->source.loop != nullptr,
+		std::memory_order_release);
+	return result;
+}
+
+static int camera_remove_source_invoke(struct spa_loop *, bool, uint32_t,
+		const void *, size_t, void *user_data)
+{
+	return camera_remove_source_on_data_loop(
+		static_cast<struct impl *>(user_data));
+}
+
+static int camera_add_source_invoke(struct spa_loop *, bool, uint32_t,
+		const void *, size_t, void *user_data)
+{
+	auto *self = static_cast<struct impl *>(user_data);
+	if (self == nullptr || self->data_loop == nullptr)
+		return -EINVAL;
+	if (self->source.loop) {
+		self->source_registered.store(true, std::memory_order_release);
+		return 0;
+	}
+	const int result = spa_loop_add_source(self->data_loop, &self->source);
+	self->source_registered.store(self->source.loop != nullptr,
+		std::memory_order_release);
+	return result;
+}
 
 #define CHECK_PORT(impl,direction,port_id)  ((direction) == SPA_DIRECTION_OUTPUT && (port_id) == 0)
 
 #define GET_OUT_PORT(impl,p)         (&impl->out_ports[p])
 #define GET_PORT(impl,d,p)           GET_OUT_PORT(impl,p)
+
+int spa_libcamera_stream_on(struct impl *impl);
+static int spa_libcamera_rebind_buffers(struct impl *impl, struct port *port,
+		struct spa_buffer **buffers, uint32_t n_buffers);
+static void mark_completion_failure(struct impl *impl, int error);
 
 void setup_initial_controls(const ControlInfoMap& ctrl_infos, ControlList& ctrls)
 {
@@ -239,6 +568,9 @@ void setup_initial_controls(const ControlInfoMap& ctrl_infos, ControlList& ctrls
 
 int spa_libcamera_open(struct impl *impl)
 {
+	if (impl == nullptr || !impl->camera)
+		return -EIO;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 	if (impl->acquired)
 		return 0;
 
@@ -258,79 +590,176 @@ int spa_libcamera_open(struct impl *impl)
 
 int spa_libcamera_close(struct impl *impl)
 {
+	if (impl == nullptr)
+		return -EINVAL;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 	struct port *port = &impl->out_ports[0];
 	if (!impl->acquired)
 		return 0;
-	if (impl->active || port->current_format)
+	if (impl->active.load(std::memory_order_acquire) || port->current_format)
 		return 0;
 
 	spa_log_info(impl->log, "close camera %s", impl->camera->id().c_str());
 
-	spa_assert(!impl->allocator.allocated());
+	if (impl->allocator.allocated() || !impl->requestPool.empty())
+		return -EBUSY;
 
+	if (!impl->camera)
+		return -EIO;
 	impl->camera->release();
 
 	impl->acquired = false;
 	return 0;
 }
 
-int spa_libcamera_buffer_recycle(struct impl *impl, struct port *port, uint32_t buffer_id)
+static int recycle_buffer_locked(struct impl *impl, struct port *port,
+		uint32_t buffer_id)
 {
+	if (impl == nullptr || port == nullptr)
+		return -EINVAL;
+	if (buffer_id >= MAX_BUFFERS || buffer_id >= port->n_buffers ||
+		buffer_id >= impl->requestPool.size()) {
+		if (impl->log)
+			spa_log_warn(impl->log, "invalid buffer_id %u", buffer_id);
+		return -EINVAL;
+	}
 	struct buffer *b = &port->buffers[buffer_id];
 	int res;
 
 	if (!SPA_FLAG_IS_SET(b->flags, BUFFER_FLAG_OUTSTANDING))
 		return 0;
 
+	Request *request = impl->requestPool[buffer_id].get();
+	if (request == nullptr || impl->camera == nullptr)
+		return -EIO;
+	if (request->cookie() != buffer_id) {
+		mark_completion_failure(impl, -EPROTO);
+		return -EPROTO;
+	}
 	SPA_FLAG_CLEAR(b->flags, BUFFER_FLAG_OUTSTANDING);
 
-	if (buffer_id >= impl->requestPool.size()) {
-		spa_log_warn(impl->log, "invalid buffer_id %u >= %zu",
-				buffer_id, impl->requestPool.size());
-		return -EINVAL;
+	/* queueRequest() and camera->stop() must not cross.  stop() publishes its
+	 * latch before waiting for camera_io_mutex, so the second state check below
+	 * deterministically chooses either queue-before-stop or no queue. */
+	std::lock_guard<std::mutex> camera_guard(impl->camera_io_mutex);
+	bool should_queue;
+	{
+		std::lock_guard<std::mutex> lock(impl->completion_mutex);
+		should_queue = impl->active.load(std::memory_order_acquire) &&
+			!impl->stopping;
 	}
-	Request *request = impl->requestPool[buffer_id].get();
-	if (impl->active) {
+	if (should_queue) {
+		std::lock_guard<std::mutex> controls_guard(impl->controls_mutex);
 		request->controls().merge(impl->ctrls);
-		impl->ctrls.clear();
 		if ((res = impl->camera->queueRequest(request)) < 0) {
+			SPA_FLAG_SET(b->flags, BUFFER_FLAG_OUTSTANDING);
 			spa_log_warn(impl->log, "can't queue buffer %u: %s",
 				buffer_id, spa_strerror(res));
+			mark_completion_failure(impl, res == -EACCES ? -EBUSY : res);
 			return res == -EACCES ? -EBUSY : res;
 		}
+		/* Consume pending controls only after queueRequest accepts the request. */
+		impl->ctrls.clear();
 	}
 	return 0;
 }
 
-void freeBuffers(struct impl *impl, struct port *port)
+int freeBuffers(struct impl *impl, struct port *port)
 {
-	impl->requestPool.clear();
-	std::ignore = impl->allocator.free(port->streamConfig.stream());
-}
-
-[[nodiscard]]
-std::size_t count_unique_fds(libcamera::Span<const libcamera::FrameBuffer::Plane> planes)
-{
-	std::size_t c = 0;
-	int fd = -1;
-
-	for (const auto& plane : planes) {
-		const int current_fd = plane.fd.get();
-		if (current_fd >= 0 && current_fd != fd) {
-			c += 1;
-			fd = current_fd;
+	if (impl == nullptr || port == nullptr)
+		return -EINVAL;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	int result = 0;
+	if (impl->allocator.allocated()) {
+		if (Stream *stream = port->streamConfig.stream()) {
+			const int res = impl->allocator.free(stream);
+			if (res < 0)
+				result = res;
+			else if (impl->allocator.allocated())
+				result = -EIO;
+		} else {
+			result = -EIO;
 		}
 	}
+	/* Request objects contain non-owning FrameBuffer references.  Retain them
+	 * until allocator::free() has succeeded so a failed teardown can be
+	 * retried without losing ownership/accounting. */
+		if (result == 0) {
+			impl->requestPool.clear();
+			port->buffers_blocks = 1;
+		}
+	if (result < 0 && impl->log)
+		spa_log_error(impl->log, "failed to free camera buffers: %s",
+				spa_strerror(result));
+	return result;
+}
 
-	return c;
+struct plane_group_binding {
+	int fd = -1;
+	uint32_t offset = 0;
+	uint32_t size = 0;
+	uint32_t first_plane = 0;
+	uint32_t plane_count = 0;
+};
+
+static int build_plane_groups(
+		libcamera::Span<const libcamera::FrameBuffer::Plane> planes,
+		std::array<plane_group_binding, MAX_BUFFERS> *groups,
+		std::size_t *group_count)
+{
+	if (groups == nullptr || group_count == nullptr || planes.empty() ||
+		planes.size() > MAX_BUFFERS)
+		return -EINVAL;
+	groups->fill({});
+	*group_count = 0;
+	for (std::size_t plane_index = 0; plane_index < planes.size(); ++plane_index) {
+		const auto &plane = planes[plane_index];
+		const int fd = plane.fd.get();
+		if (fd < 0 || plane.length == 0 ||
+			plane.length > std::numeric_limits<uint32_t>::max() ||
+			plane.offset > std::numeric_limits<uint32_t>::max() - plane.length)
+			return -EOVERFLOW;
+		const uint32_t offset = static_cast<uint32_t>(plane.offset);
+		const uint32_t end = offset + static_cast<uint32_t>(plane.length);
+
+		if (*group_count == 0 || (*groups)[*group_count - 1].fd != fd) {
+			if (*group_count >= groups->size())
+				return -EOVERFLOW;
+			auto &group = (*groups)[(*group_count)++];
+			group.fd = fd;
+			group.offset = offset;
+			group.size = static_cast<uint32_t>(plane.length);
+			group.first_plane = static_cast<uint32_t>(plane_index);
+			group.plane_count = 1;
+			continue;
+		}
+
+		auto &group = (*groups)[*group_count - 1];
+		const uint32_t group_end = group.offset + group.size;
+		const uint32_t merged_start = std::min(group.offset, offset);
+		const uint32_t merged_end = std::max(group_end, end);
+		group.offset = merged_start;
+		group.size = merged_end - merged_start;
+		++group.plane_count;
+	}
+	return 0;
 }
 
 int allocBuffers(struct impl *impl, struct port *port, unsigned int count)
 {
+	if (impl == nullptr || port == nullptr || impl->camera == nullptr ||
+		!impl->config || impl->config->empty() || count == 0 || count > MAX_BUFFERS)
+		return -EINVAL;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 	libcamera::Stream *stream = port->streamConfig.stream();
+	if (stream == nullptr)
+		return -EIO;
 	int res;
+	std::size_t expected_group_count = 0;
 
 	if (!impl->requestPool.empty())
+		return -EBUSY;
+	if (impl->allocator.allocated())
 		return -EBUSY;
 
 	if ((res = impl->allocator.allocate(stream)) < 0)
@@ -343,9 +772,33 @@ int allocBuffers(struct impl *impl, struct port *port, unsigned int count)
 	}
 
 	for (std::size_t i = 0; i < bufs.size(); i++) {
+		if (!bufs[i]) {
+			res = -ENOBUFS;
+			goto err;
+		}
+		const auto &planes = bufs[i]->planes();
+		if (planes.empty()) {
+			res = -ENOBUFS;
+			goto err;
+		}
+		std::array<plane_group_binding, MAX_BUFFERS> groups{};
+		std::size_t group_count = 0;
+		res = build_plane_groups(planes, &groups, &group_count);
+		if (res < 0)
+			goto err;
+		if (i == 0)
+			expected_group_count = group_count;
+		else if (group_count != expected_group_count) {
+			res = -EINVAL;
+			goto err;
+		}
 		std::unique_ptr<Request> request = impl->camera->createRequest(i);
 		if (!request) {
 			res = -ENOMEM;
+			goto err;
+		}
+		if (request->cookie() != i) {
+			res = -EINVAL;
 			goto err;
 		}
 
@@ -361,8 +814,8 @@ int allocBuffers(struct impl *impl, struct port *port, unsigned int count)
 	 * video frame has to be addressed using more than one memory.
 	 * address. Therefore, need calculate the number of discontiguous
 	 * memory and allocate the specified amount of memory */
-	port->buffers_blocks = count_unique_fds(bufs.front()->planes());
-	if (port->buffers_blocks <= 0) {
+	port->buffers_blocks = static_cast<uint32_t>(expected_group_count);
+	if (port->buffers_blocks == 0) {
 		res = -ENOBUFS;
 		goto err;
 	}
@@ -370,28 +823,86 @@ int allocBuffers(struct impl *impl, struct port *port, unsigned int count)
 	return 0;
 
 err:
-	freeBuffers(impl, port);
+	const int cleanup_res = freeBuffers(impl, port);
+	if (cleanup_res < 0 && impl->log)
+		spa_log_error(impl->log, "camera buffer cleanup failed: %s",
+				spa_strerror(cleanup_res));
 
-	return res;
+	return cleanup_res < 0 ? cleanup_res : res;
 }
 
-int spa_libcamera_clear_buffers(struct port *port)
+static bool bound_spa_buffer_matches_locked(const struct buffer &bound)
 {
-	for (std::size_t i = 0; i < port->n_buffers; i++) {
+	const struct spa_buffer *sb = bound.outbuf;
+	if (sb == nullptr || sb->metas != bound.validated_metas ||
+		sb->n_metas != bound.validated_n_metas ||
+		sb->datas != bound.validated_datas || bound.validated_datas == nullptr ||
+		sb->n_datas != bound.validated_n_datas ||
+		bound.validated_n_datas == 0 || bound.validated_n_datas > MAX_BUFFERS)
+		return false;
+	if (spa_buffer_find_meta_data(sb, SPA_META_Header, sizeof(*bound.h)) != bound.h ||
+		spa_buffer_find_meta_data(sb, SPA_META_VideoTransform,
+			sizeof(*bound.videotransform)) != bound.videotransform)
+		return false;
+	for (uint32_t i = 0; i < bound.validated_n_datas; ++i) {
+		const struct spa_data &data = bound.validated_datas[i];
+		if (data.chunk == nullptr || data.chunk != bound.validated_chunks[i] ||
+				data.type != bound.validated_types[i] ||
+				data.flags != bound.validated_flags[i] ||
+				data.fd != bound.validated_fds[i] ||
+				data.mapoffset != bound.validated_mapoffsets[i] ||
+				data.maxsize != bound.validated_maxsizes[i] ||
+				data.chunk->stride != bound.validated_strides[i] ||
+				data.chunk->offset > data.maxsize ||
+				data.chunk->size > data.maxsize - data.chunk->offset)
+			return false;
+	}
+	return true;
+}
+
+static bool bound_spa_buffer_graph_matches_locked(const struct port *port)
+{
+	if (port == nullptr || port->n_buffers > MAX_BUFFERS)
+		return false;
+	for (uint32_t i = 0; i < port->n_buffers; ++i) {
+		if (!bound_spa_buffer_matches_locked(port->buffers[i]))
+			return false;
+	}
+	return true;
+}
+
+static int clear_buffers_locked(struct port *port)
+{
+	if (port == nullptr || !bound_spa_buffer_graph_matches_locked(port))
+		return -EPROTO;
+	const uint32_t count = port->n_buffers;
+	for (uint32_t i = 0; i < count; i++) {
 		buffer *b = &port->buffers[i];
-		spa_buffer *sb = b->outbuf;
 
-		for (std::size_t j = 0; j < sb->n_datas; j++) {
-			auto *d = &sb->datas[j];
-
-			d->type = SPA_ID_INVALID;
-			d->data = nullptr;
-			d->fd = -1;
+		if (b->queued) {
+			spa_list_remove(&b->link);
+			b->queued = false;
+			spa_list_init(&b->link);
 		}
 
-		*b = {};
+		for (uint32_t j = 0; j < b->validated_n_datas; j++) {
+			auto *data = &b->validated_datas[j];
+
+			data->type = SPA_ID_INVALID;
+			data->data = nullptr;
+			data->fd = -1;
+		}
+
+		*b = buffer{};
+		spa_list_init(&b->link);
 	}
 
+	spa_list_init(&port->queue);
+	if (port->io && port->io->buffer_id < count) {
+		port->io->buffer_id = SPA_ID_INVALID;
+		if (port->io->status == SPA_STATUS_HAVE_DATA)
+			port->io->status = SPA_STATUS_OK;
+	}
 	port->n_buffers = 0;
 
 	return 0;
@@ -463,10 +974,88 @@ const struct format_info *find_format_info_by_media_type(
 
 int score_size(const Size &a, const Size &b)
 {
-	int x, y;
-	x = (int)a.width - (int)b.width;
-	y = (int)a.height - (int)b.height;
-	return x * x + y * y;
+	const uint64_t x = a.width >= b.width ?
+		static_cast<uint64_t>(a.width) - b.width :
+		static_cast<uint64_t>(b.width) - a.width;
+	const uint64_t y = a.height >= b.height ?
+		static_cast<uint64_t>(a.height) - b.height :
+		static_cast<uint64_t>(b.height) - a.height;
+	const unsigned __int128 score = static_cast<unsigned __int128>(x) * x +
+		static_cast<unsigned __int128>(y) * y;
+	return score > static_cast<unsigned __int128>(std::numeric_limits<int>::max())
+		? std::numeric_limits<int>::max() : static_cast<int>(score);
+}
+
+static constexpr struct spa_fraction defaultFramerate = { 30, 1 };
+static constexpr struct spa_fraction defaultClockRate = { 1, 30 };
+
+static bool framerate_valid(const struct spa_fraction *framerate)
+{
+	/* Keep the pacing calculation bounded.  Normal camera rates are far below
+	 * this limit; rejecting pathological POD values avoids floating-point
+	 * overflow and divide-by-zero behavior in the DLL clock path. */
+	return framerate != nullptr && framerate->num > 0 && framerate->denom > 0 &&
+		framerate->num <= 1000000 && framerate->denom <= 1000000;
+}
+
+static bool framerate_variable(const struct spa_fraction *framerate)
+{
+	/* SPA defines 0/1 as an explicitly variable frame rate.  It is a valid
+	 * negotiated value, but the local pacing clock still needs a bounded basis. */
+	return framerate != nullptr && framerate->num == 0 && framerate->denom == 1;
+}
+
+static bool framerate_request_valid(const struct spa_fraction *framerate)
+{
+	return framerate_variable(framerate) || framerate_valid(framerate);
+}
+
+static struct spa_fraction normalized_framerate(const struct spa_fraction *framerate)
+{
+	struct spa_fraction result = framerate_valid(framerate)
+		? *framerate : defaultFramerate;
+	const uint32_t divisor = std::gcd(result.num, result.denom);
+	result.num /= divisor;
+	result.denom /= divisor;
+	return result;
+}
+
+static struct spa_fraction framerate_to_clock_rate(
+		const struct spa_fraction &framerate)
+{
+	const struct spa_fraction normalized = normalized_framerate(&framerate);
+	return SPA_FRACTION(normalized.denom, normalized.num);
+}
+
+static bool fractions_equal(const struct spa_fraction &a,
+		const struct spa_fraction &b)
+{
+	if (!framerate_request_valid(&a) || !framerate_request_valid(&b))
+		return false;
+	const struct spa_fraction left = normalized_framerate(&a);
+	const struct spa_fraction right = normalized_framerate(&b);
+	return left.num == right.num && left.denom == right.denom;
+}
+
+static bool checked_next_timestamp(uint64_t current,
+		const struct spa_fraction &clock_rate,
+		double correction, uint64_t *next)
+{
+	if (next == nullptr || clock_rate.num == 0 || clock_rate.denom == 0 ||
+		!std::isfinite(correction) || correction <= 0.0)
+		return false;
+	const long double delta = static_cast<long double>(clock_rate.num) *
+		static_cast<long double>(SPA_NSEC_PER_SEC) /
+		static_cast<long double>(clock_rate.denom) *
+		static_cast<long double>(correction);
+	if (!std::isfinite(delta) || delta < 1.0L ||
+		delta > static_cast<long double>(std::numeric_limits<uint64_t>::max()))
+		return false;
+	const uint64_t increment = static_cast<uint64_t>(delta);
+	if (current > std::numeric_limits<uint64_t>::max() - increment)
+		return false;
+	*next = current + increment;
+	return true;
 }
 
 [[nodiscard]]
@@ -529,17 +1118,146 @@ color_space_to_colorimetry(const libcamera::ColorSpace& colorspace)
 	return res;
 }
 
+static int colorimetry_to_color_space(const struct spa_video_info_raw &raw,
+		std::optional<libcamera::ColorSpace> *colorspace)
+{
+	if (colorspace == nullptr)
+		return -EINVAL;
+	colorspace->reset();
+	if (raw.color_range == SPA_VIDEO_COLOR_RANGE_UNKNOWN &&
+		raw.color_matrix == SPA_VIDEO_COLOR_MATRIX_UNKNOWN &&
+		raw.transfer_function == SPA_VIDEO_TRANSFER_UNKNOWN &&
+		raw.color_primaries == SPA_VIDEO_COLOR_PRIMARIES_UNKNOWN)
+		return 0;
+
+	ColorSpace::Range range;
+	switch (raw.color_range) {
+	case SPA_VIDEO_COLOR_RANGE_0_255:
+		range = ColorSpace::Range::Full;
+		break;
+	case SPA_VIDEO_COLOR_RANGE_16_235:
+		range = ColorSpace::Range::Limited;
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	ColorSpace::YcbcrEncoding encoding;
+	switch (raw.color_matrix) {
+	case SPA_VIDEO_COLOR_MATRIX_RGB:
+		encoding = ColorSpace::YcbcrEncoding::None;
+		break;
+	case SPA_VIDEO_COLOR_MATRIX_BT601:
+		encoding = ColorSpace::YcbcrEncoding::Rec601;
+		break;
+	case SPA_VIDEO_COLOR_MATRIX_BT709:
+		encoding = ColorSpace::YcbcrEncoding::Rec709;
+		break;
+	case SPA_VIDEO_COLOR_MATRIX_BT2020:
+		encoding = ColorSpace::YcbcrEncoding::Rec2020;
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	ColorSpace::TransferFunction transfer;
+	switch (raw.transfer_function) {
+	case SPA_VIDEO_TRANSFER_GAMMA10:
+		transfer = ColorSpace::TransferFunction::Linear;
+		break;
+	case SPA_VIDEO_TRANSFER_SRGB:
+		transfer = ColorSpace::TransferFunction::Srgb;
+		break;
+	case SPA_VIDEO_TRANSFER_BT709:
+		transfer = ColorSpace::TransferFunction::Rec709;
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	ColorSpace::Primaries primaries;
+	switch (raw.color_primaries) {
+	case SPA_VIDEO_COLOR_PRIMARIES_UNKNOWN:
+		primaries = ColorSpace::Primaries::Raw;
+		break;
+	case SPA_VIDEO_COLOR_PRIMARIES_SMPTE170M:
+		primaries = ColorSpace::Primaries::Smpte170m;
+		break;
+	case SPA_VIDEO_COLOR_PRIMARIES_BT709:
+		primaries = ColorSpace::Primaries::Rec709;
+		break;
+	case SPA_VIDEO_COLOR_PRIMARIES_BT2020:
+		primaries = ColorSpace::Primaries::Rec2020;
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	*colorspace = ColorSpace(primaries, transfer, encoding, range);
+	return 0;
+}
+
+static void publish_color_space(const std::optional<libcamera::ColorSpace> &colorspace,
+		struct spa_video_info_raw *raw)
+{
+	if (raw == nullptr)
+		return;
+	if (!colorspace) {
+		raw->color_range = SPA_VIDEO_COLOR_RANGE_UNKNOWN;
+		raw->color_matrix = SPA_VIDEO_COLOR_MATRIX_UNKNOWN;
+		raw->transfer_function = SPA_VIDEO_TRANSFER_UNKNOWN;
+		raw->color_primaries = SPA_VIDEO_COLOR_PRIMARIES_UNKNOWN;
+		return;
+	}
+	const auto colorimetry = color_space_to_colorimetry(*colorspace);
+	raw->color_range = colorimetry.range;
+	raw->color_matrix = colorimetry.matrix;
+	raw->transfer_function = colorimetry.transfer;
+	raw->color_primaries = colorimetry.primaries;
+}
+
+static bool raw_colorimetry_equal(const struct spa_video_info_raw &left,
+		const struct spa_video_info_raw &right)
+{
+	return left.color_range == right.color_range &&
+		left.color_matrix == right.color_matrix &&
+		left.transfer_function == right.transfer_function &&
+		left.color_primaries == right.color_primaries;
+}
+
+static bool raw_colorimetry_unspecified(const struct spa_video_info_raw &raw)
+{
+	return raw.color_range == SPA_VIDEO_COLOR_RANGE_UNKNOWN &&
+		raw.color_matrix == SPA_VIDEO_COLOR_MATRIX_UNKNOWN &&
+		raw.transfer_function == SPA_VIDEO_TRANSFER_UNKNOWN &&
+		raw.color_primaries == SPA_VIDEO_COLOR_PRIMARIES_UNKNOWN;
+}
+
 int
 spa_libcamera_enum_format(struct impl *impl, struct port *port, int seq,
-		     uint32_t start, uint32_t num, const struct spa_pod *filter)
+			     uint32_t start, uint32_t num, const struct spa_pod *filter)
 {
+	if (impl == nullptr || port == nullptr || !impl->camera)
+		return -EIO;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 	uint8_t buffer[1024];
 	struct spa_pod_builder b = { 0 };
 	struct spa_pod_frame f[2];
 	struct spa_result_node_params result;
 	uint32_t count = 0;
 
-	const StreamConfiguration& streamConfig = impl->config->at(0);
+	/* A released node may still be queried while PipeWire renegotiates.  Use a
+	 * detached configuration for enumeration instead of dereferencing the
+	 * cleared live configuration; never publish it as active state. */
+	std::unique_ptr<CameraConfiguration> generated;
+	const CameraConfiguration *enum_config = impl->config.get();
+	if (enum_config == nullptr || enum_config->empty()) {
+		generated = impl->camera->generateConfiguration({ StreamRole::VideoRecording });
+		enum_config = generated.get();
+	}
+	if (enum_config == nullptr || enum_config->empty())
+		return -EIO;
+	const StreamConfiguration& streamConfig = enum_config->at(0);
 	const StreamFormats &formats = streamConfig.formats();
 	const auto &pixel_formats = formats.pixelformats();
 
@@ -639,6 +1357,14 @@ next_fmt:
 		spa_pod_builder_rectangle(&b, frameSize.width, frameSize.height);
 	}
 
+	/* Keep the advertised contract explicit even when libcamera does not
+	 * expose a discrete frame-rate list for the stream.  A negotiated rate is
+	 * consumed by spa_libcamera_set_format below. */
+	spa_pod_builder_add(&b,
+			SPA_FORMAT_VIDEO_framerate,
+			SPA_POD_Fraction(&defaultFramerate),
+			0);
+
 	if (streamConfig.colorSpace) {
 		auto colorimetry = color_space_to_colorimetry(*streamConfig.colorSpace);
 
@@ -665,28 +1391,67 @@ next_fmt:
 	return 0;
 }
 
+static int validate_stream_configuration(
+		const CameraConfiguration *configuration,
+		const struct format_info &info,
+		const struct spa_rectangle &requested_size,
+		const std::optional<libcamera::ColorSpace> &requested_color_space,
+		bool require_configured_state)
+{
+	if (configuration == nullptr || configuration->size() != 1)
+		return -EINVAL;
+
+	const StreamConfiguration &stream = configuration->at(0);
+	if (stream.pixelFormat != info.pix ||
+		stream.size.width != requested_size.width ||
+		stream.size.height != requested_size.height)
+		return -EINVAL;
+	if (requested_color_space &&
+		(!stream.colorSpace || *stream.colorSpace != *requested_color_space))
+		return -EINVAL;
+	if (require_configured_state &&
+		((info.media_subtype == SPA_MEDIA_SUBTYPE_raw && stream.stride == 0) ||
+		 stream.frameSize == 0 ||
+		 (stream.stride != 0 && stream.frameSize < stream.stride) ||
+		 stream.stream() == nullptr ||
+		 stream.bufferCount == 0 || stream.bufferCount > MAX_BUFFERS))
+		return -EINVAL;
+
+	return 0;
+}
+
 int spa_libcamera_set_format(struct impl *impl, struct port *port,
 		struct spa_video_info *format, bool try_only)
 {
+	if (impl == nullptr || port == nullptr || format == nullptr)
+		return -EINVAL;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	if (impl->format_transaction_failed || impl->rollback_config != nullptr)
+		return impl->completion_error.load(std::memory_order_acquire) < 0
+			? impl->completion_error.load(std::memory_order_acquire) : -EIO;
 	const struct format_info *info = nullptr;
 	uint32_t video_format;
 	struct spa_rectangle *size = nullptr;
+	struct spa_fraction *framerate = nullptr;
 	CameraConfiguration::Status validation;
-	int res;
+	std::optional<libcamera::ColorSpace> requested_color_space;
 
 	switch (format->media_subtype) {
 	case SPA_MEDIA_SUBTYPE_raw:
 		video_format = format->info.raw.format;
 		size = &format->info.raw.size;
+		framerate = &format->info.raw.framerate;
 		break;
 	case SPA_MEDIA_SUBTYPE_mjpg:
 	case SPA_MEDIA_SUBTYPE_jpeg:
 		video_format = SPA_VIDEO_FORMAT_ENCODED;
 		size = &format->info.mjpg.size;
+		framerate = &format->info.mjpg.framerate;
 		break;
 	case SPA_MEDIA_SUBTYPE_h264:
 		video_format = SPA_VIDEO_FORMAT_ENCODED;
 		size = &format->info.h264.size;
+		framerate = &format->info.h264.framerate;
 		break;
 	default:
 		video_format = SPA_VIDEO_FORMAT_ENCODED;
@@ -695,36 +1460,220 @@ int spa_libcamera_set_format(struct impl *impl, struct port *port,
 
 	info = find_format_info_by_media_type(format->media_type,
 					      format->media_subtype, video_format);
-	if (info == nullptr || size == nullptr) {
+	if (info == nullptr || size == nullptr || framerate == nullptr) {
 		spa_log_error(impl->log, "unknown media type %d %d %d", format->media_type,
 			      format->media_subtype, video_format);
 		return -EINVAL;
 	}
-	StreamConfiguration& streamConfig = impl->config->at(0);
+	if (format->media_subtype == SPA_MEDIA_SUBTYPE_raw) {
+		const auto &raw = format->info.raw;
+		if (raw.flags & ~SPA_VIDEO_FLAG_MODIFIER)
+			return -ENOTSUP;
+		const bool modifier_requested = raw.flags & SPA_VIDEO_FLAG_MODIFIER;
+		const bool modifier_required = info->pix.modifier() != 0;
+		if (modifier_requested != modifier_required ||
+			(modifier_requested && raw.modifier != info->pix.modifier()))
+			return -EINVAL;
+		const int color_res = colorimetry_to_color_space(raw, &requested_color_space);
+		if (color_res < 0)
+			return color_res;
+	}
+	if (!framerate_request_valid(framerate))
+		return -EINVAL;
+	const struct spa_fraction selected_framerate = normalized_framerate(framerate);
+	if (size->width == 0 || size->height == 0)
+		return -EINVAL;
+	if (!impl->camera)
+		return -EIO;
 
+	/* Validate a detached candidate first.  TEST_ONLY therefore cannot
+	 * mutate the live configuration, rate or allocator state. */
+	auto candidate = impl->camera->generateConfiguration({ StreamRole::VideoRecording });
+	if (!candidate || candidate->empty())
+		return -EIO;
+	StreamConfiguration& streamConfig = candidate->at(0);
 	streamConfig.pixelFormat = info->pix;
 	streamConfig.size.width = size->width;
 	streamConfig.size.height = size->height;
 	streamConfig.bufferCount = 8;
+	if (requested_color_space)
+		streamConfig.colorSpace = requested_color_space;
 
-	validation = impl->config->validate();
+	validation = candidate->validate();
 	if (validation == CameraConfiguration::Invalid)
 		return -EINVAL;
+	const int candidate_res = validate_stream_configuration(candidate.get(),
+		*info, *size, requested_color_space, false);
+	if (candidate_res < 0)
+		return candidate_res;
 
 	if (try_only)
 		return 0;
 
-	if ((res = spa_libcamera_open(impl)) < 0)
-		return res;
+	/* Keep the previous object and caller-owned buffer graph intact until the
+	 * replacement has been configured and allocated.  If any step fails, the
+	 * old camera and SPA buffers are reconstructed before returning the original
+	 * error. */
+	const auto old_format = port->current_format;
+	const StreamConfiguration old_stream = port->streamConfig;
+	const struct spa_fraction old_rate = port->rate;
+	const bool was_acquired = impl->acquired;
+	const bool was_active = impl->active.load(std::memory_order_acquire);
+	const bool had_allocator = impl->allocator.allocated();
+	const std::size_t old_request_count = impl->requestPool.size();
+	uint32_t old_n_buffers = 0;
+	std::array<struct spa_buffer *, MAX_BUFFERS> old_buffers{};
+	{
+		std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
+		if (port->n_buffers > MAX_BUFFERS)
+			return -EIO;
+		old_n_buffers = port->n_buffers;
+		if (old_n_buffers > 0 && !bound_spa_buffer_graph_matches_locked(port))
+			return -EPROTO;
+		for (uint32_t i = 0; i < old_n_buffers; ++i)
+			old_buffers[i] = port->buffers[i].outbuf;
+	}
+	if ((old_format && (!had_allocator || old_request_count == 0)) ||
+		(old_n_buffers > 0 && (!old_format || !had_allocator ||
+			old_request_count != old_n_buffers)))
+		return -EIO;
+	for (uint32_t i = 0; i < old_n_buffers; ++i) {
+		if (old_buffers[i] == nullptr)
+			return -EIO;
+	}
 
-	res = impl->camera->configure(impl->config.get());
+	/* A terminal stream may have active=false while still owning a started
+	 * camera, completion signal, data-loop source and eventfd.  Every real
+	 * replacement must complete the idempotent stop transition before allocator
+	 * ownership changes; was_active controls rollback restart only. */
+	const int stop_res = impl->stop(true);
+	if (stop_res < 0)
+		return stop_res;
+	stopping_transaction_guard stopping_guard(impl);
+
+	std::unique_ptr<CameraConfiguration> old_config = std::move(impl->config);
+	const unsigned int old_buffer_count = old_request_count > 0
+		? static_cast<unsigned int>(old_request_count)
+		: (old_config && !old_config->empty() ? old_config->at(0).bufferCount : 0);
+
+	auto quarantine = [&](int error) {
+		if (old_config) {
+			if (!impl->config)
+				impl->config = std::move(old_config);
+			else if (!impl->rollback_config)
+				impl->rollback_config = std::move(old_config);
+		}
+		impl->format_transaction_failed = true;
+		{
+			std::lock_guard<std::mutex> completion_guard(impl->completion_mutex);
+			impl->stopping = true;
+			impl->active.store(false, std::memory_order_release);
+		}
+		stopping_guard.abandon();
+		mark_completion_failure(impl, error);
+		return error;
+	};
+
+	auto restore = [&](int original) {
+		int restore_res = 0;
+		/* First retire any candidate-side ownership.  The old SPA graph is still
+		 * untouched at every failure point before the successful commit below;
+		 * clearing it here would make rollback silently lose caller metadata. */
+		if (!impl->requestPool.empty() || impl->allocator.allocated())
+			restore_res = freeBuffers(impl, port);
+		if (restore_res == 0 && (!impl->requestPool.empty() || impl->allocator.allocated()))
+			restore_res = -EBUSY;
+		if (restore_res < 0) {
+			/* Keep both configuration owners alive when candidate allocator
+			 * retirement fails.  The transaction remains stopped and terminal;
+			 * destroying a local old_config here would leave a live allocator
+			 * paired with an unrelated or dangling stream configuration. */
+			return quarantine(restore_res);
+		}
+
+		impl->config = std::move(old_config);
+		port->streamConfig = old_stream;
+		port->rate = old_rate;
+		if (restore_res == 0 && impl->config && old_format && !impl->config->empty()) {
+			if (!impl->acquired && was_acquired)
+				restore_res = spa_libcamera_open(impl);
+			if (restore_res == 0)
+				restore_res = impl->camera->configure(impl->config.get());
+			if (restore_res == 0)
+				port->streamConfig = impl->config->at(0);
+			if (restore_res == 0 && had_allocator && old_buffer_count > 0)
+				restore_res = allocBuffers(impl, port, old_buffer_count);
+			if (restore_res == 0 && old_n_buffers > 0)
+				restore_res = spa_libcamera_rebind_buffers(impl, port,
+					old_buffers.data(), old_n_buffers);
+		}
+		if (restore_res == 0 && was_active) {
+			/* The old stream was active when negotiation began.  Restart it only
+			 * after the old allocator and graph are fully restored. */
+			stopping_guard.finish();
+			restore_res = spa_libcamera_stream_on(impl);
+		}
+		if (!was_acquired && impl->acquired && !restore_res) {
+			const int close_res = spa_libcamera_close(impl);
+			if (close_res < 0)
+				restore_res = close_res;
+		}
+		if (restore_res < 0)
+			spa_log_error(impl->log, "failed to restore previous camera format: %s",
+					spa_strerror(restore_res));
+		if (restore_res < 0) {
+			return quarantine(restore_res);
+		}
+		return original;
+	};
+
+	if (!impl->requestPool.empty() || impl->allocator.allocated()) {
+		const int free_res = freeBuffers(impl, port);
+		if (free_res < 0)
+			return restore(free_res);
+	}
+
+	int res = spa_libcamera_open(impl);
+	if (res < 0)
+		return restore(res);
+	res = impl->camera->configure(candidate.get());
 	if (res != 0)
-		goto error;
+		return restore(res);
+	res = validate_stream_configuration(candidate.get(), *info, *size,
+		requested_color_space, true);
+	if (res < 0)
+		return restore(res);
 
+	impl->config = std::move(candidate);
 	port->streamConfig = impl->config->at(0);
+	res = allocBuffers(impl, port, port->streamConfig.bufferCount);
+	if (res < 0)
+		return restore(res);
+	if (old_n_buffers > 0) {
+		int clear_res;
+		{
+			std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
+			clear_res = clear_buffers_locked(port);
+		}
+		if (clear_res < 0)
+			return restore(clear_res);
+	}
 
-	if ((res = allocBuffers(impl, port, port->streamConfig.bufferCount)) < 0)
-		goto error;
+	/* Publish the normalized rate only after the candidate is fully configured
+	 * and the old caller-owned graph has been detached. */
+	*framerate = selected_framerate;
+	if (format->media_subtype == SPA_MEDIA_SUBTYPE_raw) {
+		auto &raw = format->info.raw;
+		if (port->streamConfig.pixelFormat.modifier() != 0) {
+			raw.flags |= SPA_VIDEO_FLAG_MODIFIER;
+			raw.modifier = port->streamConfig.pixelFormat.modifier();
+		} else {
+			raw.flags &= ~SPA_VIDEO_FLAG_MODIFIER;
+			raw.modifier = 0;
+		}
+		publish_color_space(port->streamConfig.colorSpace, &raw);
+	}
+	port->rate = framerate_to_clock_rate(selected_framerate);
 
 	port->info.change_mask |= SPA_PORT_CHANGE_MASK_FLAGS | SPA_PORT_CHANGE_MASK_RATE;
 	port->info.flags = SPA_PORT_FLAG_CAN_ALLOC_BUFFERS |
@@ -732,12 +1681,11 @@ int spa_libcamera_set_format(struct impl *impl, struct port *port,
 		SPA_PORT_FLAG_PHYSICAL |
 		SPA_PORT_FLAG_TERMINAL;
 	port->info.rate = SPA_FRACTION(port->rate.num, port->rate.denom);
+	impl->format_transaction_failed = false;
+	impl->rollback_config.reset();
+	impl->completion_error.store(0, std::memory_order_release);
 
 	return 0;
-error:
-	spa_libcamera_close(impl);
-	return res;
-
 }
 
 const struct {
@@ -776,7 +1724,7 @@ uint32_t prop_id_to_control(uint32_t prop_id)
 }
 
 [[nodiscard]]
-ControlValue control_value_from_pod(const libcamera::ControlId& cid, const spa_pod *value, const void *body)
+ControlValue control_value_from_pod(const libcamera::ControlId& cid, const spa_pod *value)
 {
 	if (cid.isArray())
 		return {};
@@ -784,21 +1732,21 @@ ControlValue control_value_from_pod(const libcamera::ControlId& cid, const spa_p
 	switch (cid.type()) {
 	case libcamera::ControlTypeBool: {
 		bool v;
-		if (spa_pod_body_get_bool(value, body, &v) < 0)
+		if (spa_pod_get_bool(value, &v) < 0)
 			return {};
 
 		return v;
 	}
 	case libcamera::ControlTypeInteger32: {
 		int32_t v;
-		if (spa_pod_body_get_int(value, body, &v) < 0)
+		if (spa_pod_get_int(value, &v) < 0)
 			return {};
 
 		return v;
 	}
 	case libcamera::ControlTypeFloat: {
 		float v;
-		if (spa_pod_body_get_float(value, body, &v) < 0)
+		if (spa_pod_get_float(value, &v) < 0)
 			return {};
 
 		return v;
@@ -810,7 +1758,51 @@ ControlValue control_value_from_pod(const libcamera::ControlId& cid, const spa_p
 	return {};
 }
 
-int control_list_update_from_prop(libcamera::ControlList& list, const spa_pod_prop *prop, const void *body)
+[[nodiscard]]
+static bool control_value_is_valid(const libcamera::ControlInfo &info,
+		const libcamera::ControlValue &value)
+{
+	if (value.isNone() || value.isArray())
+		return false;
+
+	/* A NaN cannot be a useful camera control even when a malformed
+	 * enumeration happens to contain one. */
+	if (value.type() == libcamera::ControlTypeFloat &&
+		!std::isfinite(value.get<float>()))
+		return false;
+
+	if (!info.values().empty())
+		return std::any_of(info.values().begin(), info.values().end(),
+			[&value](const libcamera::ControlValue &allowed) {
+				return allowed == value;
+			});
+
+	if (info.min().type() != value.type() || info.max().type() != value.type())
+		return false;
+
+	switch (value.type()) {
+	case libcamera::ControlTypeBool: {
+		const bool min = info.min().get<bool>();
+		const bool max = info.max().get<bool>();
+		return min <= max && value.get<bool>() >= min && value.get<bool>() <= max;
+	}
+	case libcamera::ControlTypeInteger32: {
+		const int32_t min = info.min().get<int32_t>();
+		const int32_t max = info.max().get<int32_t>();
+		return min <= max && value.get<int32_t>() >= min && value.get<int32_t>() <= max;
+	}
+	case libcamera::ControlTypeFloat: {
+		const float min = info.min().get<float>();
+		const float max = info.max().get<float>();
+		return std::isfinite(min) && std::isfinite(max) && min <= max &&
+			value.get<float>() >= min && value.get<float>() <= max;
+	}
+	default:
+		return false;
+	}
+}
+
+int control_list_update_from_prop(libcamera::ControlList& list, const spa_pod_prop *prop)
 {
 	auto id = prop_id_to_control(prop->key);
 	if (id == SPA_ID_INVALID)
@@ -823,12 +1815,88 @@ int control_list_update_from_prop(libcamera::ControlList& list, const spa_pod_pr
 	if (!list.infoMap()->count(it->second))
 		return -ENOENT;
 
-	auto val = control_value_from_pod(*it->second, &prop->value, body);
+	auto val = control_value_from_pod(*it->second, &prop->value);
 	if (val.isNone())
 		return -EINVAL;
+	if (!control_value_is_valid(list.infoMap()->at(it->second), val))
+		return -ERANGE;
 
 	list.set(id, std::move(val));
 
+	return 0;
+}
+
+static bool checked_pod_advance(uint64_t unpadded_size, uint64_t remaining,
+		uint64_t *padded_size)
+{
+	if (padded_size == nullptr ||
+		unpadded_size > std::numeric_limits<uint64_t>::max() - 7)
+		return false;
+	const uint64_t rounded = SPA_ROUND_UP_N(unpadded_size, 8);
+	if (rounded < unpadded_size || rounded > remaining)
+		return false;
+	*padded_size = rounded;
+	return true;
+}
+
+static int control_list_update_from_props_pod(libcamera::ControlList &list,
+		const struct spa_pod *pod, uint64_t available)
+{
+	static constexpr uint64_t max_props_pod_size = 1024 * 1024;
+	if (pod == nullptr || available < sizeof(struct spa_pod) ||
+		!naturally_aligned<struct spa_pod>(pod))
+		return -EINVAL;
+
+	const uint64_t pod_size = sizeof(struct spa_pod) +
+		static_cast<uint64_t>(pod->size);
+	if (pod_size > available || pod_size > max_props_pod_size ||
+		!spa_pod_is_object(pod) ||
+		pod->size < sizeof(struct spa_pod_object_body))
+		return -EINVAL;
+
+	const auto *obj = reinterpret_cast<const struct spa_pod_object *>(pod);
+	if (SPA_POD_OBJECT_TYPE(obj) != SPA_TYPE_OBJECT_Props)
+		return -EINVAL;
+	/* Decode into a private copy so a later malformed or out-of-range
+	 * property cannot leave a partially applied request behind. */
+	libcamera::ControlList candidate = list;
+
+	const uint64_t properties_size =
+		static_cast<uint64_t>(pod->size) - sizeof(obj->body);
+	const auto object_address = reinterpret_cast<std::uintptr_t>(obj);
+	if (object_address > std::numeric_limits<std::uintptr_t>::max() - sizeof(*obj))
+		return -EINVAL;
+	const auto properties_address = object_address + sizeof(*obj);
+	if (properties_address > std::numeric_limits<std::uintptr_t>::max() -
+		properties_size)
+		return -EINVAL;
+
+	uint64_t cursor = 0;
+	while (cursor < properties_size) {
+		const uint64_t remaining = properties_size - cursor;
+		if (remaining < sizeof(struct spa_pod_prop))
+			return -EINVAL;
+
+		const auto prop_address = properties_address + cursor;
+		if (prop_address % alignof(struct spa_pod_prop) != 0)
+			return -EINVAL;
+		const auto *prop = reinterpret_cast<const struct spa_pod_prop *>(
+			prop_address);
+		const uint64_t prop_size = sizeof(*prop) +
+			static_cast<uint64_t>(prop->value.size);
+		uint64_t padded_prop_size;
+		if (!checked_pod_advance(prop_size, remaining, &padded_prop_size))
+			return -EINVAL;
+
+		const int res = control_list_update_from_prop(candidate, prop);
+		if (res < 0)
+			return res;
+		cursor += padded_prop_size;
+	}
+
+	if (cursor != properties_size)
+		return -EINVAL;
+	list = std::move(candidate);
 	return 0;
 }
 
@@ -868,9 +1936,20 @@ std::array<T, 3> control_info_to_range(const libcamera::ControlInfo& cinfo)
 	auto max = cinfo.max().get<T>();
 	spa_assert(min <= max);
 
-	auto def = !cinfo.def().isNone()
-			? cinfo.def().get<T>()
-			: (min + ((max - min) / 2));
+	T def;
+	if (!cinfo.def().isNone()) {
+		def = cinfo.def().get<T>();
+	} else {
+		/* Do the midpoint in a wider domain.  The previous int32_t
+		 * subtraction overflowed for a legal full-range control and could
+		 * advertise a value outside the camera's range. */
+		const long double midpoint = static_cast<long double>(min) +
+			(static_cast<long double>(max) - static_cast<long double>(min)) / 2.0L;
+		const long double lower = static_cast<long double>(std::numeric_limits<T>::lowest());
+		const long double upper = static_cast<long double>(std::numeric_limits<T>::max());
+		def = static_cast<T>(std::clamp(midpoint, lower, upper));
+	}
+	def = std::clamp(def, min, max);
 
 	return {{ min, max, def }};
 }
@@ -1012,6 +2091,8 @@ spa_libcamera_enum_controls(struct impl *impl, struct port *port, int seq,
 
 int spa_libcamera_apply_controls(struct impl *impl, libcamera::ControlList&& controls)
 {
+	if (impl == nullptr || impl->data_loop == nullptr)
+		return -EINVAL;
 	if (controls.empty())
 		return 0;
 
@@ -1021,19 +2102,20 @@ int spa_libcamera_apply_controls(struct impl *impl, libcamera::ControlList&& con
 		.controls = &controls,
 	};
 
-	return spa_loop_locked(
+	return spa_loop_invoke(
 		impl->data_loop,
 		[](spa_loop *, bool, uint32_t, const void *data, size_t, void *user_data)
 		{
 			const auto *d = static_cast<const invoke_data *>(data);
 			auto *impl = static_cast<struct impl *>(user_data);
 
+			std::lock_guard<std::mutex> controls_guard(impl->controls_mutex);
 			impl->ctrls.merge(std::move(*d->controls),
 					  libcamera::ControlList::MergePolicy::OverwriteExisting);
 
 			return 0;
 		},
-		0, &d, sizeof(d), impl
+		0, &d, sizeof(d), true, impl
 	);
 }
 
@@ -1085,88 +2167,409 @@ static bool y700_valid_kscreen_rotation(int rotation)
 	return rotation == 1 || rotation == 2 || rotation == 4 || rotation == 8;
 }
 
-static int y700_cached_display_rotation = 1;
-static bool y700_display_rotation_initialized;
-static int y700_display_rotation_inotify_fd = -1;
-static int y700_display_rotation_inotify_wd = -1;
-
-static bool y700_query_kscreen_rotation(int *rotation)
+static std::string y700_session_config_dir()
 {
-	FILE *pipe;
-	int value;
+	const char *config = std::getenv("XDG_CONFIG_HOME");
+	if (config != nullptr && config[0] == '/' && config[1] != '\0')
+		return config;
 
-	pipe = popen("XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 /usr/bin/kscreen-doctor -o 2>/dev/null | /usr/bin/sed -r 's/\\x1B\\[[0-9;]*[A-Za-z]//g' | /usr/bin/awk '/Output:/ { in_dsi = ($0 ~ /DSI-1/) } in_dsi && /Rotation:/ { for (i = 1; i <= NF; i++) if ($i == \"Rotation:\") { print $(i + 1); exit } }'", "r");
-	if (!pipe)
-		return false;
-	if (fscanf(pipe, "%d", &value) != 1) {
-		pclose(pipe);
-		return false;
+	const char *home = std::getenv("HOME");
+	if (home == nullptr || home[0] != '/') {
+		if (const struct passwd *pw = getpwuid(getuid()); pw != nullptr)
+			home = pw->pw_dir;
 	}
-	pclose(pipe);
-	if (!y700_valid_kscreen_rotation(value))
-		return false;
-	*rotation = value;
-	return true;
+	if (home == nullptr || home[0] != '/')
+		return {};
+	return std::string(home) + "/.config";
 }
 
-static void y700_display_rotation_watch_init()
+/* Query the current desktop session without embedding a user id, bus path or
+ * display environment in the plugin.  Session selection is inherited from the
+ * process that owns the PipeWire node; the fixed executable is run directly. */
+static bool y700_parse_kscreen_rotation(const std::string &output, int *rotation)
 {
-	if (y700_display_rotation_inotify_fd >= 0)
-		return;
-	y700_display_rotation_inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-	if (y700_display_rotation_inotify_fd < 0)
-		return;
-	y700_display_rotation_inotify_wd = inotify_add_watch(y700_display_rotation_inotify_fd,
-		"/home/y700/.config", IN_CLOSE_WRITE | IN_MODIFY | IN_MOVED_TO | IN_CREATE | IN_ATTRIB);
-	if (y700_display_rotation_inotify_wd < 0) {
-		close(y700_display_rotation_inotify_fd);
-		y700_display_rotation_inotify_fd = -1;
-	}
-}
-
-static bool y700_display_rotation_watch_changed()
-{
-	char buffer[1024];
-	ssize_t len;
-	bool changed = false;
-
-	if (y700_display_rotation_inotify_fd < 0)
+	if (rotation == nullptr)
 		return false;
-	for (;;) {
-		len = read(y700_display_rotation_inotify_fd, buffer, sizeof(buffer));
-		if (len > 0) {
-			ssize_t offset = 0;
 
-			while (offset + (ssize_t)sizeof(struct inotify_event) <= len) {
-				const struct inotify_event *event =
-					reinterpret_cast<const struct inotify_event *>(buffer + offset);
-				if (event->len > 0 && !strcmp(event->name, "kwinoutputconfig.json"))
-					changed = true;
-				offset += sizeof(struct inotify_event) + event->len;
+	bool in_dsi = false;
+	bool found = false;
+	std::size_t line_start = 0;
+	while (line_start < output.size()) {
+		const std::size_t current_start = line_start;
+		const std::size_t newline = output.find('\n', line_start);
+		const std::size_t line_end = newline == std::string::npos
+			? output.size() : newline;
+		line_start = newline == std::string::npos ? output.size() : newline + 1;
+		/* Remove ANSI CSI sequences in-place.  kscreen-doctor emits these on
+		 * some terminals even when stdout is a pipe. */
+		char clean[512];
+		size_t out = 0;
+		bool escape = false;
+		bool csi = false;
+		for (std::size_t i = current_start; i < line_end && out + 1 < sizeof(clean); ++i) {
+			const unsigned char ch = static_cast<unsigned char>(output[i]);
+			if (escape) {
+				if (ch == '[') {
+					csi = true;
+					continue;
+				}
+				escape = false;
+				if (csi) {
+					if (ch >= 0x40 && ch <= 0x7e)
+						csi = false;
+					continue;
+				}
 			}
-			continue;
+			if (ch == 0x1b) {
+				escape = true;
+				continue;
+			}
+			if (csi) {
+				if (ch >= 0x40 && ch <= 0x7e)
+					csi = false;
+				continue;
+			}
+			clean[out++] = static_cast<char>(ch);
 		}
-		if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+		clean[out] = '\0';
+
+		if (std::strstr(clean, "Output:") != nullptr)
+			in_dsi = std::strstr(clean, "DSI-1") != nullptr;
+		if (!in_dsi || std::strstr(clean, "Rotation:") == nullptr)
+			continue;
+
+		const char *value = std::strstr(clean, "Rotation:") + strlen("Rotation:");
+		while (*value == ' ' || *value == '\t')
+			++value;
+		char *end = nullptr;
+		errno = 0;
+		const long parsed = std::strtol(value, &end, 10);
+		while (end != nullptr && (*end == ' ' || *end == '\t' || *end == '\r'))
+			++end;
+		if (end != value && end != nullptr && *end == '\0' && errno == 0 &&
+			parsed >= std::numeric_limits<int>::min() &&
+			parsed <= std::numeric_limits<int>::max() &&
+			y700_valid_kscreen_rotation(static_cast<int>(parsed))) {
+			*rotation = static_cast<int>(parsed);
+			found = true;
 			break;
-		break;
+		}
+	}
+	return found;
+}
+
+static bool y700_reap_rotation_child(struct impl *impl,
+		std::chrono::milliseconds timeout)
+{
+	if (impl == nullptr || impl->display_rotation_child_pid <= 0)
+		return true;
+	const pid_t child = impl->display_rotation_child_pid;
+	const auto deadline = std::chrono::steady_clock::now() + timeout;
+	for (;;) {
+		int status = 0;
+		const pid_t waited = waitpid(child, &status, WNOHANG);
+		if (waited == child || (waited < 0 && errno == ECHILD)) {
+			impl->display_rotation_child_pid = -1;
+			return true;
+		}
+		if (waited < 0 && errno != EINTR)
+			return false;
+		const auto now = std::chrono::steady_clock::now();
+		if (now >= deadline)
+			return false;
+		const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+			deadline - now);
+		const int delay = static_cast<int>(
+			std::max<int64_t>(1, std::min<int64_t>(10, remaining.count())));
+		(void)poll(nullptr, 0, delay);
+	}
+}
+
+static bool y700_terminate_rotation_child(struct impl *impl)
+{
+	if (impl == nullptr || impl->display_rotation_child_pid <= 0)
+		return true;
+	const pid_t child = impl->display_rotation_child_pid;
+	if (kill(-child, SIGKILL) < 0 && errno != ESRCH)
+		(void)kill(child, SIGKILL);
+	return y700_reap_rotation_child(impl, std::chrono::milliseconds(250));
+}
+
+static bool y700_query_kscreen_rotation(struct impl *impl, int *rotation)
+{
+	if (impl == nullptr || rotation == nullptr)
+		return false;
+	/* A previously killed child is the only permitted outstanding process.
+	 * Refuse to create another until it has become waitable and is reaped. */
+	if (!y700_reap_rotation_child(impl, std::chrono::milliseconds(0)))
+		return false;
+	static constexpr std::size_t max_output = 64 * 1024;
+	static constexpr auto timeout = std::chrono::seconds(1);
+	int pipefd[2] = { -1, -1 };
+	if (pipe2(pipefd, O_CLOEXEC) < 0)
+		return false;
+	for (int &fd : pipefd) {
+		if (fd >= 3)
+			continue;
+		const int replacement = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+		if (replacement < 0) {
+			close(pipefd[0]);
+			close(pipefd[1]);
+			return false;
+		}
+		close(fd);
+		fd = replacement;
+	}
+	const int read_flags = fcntl(pipefd[0], F_GETFL);
+	if (read_flags < 0 || fcntl(pipefd[0], F_SETFL, read_flags | O_NONBLOCK) < 0) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return false;
+	}
+
+	posix_spawn_file_actions_t actions;
+	int error = posix_spawn_file_actions_init(&actions);
+	if (error != 0) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return false;
+	}
+	if (error == 0)
+		error = posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+	if (error == 0)
+		error = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO,
+			"/dev/null", O_WRONLY, 0);
+	if (error == 0)
+		error = posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+	if (error == 0)
+		error = posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+
+	posix_spawnattr_t attributes;
+	bool attributes_initialized = false;
+	if (error == 0) {
+		error = posix_spawnattr_init(&attributes);
+		attributes_initialized = error == 0;
+	}
+	if (error == 0)
+		error = posix_spawnattr_setpgroup(&attributes, 0);
+	if (error == 0)
+		error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
+
+	pid_t child = -1;
+	if (error == 0) {
+		char executable[] = "/usr/bin/kscreen-doctor";
+		char option[] = "-o";
+		char *argv[] = { executable, option, nullptr };
+		error = posix_spawn(&child, executable, &actions, &attributes, argv, environ);
+	}
+	if (attributes_initialized)
+		posix_spawnattr_destroy(&attributes);
+	posix_spawn_file_actions_destroy(&actions);
+	close(pipefd[1]);
+	if (error != 0) {
+		close(pipefd[0]);
+		return false;
+	}
+	impl->display_rotation_child_pid = child;
+
+	std::string output;
+	output.reserve(4096);
+	const auto deadline = std::chrono::steady_clock::now() + timeout;
+	bool eof = false;
+	bool failed = false;
+	bool reaped = false;
+	int status = 0;
+	while (!eof || !reaped) {
+		char block[4096];
+		for (;;) {
+			const ssize_t count = read(pipefd[0], block, sizeof(block));
+			if (count > 0) {
+				if (static_cast<std::size_t>(count) > max_output - output.size()) {
+					failed = true;
+					break;
+				}
+				output.append(block, static_cast<std::size_t>(count));
+				continue;
+			}
+			if (count == 0) {
+				eof = true;
+				break;
+			}
+			if (errno == EINTR)
+				continue;
+			if (errno != EAGAIN && errno != EWOULDBLOCK)
+				failed = true;
+			break;
+		}
+
+		if (!reaped) {
+			pid_t waited;
+			do {
+				waited = waitpid(child, &status, WNOHANG);
+			} while (waited < 0 && errno == EINTR);
+			if (waited == child) {
+				reaped = true;
+				impl->display_rotation_child_pid = -1;
+			} else if (waited < 0) {
+				if (errno == ECHILD)
+					impl->display_rotation_child_pid = -1;
+				failed = true;
+			}
+		}
+		if (failed || (eof && reaped))
+			break;
+
+		const auto now = std::chrono::steady_clock::now();
+		if (now >= deadline) {
+			failed = true;
+			break;
+		}
+		const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+			deadline - now);
+		struct pollfd pollfd = { pipefd[0], POLLIN | POLLHUP | POLLERR, 0 };
+		int poll_result;
+		do {
+			poll_result = poll(&pollfd, 1,
+				static_cast<int>(std::max<int64_t>(1, remaining.count())));
+		} while (poll_result < 0 && errno == EINTR);
+		if (poll_result < 0)
+			failed = true;
+	}
+	close(pipefd[0]);
+
+	/* Once waitpid() has reaped the child, its numeric PID may be reused
+	 * immediately.  Never signal the old process-group ID after that point;
+	 * terminate only while this invocation still owns an unreaped child. */
+	if (!reaped)
+		reaped = y700_terminate_rotation_child(impl);
+	return !failed && reaped && WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+		y700_parse_kscreen_rotation(output, rotation);
+}
+
+static void y700_display_rotation_watch_reset(struct impl *impl)
+{
+	if (impl == nullptr)
+		return;
+	if (impl->display_rotation_inotify_fd >= 0)
+		close(impl->display_rotation_inotify_fd);
+	impl->display_rotation_inotify_fd = -1;
+	impl->display_rotation_inotify_wd = -1;
+	impl->display_rotation_config_dir.clear();
+}
+
+static void y700_display_rotation_watch_init(struct impl *impl)
+{
+	if (impl == nullptr || impl->display_rotation_inotify_fd >= 0)
+		return;
+	impl->display_rotation_config_dir = y700_session_config_dir();
+	if (impl->display_rotation_config_dir.empty())
+		return;
+	const int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (fd < 0)
+		return;
+	const int wd = inotify_add_watch(fd, impl->display_rotation_config_dir.c_str(),
+		IN_CLOSE_WRITE | IN_MODIFY | IN_MOVED_TO | IN_CREATE | IN_ATTRIB |
+		IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT);
+	if (wd < 0) {
+		close(fd);
+		impl->display_rotation_config_dir.clear();
+		return;
+	}
+	impl->display_rotation_inotify_fd = fd;
+	impl->display_rotation_inotify_wd = wd;
+}
+
+static bool y700_display_rotation_watch_changed(struct impl *impl)
+{
+	if (impl == nullptr || impl->display_rotation_inotify_fd < 0)
+		return false;
+	char buffer[1024];
+	bool changed = false;
+	bool invalidated = false;
+	for (;;) {
+		const ssize_t len = read(impl->display_rotation_inotify_fd, buffer, sizeof(buffer));
+		if (len <= 0) {
+			if (len < 0 && errno == EINTR)
+				continue;
+			if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+				break;
+			changed = true;
+			invalidated = true;
+			break;
+		}
+		size_t offset = 0;
+		while (offset + sizeof(struct inotify_event) <= static_cast<size_t>(len)) {
+			const auto *event = reinterpret_cast<const struct inotify_event *>(buffer + offset);
+			const size_t record = sizeof(struct inotify_event) + event->len;
+			if (record > static_cast<size_t>(len) - offset) {
+				changed = true;
+				invalidated = true;
+				break;
+			}
+			if (event->mask & (IN_Q_OVERFLOW | IN_IGNORED | IN_UNMOUNT |
+					IN_DELETE_SELF | IN_MOVE_SELF)) {
+				changed = true;
+				invalidated = true;
+				break;
+			}
+			if (event->len > 0 &&
+				strnlen(event->name, event->len) < event->len &&
+				!strcmp(event->name, "kwinoutputconfig.json")) {
+				changed = true;
+			}
+			offset += record;
+		}
+		if (invalidated)
+			break;
+	}
+	if (invalidated) {
+		y700_display_rotation_watch_reset(impl);
+		y700_display_rotation_watch_init(impl);
 	}
 	return changed;
 }
 
-static int y700_read_display_rotation()
+static int y700_read_display_rotation(struct impl *impl)
 {
+	if (impl == nullptr)
+		return 1;
+	std::lock_guard<std::mutex> lock(impl->rotation_mutex);
 	int rotation;
 
-	y700_display_rotation_watch_init();
-	if (!y700_display_rotation_initialized) {
-		if (y700_query_kscreen_rotation(&rotation))
-			y700_cached_display_rotation = rotation;
-		y700_display_rotation_initialized = true;
-		return y700_cached_display_rotation;
+	y700_display_rotation_watch_init(impl);
+	if (y700_display_rotation_watch_changed(impl))
+		impl->display_rotation_refresh_pending = true;
+	if (!impl->display_rotation_initialized)
+		impl->display_rotation_refresh_pending = true;
+	if (!impl->display_rotation_refresh_pending)
+		return impl->display_rotation_cached;
+
+	const auto now = std::chrono::steady_clock::now();
+	if (now < impl->display_rotation_retry_after)
+		return impl->display_rotation_cached;
+	if (y700_query_kscreen_rotation(impl, &rotation)) {
+		impl->display_rotation_cached = rotation;
+		impl->display_rotation_initialized = true;
+		impl->display_rotation_refresh_pending = false;
+		impl->display_rotation_retry_after = {};
+	} else {
+		/* Keep the refresh pending without synchronously retrying on every frame. */
+		impl->display_rotation_retry_after = now + std::chrono::seconds(1);
 	}
-	if (y700_display_rotation_watch_changed() && y700_query_kscreen_rotation(&rotation))
-		y700_cached_display_rotation = rotation;
-	return y700_cached_display_rotation;
+	return impl->display_rotation_cached;
+}
+
+static void y700_display_rotation_cleanup(struct impl *impl)
+{
+	if (impl == nullptr)
+		return;
+	std::lock_guard<std::mutex> lock(impl->rotation_mutex);
+	if (!y700_terminate_rotation_child(impl) && impl->log)
+		spa_log_warn(impl->log, "rotation helper did not exit within cleanup bound");
+	y700_display_rotation_watch_reset(impl);
+	impl->display_rotation_initialized = false;
+	impl->display_rotation_refresh_pending = true;
+	impl->display_rotation_retry_after = {};
 }
 
 static uint32_t y700_rotate_spa_transform(uint32_t transform, int ccw_delta)
@@ -1183,7 +2586,7 @@ static uint32_t y700_effective_spa_transform(struct impl *impl, uint32_t transfo
 
 	if (!y700_camera(impl))
 		return transform;
-	display_rotation = y700_read_display_rotation();
+	display_rotation = y700_read_display_rotation(impl);
 	display_ccw = y700_kscreen_rotation_to_ccw_quarters(display_rotation);
 	display_ccw += y700_calibrated_extra_delta(impl, display_rotation);
 	return y700_rotate_spa_transform(transform, display_ccw);
@@ -1192,16 +2595,147 @@ static uint32_t y700_effective_spa_transform(struct impl *impl, uint32_t transfo
 static void y700_update_videotransform(struct impl *impl, struct buffer *b)
 {
 	uint32_t transform;
-	if (!b->videotransform)
+	if (!impl || !impl->config || impl->config->empty() || !b || !b->videotransform)
 		return;
 	transform = libcamera_orientation_to_spa_transform_value(impl->config->orientation);
 	b->videotransform->transform = y700_effective_spa_transform(impl, transform);
 }
 
+static int update_chunk_sizes_from_metadata(struct buffer *bound,
+		const FrameBuffer *frame_buffer, const FrameMetadata &metadata)
+{
+	if (bound == nullptr || frame_buffer == nullptr ||
+		bound->validated_n_datas == 0 || bound->validated_n_datas > MAX_BUFFERS)
+		return -EINVAL;
+	const auto frame_planes = frame_buffer->planes();
+	const bool payload_valid =
+		metadata.status == FrameMetadata::Status::FrameSuccess ||
+		metadata.status == FrameMetadata::Status::FrameStartup;
+	if (!payload_valid) {
+		for (uint32_t i = 0; i < bound->validated_n_datas; ++i) {
+			if (bound->validated_chunks[i] == nullptr)
+				return -EPROTO;
+			bound->validated_chunks[i]->offset = 0;
+			bound->validated_chunks[i]->size = 0;
+		}
+		return 0;
+	}
+
+	const auto metadata_planes = metadata.planes();
+	if (metadata_planes.size() != frame_planes.size())
+		return -EPROTO;
+	for (uint32_t i = 0; i < bound->validated_n_datas; ++i) {
+		const uint32_t first = bound->first_planes[i];
+		const uint32_t count = bound->plane_counts[i];
+		if (count == 0 || first >= frame_planes.size() ||
+			count > frame_planes.size() - first)
+			return -EPROTO;
+		const uint64_t map_start = bound->validated_mapoffsets[i];
+		const uint64_t map_size = bound->validated_maxsizes[i];
+		if (map_start > std::numeric_limits<uint64_t>::max() - map_size)
+			return -EOVERFLOW;
+		const uint64_t map_end = map_start + map_size;
+		uint64_t used_end = map_start;
+		for (uint32_t plane_index = first; plane_index < first + count; ++plane_index) {
+			const auto &plane = frame_planes[plane_index];
+			const uint64_t bytes_used = metadata_planes[plane_index].bytesused;
+			if (plane.offset > std::numeric_limits<uint64_t>::max() - plane.length ||
+				bytes_used > plane.length)
+				return -EOVERFLOW;
+			if (bytes_used == 0)
+				continue;
+			const uint64_t plane_start = plane.offset;
+			if (plane_start > std::numeric_limits<uint64_t>::max() - bytes_used)
+				return -EOVERFLOW;
+			const uint64_t plane_end = plane_start + bytes_used;
+			if (plane_start < map_start || plane_end > map_end)
+				return -EPROTO;
+			used_end = std::max(used_end, plane_end);
+		}
+		if (used_end < map_start || used_end - map_start >
+				std::numeric_limits<uint32_t>::max() ||
+			bound->validated_chunks[i] == nullptr)
+			return -EOVERFLOW;
+		bound->validated_chunks[i]->offset = 0;
+		bound->validated_chunks[i]->size = static_cast<uint32_t>(used_end - map_start);
+	}
+	return 0;
+}
+
+static void mark_completion_failure(struct impl *impl, int error)
+{
+	if (impl == nullptr)
+		return;
+	if (error >= 0)
+		error = -EIO;
+	int expected = 0;
+	impl->completion_error.compare_exchange_strong(expected, error,
+			std::memory_order_release, std::memory_order_relaxed);
+	impl->active.store(false, std::memory_order_release);
+}
+
+static void recycle_completed_request(struct impl *impl, struct port *port,
+		struct buffer *b, libcamera::Request *request)
+{
+	if (request == nullptr)
+		return;
+	request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+	if (impl == nullptr)
+		return;
+
+	/* Never queue a request whose ownership cannot be authenticated.  A
+	 * malformed cookie/pointer must terminate the stream rather than allowing
+	 * an arbitrary Request object back into libcamera's queue. */
+	if (port == nullptr || b == nullptr) {
+		mark_completion_failure(impl, -EPROTO);
+		return;
+	}
+
+	if (b->id >= port->n_buffers || b->id >= impl->requestPool.size() ||
+		impl->requestPool[b->id].get() != request) {
+		mark_completion_failure(impl, -EINVAL);
+		return;
+	}
+
+	/* Mark it outstanding before using the normal queue path so inactive and
+	 * queue-failure cases retain coherent ownership. */
+	SPA_FLAG_SET(b->flags, BUFFER_FLAG_OUTSTANDING);
+	const int res = recycle_buffer_locked(impl, port, b->id);
+	if (res < 0) {
+		mark_completion_failure(impl, res);
+		if (impl->log)
+			spa_log_warn(impl->log, "can't recycle malformed camera buffer %u: %s",
+				b->id, spa_strerror(res));
+	}
+}
+
 void handle_completed_request(struct impl *impl, libcamera::Request *request)
 {
+	if (request == nullptr)
+		return;
+	if (impl == nullptr) {
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		return;
+	}
+	std::unique_lock<std::mutex> buffer_guard(impl->buffer_mutex);
+	if (!impl->active.load(std::memory_order_acquire)) {
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		return;
+	}
 	const auto request_id = request->cookie();
 	struct port *port = &impl->out_ports[0];
+	if (request_id >= MAX_BUFFERS || request_id >= port->n_buffers ||
+		request_id >= impl->requestPool.size() ||
+		impl->requestPool[request_id].get() != request) {
+		spa_log_warn(impl->log, "ignoring completion with invalid cookie %" PRIu64,
+				request_id);
+		/* Reuse releases libcamera's completed state, but the unauthenticated
+		 * request is deliberately not requeued.  The stream is terminal until
+		 * the owner performs a full stop/restart. */
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		mark_completion_failure(impl, -EPROTO);
+		return;
+	}
 	buffer *b = &port->buffers[request_id];
 
 	spa_log_trace(impl->log, "%p: request %p[%" PRIu64 "] process status:%u seq:%" PRIu32,
@@ -1211,32 +2745,91 @@ void handle_completed_request(struct impl *impl, libcamera::Request *request)
 	if (request->status() == libcamera::Request::Status::RequestCancelled) {
 		spa_log_trace(impl->log, "%p: request %p[%" PRIu64 "] cancelled",
 				impl, request, request_id);
-		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
-		SPA_FLAG_SET(b->flags, BUFFER_FLAG_OUTSTANDING);
-		spa_libcamera_buffer_recycle(impl, port, b->id);
+		recycle_completed_request(impl, port, b, request);
 		return;
 	}
 
-	const FrameBuffer *buffer = request->findBuffer(port->streamConfig.stream());
+	/* The caller-owned graph is authenticated once during allocation. Never
+	 * trust a changed count or data pointer in this asynchronous path. */
+	if (b->outbuf == nullptr || b->validated_datas == nullptr ||
+		b->validated_n_datas == 0 ||
+		b->outbuf->metas != b->validated_metas ||
+		b->outbuf->n_metas != b->validated_n_metas ||
+		b->outbuf->datas != b->validated_datas ||
+		b->outbuf->n_datas != b->validated_n_datas) {
+		spa_log_warn(impl->log, "camera buffer %" PRIu64 " changed its data graph",
+				request_id);
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		mark_completion_failure(impl, -EPROTO);
+		return;
+	}
+	bool graph_changed =
+		spa_buffer_find_meta_data(b->outbuf, SPA_META_Header, sizeof(*b->h)) != b->h ||
+		spa_buffer_find_meta_data(b->outbuf, SPA_META_VideoTransform,
+			sizeof(*b->videotransform)) != b->videotransform;
+		for (uint32_t i = 0; i < b->validated_n_datas; ++i) {
+			const struct spa_data &data = b->validated_datas[i];
+			graph_changed = graph_changed || data.chunk == nullptr ||
+				data.chunk != b->validated_chunks[i] ||
+			data.type != b->validated_types[i] ||
+			data.flags != b->validated_flags[i] ||
+				data.fd != b->validated_fds[i] ||
+				data.mapoffset != b->validated_mapoffsets[i] ||
+				data.maxsize != b->validated_maxsizes[i] ||
+				data.chunk->stride != b->validated_strides[i] ||
+				data.chunk->offset > data.maxsize ||
+				data.chunk->size > data.maxsize - data.chunk->offset;
+	}
+	if (graph_changed) {
+		spa_log_warn(impl->log, "camera buffer %" PRIu64 " changed its bound graph",
+				request_id);
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		mark_completion_failure(impl, -EPROTO);
+		return;
+	}
+
+	Stream *stream = port->streamConfig.stream();
+	if (stream == nullptr) {
+		spa_log_warn(impl->log, "%p: completion has no configured stream", request);
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		mark_completion_failure(impl, -EIO);
+		return;
+	}
+	const FrameBuffer *buffer = request->findBuffer(stream);
 	if (buffer == nullptr) {
 		spa_log_warn(impl->log, "%p: request %p[%" PRIu64 "] has no buffer for stream %p",
-				impl, request, request_id, port->streamConfig.stream());
+				impl, request, request_id, stream);
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		mark_completion_failure(impl, -EPROTO);
 		return;
 	}
 
 	const FrameMetadata &fmd = buffer->metadata();
+	const int chunk_size_res = update_chunk_sizes_from_metadata(b, buffer, fmd);
+	if (chunk_size_res < 0) {
+		spa_log_warn(impl->log,
+			"camera buffer %" PRIu64 " has invalid per-plane bytesused metadata: %s",
+			request_id, spa_strerror(chunk_size_res));
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		mark_completion_failure(impl, chunk_size_res);
+		return;
+	}
 
 	if (impl->clock) {
-		double target = (double)port->info.rate.num / port->info.rate.denom;
+		const struct spa_fraction rate = framerate_valid(&port->rate)
+			? port->rate : defaultClockRate;
+		if (!framerate_valid(&port->info.rate))
+			port->info.rate = SPA_FRACTION(rate.num, rate.denom);
+		double target = (double)rate.num / rate.denom;
 		double corr;
 
 		if (impl->dll.bw == 0.0) {
-			spa_dll_set_bw(&impl->dll, SPA_DLL_BW_MAX, port->info.rate.denom, port->info.rate.denom);
+			spa_dll_set_bw(&impl->dll, SPA_DLL_BW_MAX, rate.num, rate.denom);
 			impl->clock->next_nsec = fmd.timestamp;
 			corr = 1.0;
 		} else {
 			double diff = ((double)impl->clock->next_nsec - (double)fmd.timestamp) / SPA_NSEC_PER_SEC;
-			double error = port->info.rate.denom * (diff - target);
+			double error = rate.denom * (diff - target);
 			corr = spa_dll_update(&impl->dll, SPA_CLAMPD(error, -128., 128.));
 		}
 		/* FIXME, we should follow the driver clock and target_ values.
@@ -1250,7 +2843,15 @@ void handle_completed_request(struct impl *impl, libcamera::Request *request)
 		impl->clock->duration = 1;
 		impl->clock->delay = 0;
 		impl->clock->rate_diff = corr;
-		impl->clock->next_nsec += (uint64_t) (target * SPA_NSEC_PER_SEC * corr);
+		uint64_t next_nsec;
+		if (!checked_next_timestamp(impl->clock->next_nsec, rate, corr,
+				&next_nsec)) {
+			spa_log_error(impl->log, "invalid camera clock correction/rate");
+			request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+			mark_completion_failure(impl, -ERANGE);
+			return;
+		}
+		impl->clock->next_nsec = next_nsec;
 	}
 
 	y700_update_videotransform(impl, b);
@@ -1264,31 +2865,46 @@ void handle_completed_request(struct impl *impl, libcamera::Request *request)
 		b->h->dts_offset = 0;
 	}
 
-	for (std::size_t i = 0; i < b->outbuf->n_datas; i++) {
-		auto *d = &b->outbuf->datas[i];
-
+	for (uint32_t i = 0; i < b->validated_n_datas; i++) {
+		auto *d = &b->validated_datas[i];
 		d->chunk->flags = 0;
 
 		if (fmd.status != libcamera::FrameMetadata::Status::FrameSuccess)
 			d->chunk->flags |= SPA_CHUNK_FLAG_CORRUPTED;
 	}
+	if (b->queued) {
+		/* A duplicate completion would otherwise insert the same list node
+		 * twice and corrupt the PipeWire queue. */
+		spa_log_error(impl->log, "duplicate completion for camera buffer %" PRIu64,
+				request_id);
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		mark_completion_failure(impl, -EALREADY);
+		return;
+	}
 
 	request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
 
 	spa_list_append(&port->queue, &b->link);
+	b->queued = true;
 
 	spa_io_buffers *io = port->io;
 	if (io == nullptr) {
 		b = spa_list_first(&port->queue, struct buffer, link);
 		spa_list_remove(&b->link);
+		b->queued = false;
+		spa_list_init(&b->link);
 		SPA_FLAG_SET(b->flags, BUFFER_FLAG_OUTSTANDING);
-		spa_libcamera_buffer_recycle(impl, port, b->id);
+		if (recycle_buffer_locked(impl, port, b->id) < 0)
+			mark_completion_failure(impl, -EIO);
 	} else if (io->status != SPA_STATUS_HAVE_DATA) {
-		if (io->buffer_id < port->n_buffers)
-			spa_libcamera_buffer_recycle(impl, port, io->buffer_id);
+		if (io->buffer_id < port->n_buffers &&
+			recycle_buffer_locked(impl, port, io->buffer_id) < 0)
+			mark_completion_failure(impl, -EIO);
 
 		b = spa_list_first(&port->queue, struct buffer, link);
 		spa_list_remove(&b->link);
+		b->queued = false;
+		spa_list_init(&b->link);
 		SPA_FLAG_SET(b->flags, BUFFER_FLAG_OUTSTANDING);
 
 		io->buffer_id = b->id;
@@ -1296,45 +2912,116 @@ void handle_completed_request(struct impl *impl, libcamera::Request *request)
 		spa_log_trace(impl->log, "%p: now queued %" PRIu32, impl, b->id);
 	}
 
+	buffer_guard.unlock();
+	std::lock_guard<std::recursive_mutex> callbacks_guard(impl->callbacks_mutex);
 	spa_node_call_ready(&impl->callbacks, SPA_STATUS_HAVE_DATA);
 }
 
 void libcamera_on_fd_events(struct spa_source *source)
 {
+	if (source == nullptr || source->data == nullptr)
+		return;
 	struct impl *impl = (struct impl*) source->data;
-	uint32_t index;
-	uint64_t cnt;
+	{
+		std::lock_guard<std::mutex> lock(impl->completion_mutex);
+		++impl->callbacks_inflight;
+	}
+	struct callback_guard {
+		struct impl *self;
+		~callback_guard()
+		{
+			std::lock_guard<std::mutex> lock(self->completion_mutex);
+			if (self->callbacks_inflight > 0)
+				--self->callbacks_inflight;
+			if (self->callbacks_inflight == 0)
+				self->completion_cv.notify_all();
+		}
+	} activity{impl};
+	std::array<libcamera::Request *, COMPLETION_RING_SIZE> ready{};
+	std::size_t ready_count = 0;
+	bool remove_source = false;
+	bool retire_completion_source = false;
+	bool stopping = false;
 
-	if (source->rmask & SPA_IO_ERR) {
-		spa_log_error(impl->log, "libcamera %p: error %08x", impl, source->rmask);
-		if (impl->source.loop)
-			spa_loop_remove_source(impl->data_loop, &impl->source);
+	{
+		std::lock_guard<std::mutex> guard(impl->completion_mutex);
+		const bool terminal =
+			impl->completion_error.load(std::memory_order_acquire) < 0;
+		stopping = impl->stopping;
+		if (stopping) {
+			retire_completion_source = impl->data_loop != nullptr &&
+				impl->source_registered.load(std::memory_order_acquire);
+		} else if (!impl->active.load(std::memory_order_acquire) && !terminal) {
+			return;
+		} else if (source->rmask & SPA_IO_ERR) {
+			spa_log_error(impl->log, "libcamera %p: error %08x", impl, source->rmask);
+			mark_completion_failure(impl, -EIO);
+			remove_source = true;
+		} else if (!(source->rmask & SPA_IO_IN)) {
+			spa_log_warn(impl->log, "libcamera %p: spurious wakeup %d", impl, source->rmask);
+			return;
+		} else if (impl->system == nullptr ||
+			impl->source_fd.load(std::memory_order_acquire) < 0) {
+			mark_completion_failure(impl, -EIO);
+			remove_source = true;
+		} else {
+			uint64_t cnt = 0;
+			const int source_fd = impl->source_fd.load(std::memory_order_acquire);
+			if (source_fd < 0) {
+				mark_completion_failure(impl, -EIO);
+				remove_source = true;
+			} else if (spa_system_eventfd_read(impl->system, source_fd, &cnt) < 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					return;
+				spa_log_error(impl->log, "Failed to read on event fd");
+				mark_completion_failure(impl, -errno);
+				remove_source = true;
+			} else {
+				uint32_t index = 0;
+				const auto avail = spa_ringbuffer_get_read_index(
+					&impl->completed_requests_rb, &index);
+				if (avail < 0 || avail > COMPLETION_RING_SIZE) {
+					mark_completion_failure(impl, -EOVERFLOW);
+					remove_source = true;
+				} else {
+					for (int32_t left = avail; left > 0 &&
+						ready_count < ready.size(); --left, ++index) {
+						ready[ready_count++] =
+							impl->completed_requests[index & COMPLETION_RING_MASK];
+						impl->completed_requests[index & COMPLETION_RING_MASK] = nullptr;
+						spa_ringbuffer_read_update(&impl->completed_requests_rb, index + 1);
+					}
+				}
+			}
+		}
+	}
+
+	/* A failed stop-side invoke can leave a readable source registered.  This
+	 * callback already runs on data_loop, and its activity guard keeps impl
+	 * alive while the source is retired without completion_mutex held. */
+	if (stopping) {
+		if (retire_completion_source)
+			(void)camera_remove_source_on_data_loop(impl);
 		return;
 	}
 
-	if (!(source->rmask & SPA_IO_IN)) {
-		spa_log_warn(impl->log, "libcamera %p: spurious wakeup %d", impl, source->rmask);
-		return;
+	for (std::size_t i = 0; i < ready_count; ++i)
+		handle_completed_request(impl, ready[i]);
+
+	if (remove_source || impl->completion_error.load(std::memory_order_acquire) != 0) {
+		{
+			std::lock_guard<std::mutex> lock(impl->completion_mutex);
+			retire_completion_source = !impl->stopping &&
+				impl->data_loop != nullptr &&
+				impl->source_registered.load(std::memory_order_acquire);
+		}
+		/* This callback already runs on data_loop.  Retire the source only after
+		 * releasing completion_mutex: source removal may synchronously enter loop
+		 * bookkeeping, while stop() needs the same mutex to observe this callback's
+		 * activity guard.  The guard keeps impl alive through the unlocked call. */
+		if (retire_completion_source)
+			(void)camera_remove_source_on_data_loop(impl);
 	}
-
-	if (spa_system_eventfd_read(impl->system, impl->source.fd, &cnt) < 0) {
-		spa_log_error(impl->log, "Failed to read on event fd");
-		return;
-	}
-
-	auto avail = spa_ringbuffer_get_read_index(&impl->completed_requests_rb, &index);
-	for (; avail > 0; avail--, index++) {
-		auto *request = impl->completed_requests[index & MASK_BUFFERS];
-
-		spa_ringbuffer_read_update(&impl->completed_requests_rb, index + 1);
-		handle_completed_request(impl, request);
-	}
-}
-
-int spa_libcamera_use_buffers(struct impl *impl, struct port *port,
-		struct spa_buffer **buffers, uint32_t n_buffers)
-{
-	return -ENOTSUP;
 }
 
 const struct {
@@ -1360,138 +3047,586 @@ uint32_t libcamera_orientation_to_spa_transform_value(Orientation orientation)
 	return SPA_META_TRANSFORMATION_None;
 }
 
-int
-spa_libcamera_alloc_buffers(struct impl *impl, struct port *port,
-		       struct spa_buffer **buffers,
-		       uint32_t n_buffers)
+static uint32_t choose_spa_memtype(uint32_t type)
 {
-	if (port->n_buffers > 0)
-		return -EIO;
+	if (type == SPA_ID_INVALID)
+		return SPA_DATA_DmaBuf;
+	if (type == SPA_DATA_DmaBuf)
+		return SPA_DATA_DmaBuf;
+	/* spa_data.type is an ID, not a bit mask.  Accepting arbitrary values that
+	 * happen to contain the DmaBuf bit would publish a mapping contract the
+	 * allocator never negotiated.  libcamera exports only exact DMA-BUF IDs. */
+	return SPA_DATA_Invalid;
+}
 
-	Stream *stream = impl->config->at(0).stream();
-	const std::vector<std::unique_ptr<FrameBuffer>> &bufs =
-			impl->allocator.buffers(stream);
+struct buffer_graph_range {
+	std::uintptr_t begin = 0;
+	std::uintptr_t end = 0;
+};
 
-	if (n_buffers > 0 && bufs.size() != n_buffers)
+static constexpr std::size_t MAX_BUFFER_GRAPH_RANGES =
+	1 + MAX_BUFFERS * (5 + MAX_BUFFERS);
+
+struct buffer_graph_manifest {
+	std::array<buffer_graph_range, MAX_BUFFER_GRAPH_RANGES> ranges{};
+	std::size_t count = 0;
+};
+
+static int add_buffer_graph_range(buffer_graph_manifest *manifest,
+		const void *pointer, std::size_t size, std::size_t alignment)
+{
+	if (manifest == nullptr || pointer == nullptr || size == 0 || alignment == 0)
 		return -EINVAL;
-
-	const auto choose_memtype = [](uint32_t t) {
-		if (t != SPA_ID_INVALID && t & (1u << SPA_DATA_DmaBuf))
-			return SPA_DATA_DmaBuf;
-		if (t & (1u << SPA_DATA_MemFd))
-			return SPA_DATA_MemFd;
-
-		return SPA_DATA_Invalid;
-	};
-
-	for (uint32_t i = 0; i < n_buffers; i++) {
-		struct buffer *b;
-
-		if (buffers[i]->n_datas < 1) {
-			spa_log_error(impl->log, "invalid buffer data");
+	const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
+	if (begin % alignment != 0 || size > std::numeric_limits<std::uintptr_t>::max() - begin)
+		return -EOVERFLOW;
+	const auto end = begin + size;
+	for (std::size_t i = 0; i < manifest->count; ++i) {
+		const auto &range = manifest->ranges[i];
+		if (begin < range.end && range.begin < end)
 			return -EINVAL;
-		}
-
-		b = &port->buffers[i];
-		b->id = i;
-		b->outbuf = buffers[i];
-		b->flags = 0;
-		b->h = (struct spa_meta_header*)spa_buffer_find_meta_data(buffers[i], SPA_META_Header, sizeof(*b->h));
-
-		b->videotransform = (struct spa_meta_videotransform*)spa_buffer_find_meta_data(
-			buffers[i], SPA_META_VideoTransform, sizeof(*b->videotransform));
-		if (b->videotransform) {
-			y700_update_videotransform(impl, b);
-			spa_log_debug(impl->log, "Setting videotransform for buffer %u to %u",
-				i, b->videotransform->transform);
-		}
-
-		const auto& planes = bufs[i]->planes();
-		spa_data *d = buffers[i]->datas;
-
-		for(uint32_t j = 0; j < buffers[i]->n_datas; ++j) {
-			const auto memtype = choose_memtype(d[j].type);
-			if (memtype == SPA_DATA_Invalid) {
-				spa_log_error(impl->log, "can't use buffers of type %" PRIu32, d[j].type);
-				return -EINVAL;
-			}
-
-			d[j].type = memtype;
-			d[j].flags = SPA_DATA_FLAG_READABLE;
-			d[j].fd = -1;
-			d[j].mapoffset = 0;
-			d[j].data = nullptr;
-			d[j].chunk->stride = port->streamConfig.stride;
-			d[j].chunk->flags = 0;
-			/* Update parameters according to the plane information */
-			unsigned int numPlanes = planes.size();
-			if (buffers[i]->n_datas < numPlanes) {
-				if (j < buffers[i]->n_datas - 1) {
-					d[j].maxsize = planes[j].length;
-					d[j].chunk->offset = planes[j].offset;
-					d[j].chunk->size = planes[j].length;
-				} else {
-					d[j].chunk->offset = planes[j].offset;
-					for (uint8_t k = j; k < numPlanes; k++) {
-						d[j].maxsize += planes[k].length;
-						d[j].chunk->size += planes[k].length;
-					}
-				}
-			} else if (buffers[i]->n_datas == numPlanes) {
-				d[j].maxsize = planes[j].length;
-				d[j].chunk->offset = planes[j].offset;
-				d[j].chunk->size = planes[j].length;
-			} else {
-				spa_log_warn(impl->log, "buffer index: i: %d, data member "
-					"numbers: %d is greater than plane number: %d",
-					i, buffers[i]->n_datas, numPlanes);
-				d[j].maxsize = port->streamConfig.frameSize;
-				d[j].chunk->offset = 0;
-				d[j].chunk->size = port->streamConfig.frameSize;
-			}
-
-			switch (memtype) {
-			case SPA_DATA_DmaBuf:
-			case SPA_DATA_MemFd:
-				d[j].flags |= SPA_DATA_FLAG_MAPPABLE;
-				d[j].fd = planes[j].fd.get();
-				spa_log_debug(impl->log, "Got fd = %" PRId64 " for buffer: #%d", d[j].fd, i);
-				break;
-			default:
-				spa_assert_not_reached();
-				break;
-			}
-		}
 	}
-
-	port->n_buffers = n_buffers;
-	spa_log_debug(impl->log, "we have %d buffers", n_buffers);
-
+	if (manifest->count >= manifest->ranges.size())
+		return -EOVERFLOW;
+	manifest->ranges[manifest->count++] = { begin, end };
 	return 0;
 }
 
+static bool buffer_graph_manifests_overlap(const buffer_graph_manifest &left,
+		const buffer_graph_manifest &right)
+{
+	for (std::size_t i = 0; i < left.count; ++i) {
+		for (std::size_t j = 0; j < right.count; ++j) {
+			if (left.ranges[i].begin < right.ranges[j].end &&
+				right.ranges[j].begin < left.ranges[i].end)
+				return true;
+		}
+	}
+	return false;
+}
+
+enum class registered_io_slot {
+	none,
+	clock,
+	position,
+	buffers,
+	control,
+};
+
+static int add_registered_io_range(buffer_graph_manifest *manifest,
+		const void *pointer, std::size_t size, std::size_t alignment)
+{
+	if (pointer == nullptr)
+		return 0;
+	if (size < alignment)
+		return -EPROTO;
+	return add_buffer_graph_range(manifest, pointer, size, alignment);
+}
+
+/* The node writes clock/buffer IO from completion and process callbacks.  Keep
+ * every registered IO range separate from the caller-owned buffer graph and
+ * from the other IO objects, regardless of registration order. */
+static int build_registered_io_manifest_locked(const struct impl *impl,
+		const struct port *port, buffer_graph_manifest *manifest,
+		registered_io_slot skip = registered_io_slot::none)
+{
+	if (impl == nullptr || port == nullptr || manifest == nullptr)
+		return -EINVAL;
+	*manifest = {};
+	int res;
+	if (skip != registered_io_slot::clock && impl->clock != nullptr) {
+		const std::size_t size = impl->clock_size != 0
+			? impl->clock_size : sizeof(*impl->clock);
+		if ((res = add_registered_io_range(manifest, impl->clock, size,
+				alignof(struct spa_io_clock))) < 0)
+			return res;
+	}
+	if (skip != registered_io_slot::position && impl->position != nullptr) {
+		const std::size_t size = impl->position_size != 0
+			? impl->position_size : sizeof(*impl->position);
+		if ((res = add_registered_io_range(manifest, impl->position, size,
+				alignof(struct spa_io_position))) < 0)
+			return res;
+	}
+	if (skip != registered_io_slot::buffers && port->io != nullptr) {
+		const std::size_t size = port->io_size != 0
+			? port->io_size : sizeof(*port->io);
+		if ((res = add_registered_io_range(manifest, port->io, size,
+				alignof(struct spa_io_buffers))) < 0)
+			return res;
+	}
+	if (skip != registered_io_slot::control && port->control != nullptr) {
+		if (port->control_size < sizeof(*port->control))
+			return -EPROTO;
+		if ((res = add_registered_io_range(manifest, port->control,
+				port->control_size, alignof(struct spa_io_sequence))) < 0)
+			return res;
+	}
+	return 0;
+}
+
+static int reject_buffer_graph_io_overlap(
+		const buffer_graph_manifest &graph, const struct impl *impl,
+		const struct port *port)
+{
+	buffer_graph_manifest io_manifest{};
+	const int res = build_registered_io_manifest_locked(impl, port, &io_manifest);
+	if (res < 0)
+		return res;
+	return buffer_graph_manifests_overlap(graph, io_manifest) ? -EINVAL : 0;
+}
+
+static int build_bound_buffer_graph_manifest_locked(const struct impl *impl,
+		const struct port *port, buffer_graph_manifest *manifest)
+{
+	if (impl == nullptr || port == nullptr || manifest == nullptr ||
+		port->n_buffers > MAX_BUFFERS ||
+		!bound_spa_buffer_graph_matches_locked(port))
+		return -EPROTO;
+	*manifest = {};
+	for (uint32_t i = 0; i < port->n_buffers; ++i) {
+		const struct buffer &bound = port->buffers[i];
+		int res = add_buffer_graph_range(manifest, bound.outbuf,
+			sizeof(*bound.outbuf), alignof(struct spa_buffer));
+		if (res < 0)
+			return res;
+		res = add_buffer_graph_range(manifest, bound.validated_datas,
+			bound.validated_n_datas * sizeof(*bound.validated_datas),
+			alignof(struct spa_data));
+		if (res < 0)
+			return res;
+		if (bound.validated_n_metas > 0) {
+			res = add_buffer_graph_range(manifest, bound.validated_metas,
+				bound.validated_n_metas * sizeof(*bound.validated_metas),
+				alignof(struct spa_meta));
+			if (res < 0)
+				return res;
+		}
+		for (uint32_t j = 0; j < bound.validated_n_datas; ++j) {
+			res = add_buffer_graph_range(manifest, bound.validated_chunks[j],
+				sizeof(*bound.validated_chunks[j]), alignof(struct spa_chunk));
+			if (res < 0)
+				return res;
+		}
+		if (bound.h != nullptr) {
+			res = add_buffer_graph_range(manifest, bound.h, sizeof(*bound.h),
+				alignof(struct spa_meta_header));
+			if (res < 0)
+				return res;
+		}
+		if (bound.videotransform != nullptr) {
+			res = add_buffer_graph_range(manifest, bound.videotransform,
+				sizeof(*bound.videotransform), alignof(struct spa_meta_videotransform));
+			if (res < 0)
+				return res;
+		}
+	}
+	return 0;
+}
+
+static int validate_io_registration_locked(const struct impl *impl,
+		const struct port *port, registered_io_slot slot, const void *pointer,
+		std::size_t size, std::size_t alignment)
+{
+	if (impl == nullptr || port == nullptr)
+		return -EINVAL;
+	buffer_graph_manifest io_manifest{};
+	int res = build_registered_io_manifest_locked(impl, port, &io_manifest, slot);
+	if (res < 0)
+		return res;
+	res = add_registered_io_range(&io_manifest, pointer, size, alignment);
+	if (res < 0)
+		return res;
+	buffer_graph_manifest bound_manifest{};
+	res = build_bound_buffer_graph_manifest_locked(impl, port, &bound_manifest);
+	if (res < 0)
+		return res;
+	return buffer_graph_manifests_overlap(io_manifest, bound_manifest)
+		? -EINVAL : 0;
+}
+
+static unsigned int plane_height(const StreamConfiguration &config,
+		uint32_t plane_index)
+{
+	if (plane_index == 0)
+		return config.size.height;
+	const PixelFormat &format = config.pixelFormat;
+	if (format == formats::NV12 || format == formats::NV21 ||
+		format == formats::YUV420 || format == formats::YVU420)
+		return (config.size.height + 1) / 2;
+	if (format == formats::NV16 || format == formats::NV61 ||
+		format == formats::NV24 || format == formats::YUV422)
+		return config.size.height;
+	return 0;
+}
+
+static int derive_plane_stride(const StreamConfiguration &config,
+		libcamera::Span<const libcamera::FrameBuffer::Plane> planes,
+		uint32_t plane_index, uint32_t *stride)
+{
+	if (stride == nullptr || plane_index >= planes.size())
+		return -EINVAL;
+	if (plane_index == 0) {
+		*stride = config.stride;
+		return 0;
+	}
+	const unsigned int height = plane_height(config, plane_index);
+	if (height == 0 || planes[plane_index].length % height != 0)
+		return -ENOTSUP;
+	const uint64_t value = planes[plane_index].length / height;
+	if (value == 0 || value > static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))
+		return -EOVERFLOW;
+	*stride = static_cast<uint32_t>(value);
+	return 0;
+}
+
+/* A grouped spa_data exposes one stride for every plane sharing its FD.
+ * Reject layouts whose planes need different row pitches instead of silently
+ * publishing the first plane's stride for the rest of the group. */
+static int derive_group_stride(const StreamConfiguration &config,
+		libcamera::Span<const libcamera::FrameBuffer::Plane> planes,
+		uint32_t first_plane, uint32_t plane_count, uint32_t *stride)
+{
+	if (stride == nullptr || plane_count == 0 || first_plane >= planes.size() ||
+		plane_count > planes.size() - first_plane)
+		return -EINVAL;
+	uint32_t group_stride = 0;
+	for (uint32_t index = first_plane; index < first_plane + plane_count; ++index) {
+		uint32_t plane_stride = 0;
+		const int res = derive_plane_stride(config, planes, index, &plane_stride);
+		if (res < 0)
+			return res;
+		if (index == first_plane)
+			group_stride = plane_stride;
+		else if (plane_stride != group_stride)
+			return -ENOTSUP;
+	}
+	*stride = group_stride;
+	return 0;
+}
+
+struct spa_data_binding_plan {
+	int fd = -1;
+	uint32_t offset = 0;
+	uint32_t size = 0;
+	uint32_t stride = 0;
+	uint32_t first_plane = 0;
+	uint32_t plane_count = 0;
+	uint32_t memtype = SPA_DATA_Invalid;
+};
+
+struct spa_buffer_binding_plan {
+	uint32_t n_datas = 0;
+	std::array<spa_data_binding_plan, MAX_BUFFERS> datas{};
+};
+
+using spa_buffer_graph_plan =
+	std::array<spa_buffer_binding_plan, MAX_BUFFERS>;
+
+static int validate_spa_buffer_graph_locked(struct impl *impl, struct port *port,
+			struct spa_buffer **buffers, uint32_t n_buffers,
+			spa_buffer_graph_plan *plan, buffer_graph_manifest *manifest)
+{
+	if (impl == nullptr || port == nullptr || buffers == nullptr ||
+		n_buffers == 0 || n_buffers > MAX_BUFFERS)
+		return -EINVAL;
+	if (!impl->config || impl->config->empty() || !impl->allocator.allocated())
+		return -EIO;
+	if (port->streamConfig.stride >
+		static_cast<unsigned int>(std::numeric_limits<int32_t>::max()))
+		return -EOVERFLOW;
+
+	Stream *stream = impl->config->at(0).stream();
+	if (stream == nullptr || stream != port->streamConfig.stream())
+		return -EIO;
+	const auto &bufs = impl->allocator.buffers(stream);
+	if (bufs.size() != n_buffers)
+		return -EINVAL;
+	if (plan != nullptr)
+		plan->fill(spa_buffer_binding_plan{});
+	buffer_graph_manifest local_manifest{};
+	buffer_graph_manifest *candidate_manifest = manifest != nullptr ? manifest : &local_manifest;
+	*candidate_manifest = {};
+	buffer_graph_manifest io_manifest{};
+	int io_res = build_registered_io_manifest_locked(impl, port, &io_manifest);
+	if (io_res < 0)
+		return io_res;
+	auto add_graph_range = [&](const void *pointer, std::size_t size,
+			std::size_t alignment) -> int {
+		int res = add_buffer_graph_range(candidate_manifest, pointer, size, alignment);
+		if (res < 0)
+			return res;
+		return buffer_graph_manifests_overlap(*candidate_manifest, io_manifest)
+			? -EINVAL : 0;
+	};
+	int manifest_res = add_graph_range(buffers,
+		n_buffers * sizeof(*buffers), alignof(struct spa_buffer *));
+	if (manifest_res < 0)
+		return manifest_res;
+
+	std::size_t expected_plane_count = 0;
+	uint32_t expected_data_count = 0;
+	for (uint32_t i = 0; i < n_buffers; ++i) {
+		if (!bufs[i]) {
+			spa_log_error(impl->log, "missing libcamera buffer at index %u", i);
+			return -EINVAL;
+		}
+		const auto &planes = bufs[i]->planes();
+		if (planes.empty() || planes.size() > MAX_BUFFERS) {
+			spa_log_error(impl->log, "invalid libcamera planes at index %u", i);
+			return -EINVAL;
+		}
+		if (buffers[i] == nullptr) {
+			spa_log_error(impl->log, "invalid buffer data at index %u", i);
+			return -EINVAL;
+		}
+		manifest_res = add_graph_range(buffers[i],
+			sizeof(*buffers[i]), alignof(struct spa_buffer));
+		if (manifest_res < 0)
+			return manifest_res;
+		if ((buffers[i]->n_metas > 0 && buffers[i]->metas == nullptr) ||
+			buffers[i]->n_metas > MAX_BUFFERS || buffers[i]->datas == nullptr ||
+			buffers[i]->n_datas < 1 || buffers[i]->n_datas > MAX_BUFFERS) {
+			spa_log_error(impl->log, "invalid buffer data at index %u", i);
+			return -EINVAL;
+		}
+		manifest_res = add_graph_range(buffers[i]->datas,
+			buffers[i]->n_datas * sizeof(*buffers[i]->datas), alignof(struct spa_data));
+		if (manifest_res < 0)
+			return manifest_res;
+		if (buffers[i]->n_metas > 0) {
+			manifest_res = add_graph_range(buffers[i]->metas,
+				buffers[i]->n_metas * sizeof(*buffers[i]->metas),
+				alignof(struct spa_meta));
+			if (manifest_res < 0)
+				return manifest_res;
+		}
+		if (i == 0) {
+			expected_plane_count = planes.size();
+			expected_data_count = buffers[i]->n_datas;
+		} else if (planes.size() != expected_plane_count ||
+			buffers[i]->n_datas != expected_data_count) {
+			spa_log_error(impl->log, "inconsistent camera buffer layout at index %u", i);
+			return -EINVAL;
+		}
+		std::array<plane_group_binding, MAX_BUFFERS> groups{};
+		std::size_t group_count = 0;
+		const int group_res = build_plane_groups(planes, &groups, &group_count);
+		if (group_res < 0)
+			return group_res;
+		if (group_count != port->buffers_blocks)
+			return -EIO;
+		const bool plane_per_data = buffers[i]->n_datas == planes.size();
+		const bool group_per_data = buffers[i]->n_datas == group_count;
+		if (!plane_per_data && !group_per_data) {
+			spa_log_error(impl->log,
+				"buffer %u has %u SPA datas for %zu planes/%zu fd groups",
+				i, buffers[i]->n_datas, planes.size(), group_count);
+			return -EINVAL;
+		}
+
+		spa_buffer_binding_plan *buffer_plan = plan != nullptr ? &(*plan)[i] : nullptr;
+		if (buffer_plan != nullptr)
+			buffer_plan->n_datas = buffers[i]->n_datas;
+		for (uint32_t j = 0; j < buffers[i]->n_datas; ++j) {
+			if (buffers[i]->datas[j].chunk == nullptr) {
+				spa_log_error(impl->log, "invalid buffer chunk at index %u/%u", i, j);
+				return -EINVAL;
+			}
+			manifest_res = add_graph_range(
+				buffers[i]->datas[j].chunk, sizeof(*buffers[i]->datas[j].chunk),
+				alignof(struct spa_chunk));
+			if (manifest_res < 0)
+				return manifest_res;
+			const uint32_t memtype = choose_spa_memtype(buffers[i]->datas[j].type);
+			if (memtype == SPA_DATA_Invalid) {
+				spa_log_error(impl->log, "can't use buffers of type %" PRIu32,
+						buffers[i]->datas[j].type);
+				return -EINVAL;
+			}
+			spa_data_binding_plan binding{};
+			binding.memtype = memtype;
+			if (plane_per_data) {
+				binding.fd = planes[j].fd.get();
+				binding.offset = static_cast<uint32_t>(planes[j].offset);
+				binding.size = static_cast<uint32_t>(planes[j].length);
+				binding.first_plane = j;
+				binding.plane_count = 1;
+			} else {
+				binding.fd = groups[j].fd;
+				binding.offset = groups[j].offset;
+				binding.size = groups[j].size;
+				binding.first_plane = groups[j].first_plane;
+				binding.plane_count = groups[j].plane_count;
+			}
+			const int stride_res = binding.plane_count > 1
+				? derive_group_stride(port->streamConfig, planes,
+					binding.first_plane, binding.plane_count, &binding.stride)
+				: derive_plane_stride(port->streamConfig, planes,
+					binding.first_plane, &binding.stride);
+			if (stride_res < 0)
+				return stride_res;
+			if (buffer_plan != nullptr)
+				buffer_plan->datas[j] = binding;
+		}
+		auto *header = static_cast<struct spa_meta_header *>(spa_buffer_find_meta_data(
+			buffers[i], SPA_META_Header, sizeof(struct spa_meta_header)));
+		if (header != nullptr) {
+			manifest_res = add_graph_range(header,
+				sizeof(*header), alignof(struct spa_meta_header));
+			if (manifest_res < 0)
+				return manifest_res;
+		}
+		auto *videotransform = static_cast<struct spa_meta_videotransform *>(
+			spa_buffer_find_meta_data(buffers[i], SPA_META_VideoTransform,
+					sizeof(struct spa_meta_videotransform)));
+		if (videotransform != nullptr) {
+			manifest_res = add_graph_range(videotransform,
+				sizeof(*videotransform), alignof(struct spa_meta_videotransform));
+			if (manifest_res < 0)
+				return manifest_res;
+		}
+	}
+	return buffer_graph_manifests_overlap(*candidate_manifest, io_manifest)
+		? -EINVAL : 0;
+}
+
+static void bind_spa_buffer_graph_validated_locked(struct impl *impl, struct port *port,
+			struct spa_buffer **buffers, uint32_t n_buffers,
+			const spa_buffer_graph_plan &plan)
+{
+	spa_list_init(&port->queue);
+	for (uint32_t i = 0; i < n_buffers; ++i) {
+		struct buffer *b = &port->buffers[i];
+
+		*b = buffer{};
+		b->id = i;
+		spa_list_init(&b->link);
+		b->outbuf = buffers[i];
+		b->validated_metas = buffers[i]->metas;
+		b->validated_n_metas = buffers[i]->n_metas;
+		b->validated_datas = buffers[i]->datas;
+		b->validated_n_datas = buffers[i]->n_datas;
+		for (uint32_t j = 0; j < b->validated_n_datas; ++j)
+			b->validated_chunks[j] = b->validated_datas[j].chunk;
+		b->h = (struct spa_meta_header *)spa_buffer_find_meta_data(
+			buffers[i], SPA_META_Header, sizeof(*b->h));
+		b->videotransform = (struct spa_meta_videotransform *)spa_buffer_find_meta_data(
+			buffers[i], SPA_META_VideoTransform, sizeof(*b->videotransform));
+		if (b->videotransform)
+			y700_update_videotransform(impl, b);
+
+		spa_data *data = buffers[i]->datas;
+		for (uint32_t j = 0; j < buffers[i]->n_datas; ++j) {
+			const auto &binding = plan[i].datas[j];
+			data[j].type = binding.memtype;
+			data[j].flags = SPA_DATA_FLAG_READABLE | SPA_DATA_FLAG_MAPPABLE;
+			data[j].fd = binding.fd;
+			data[j].mapoffset = binding.offset;
+			data[j].data = nullptr;
+				data[j].chunk->stride = static_cast<int32_t>(binding.stride);
+			data[j].chunk->flags = 0;
+			data[j].maxsize = binding.size;
+			data[j].chunk->size = binding.size;
+			data[j].chunk->offset = 0;
+			b->validated_types[j] = data[j].type;
+			b->validated_flags[j] = data[j].flags;
+			b->validated_fds[j] = data[j].fd;
+			b->validated_mapoffsets[j] = data[j].mapoffset;
+				b->validated_maxsizes[j] = data[j].maxsize;
+				b->validated_strides[j] = data[j].chunk->stride;
+			b->first_planes[j] = binding.first_plane;
+			b->plane_counts[j] = binding.plane_count;
+		}
+	}
+	port->n_buffers = n_buffers;
+	spa_log_debug(impl->log, "we have %u buffers", n_buffers);
+}
+
+static int spa_libcamera_rebind_buffers(struct impl *impl, struct port *port,
+		struct spa_buffer **buffers, uint32_t n_buffers)
+{
+	if (impl == nullptr)
+		return -EINVAL;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
+	if (port == nullptr || port->n_buffers != n_buffers)
+		return -EINVAL;
+	spa_buffer_graph_plan plan{};
+	const int validation = validate_spa_buffer_graph_locked(impl, port, buffers,
+			n_buffers, &plan, nullptr);
+	if (validation < 0)
+		return validation;
+	bind_spa_buffer_graph_validated_locked(impl, port, buffers, n_buffers, plan);
+	return 0;
+}
 
 void impl::requestComplete(libcamera::Request *request)
 {
-	struct impl *impl = this;
-	uint32_t index;
+	if (request == nullptr)
+		return;
 
-	spa_log_trace(impl->log, "%p: request %p[%" PRIu64 "] completed status:%u seq:%" PRIu32,
-			impl, request, request->cookie(),
+	/* Disconnecting a libcamera signal does not by itself provide a join with
+	 * a callback that has already started.  Keep explicit activity custody so
+	 * stop() cannot close the eventfd or destroy requests underneath us. */
+	{
+		std::lock_guard<std::mutex> lock(completion_mutex);
+		++callbacks_inflight;
+	}
+	struct callback_guard {
+		struct impl *self;
+		~callback_guard()
+		{
+			std::lock_guard<std::mutex> lock(self->completion_mutex);
+			if (self->callbacks_inflight > 0)
+				--self->callbacks_inflight;
+			if (self->callbacks_inflight == 0)
+				self->completion_cv.notify_all();
+		}
+	} guard{this};
+
+	std::lock_guard<std::mutex> lock(completion_mutex);
+	if (stopping || !active.load(std::memory_order_acquire) ||
+		system == nullptr || source_fd.load(std::memory_order_acquire) < 0) {
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		return;
+	}
+
+	spa_log_trace(log, "%p: request %p[%" PRIu64 "] completed status:%u seq:%" PRIu32,
+			this, request, request->cookie(),
 			static_cast<unsigned int>(request->status()),
 			request->sequence());
 
-	spa_ringbuffer_get_write_index(&impl->completed_requests_rb, &index);
-	impl->completed_requests[index & MASK_BUFFERS] = request;
-	spa_ringbuffer_write_update(&impl->completed_requests_rb, index + 1);
+	uint32_t index = 0;
+	const int32_t used = spa_ringbuffer_get_write_index(&completed_requests_rb, &index);
+	if (used < 0 || used >= COMPLETION_RING_SIZE) {
+		spa_log_error(log, "completion ring overflow");
+		request->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+		mark_completion_failure(this, -ENOSPC);
+		return;
+	}
+	completed_requests[index & COMPLETION_RING_MASK] = request;
+	spa_ringbuffer_write_update(&completed_requests_rb, index + 1);
 
-	if (spa_system_eventfd_write(impl->system, impl->source.fd, 1) < 0)
-		spa_log_error(impl->log, "Failed to write on event fd");
+	const int event_fd = source_fd.load(std::memory_order_acquire);
+	if (event_fd < 0 || spa_system_eventfd_write(system, event_fd, 1) < 0) {
+		const int error = event_fd < 0 ? -EIO : (errno ? -errno : -EIO);
+		spa_log_error(log, "Failed to write on event fd: %s", spa_strerror(error));
+		/* Keep the slot owned by the ring.  Advancing the read index here would
+		 * discard older completions and leak their request ownership when the
+		 * stream transitions to its terminal error state.  stop() drains every
+		 * retained slot before resetting the ring. */
+		mark_completion_failure(this, error);
+	}
 
 }
 
 int spa_libcamera_stream_on(struct impl *impl)
 {
+	if (impl == nullptr || impl->camera == nullptr || impl->system == nullptr ||
+		impl->data_loop == nullptr)
+		return -EIO;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 	struct port *port = &impl->out_ports[0];
 	int res;
 
@@ -1500,65 +3635,112 @@ int spa_libcamera_stream_on(struct impl *impl)
 		return -EIO;
 	}
 
-	if (impl->active)
+	if (impl->active.load(std::memory_order_acquire))
 		return 0;
+	if (impl->requestPool.empty() || !impl->config || impl->config->empty())
+		return -EIO;
+
+	bool needs_cleanup;
+	{
+		std::lock_guard<std::mutex> lock(impl->completion_mutex);
+		needs_cleanup = impl->camera_started.load(std::memory_order_acquire) ||
+			impl->signal_connected.load(std::memory_order_acquire) ||
+			impl->source_registered.load(std::memory_order_acquire) ||
+			impl->source_fd.load(std::memory_order_acquire) >= 0 || impl->stopping;
+	}
+	/* A terminal completion deliberately leaves ownership intact for stop() to
+	 * retire.  Never overwrite a registered source or live eventfd on restart. */
+	if (needs_cleanup) {
+		res = impl->stop();
+		if (res < 0)
+			return res;
+		std::lock_guard<std::mutex> lock(impl->completion_mutex);
+		if (impl->camera_started.load(std::memory_order_acquire) ||
+			impl->signal_connected.load(std::memory_order_acquire) ||
+			impl->source_registered.load(std::memory_order_acquire) ||
+			impl->source_fd.load(std::memory_order_acquire) >= 0 || impl->stopping)
+			return -EBUSY;
+	}
+	{
+		std::lock_guard<std::mutex> lock(impl->completion_mutex);
+		if (impl->stopping)
+			return -EBUSY;
+		impl->completion_error.store(0, std::memory_order_release);
+	}
 
 	spa_log_info(impl->log, "starting camera %s", impl->camera->id().c_str());
-	if ((res = impl->camera->start(&impl->initial_controls)) < 0)
-		return res == -EACCES ? -EBUSY : res;
-
-	impl->camera->requestCompleted.connect(impl, &impl::requestComplete);
-
 	res = spa_system_eventfd_create(impl->system, SPA_FD_CLOEXEC | SPA_FD_NONBLOCK);
 	if (res < 0)
 		goto err_stop;
 
 	impl->source.fd = res;
+	impl->source_fd.store(res, std::memory_order_release);
 	impl->source.func = libcamera_on_fd_events;
 	impl->source.data = impl;
 	impl->source.mask = SPA_IO_IN | SPA_IO_ERR;
 	impl->source.rmask = 0;
 
-	for (auto& req : impl->requestPool) {
-		req->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
-
-		if ((res = impl->camera->queueRequest(req.get())) < 0)
-			goto err_stop;
+	/* Register the source before queueing requests so an immediately completed
+	 * request has a live wakeup target. */
+	res = spa_loop_invoke(
+		impl->data_loop,
+		camera_add_source_invoke,
+		0, nullptr, 0, true, impl
+	);
+	if (res < 0)
+		goto err_stop;
+	if (!impl->source_registered.load(std::memory_order_acquire)) {
+		res = -EIO;
+		goto err_stop;
 	}
 
-	impl->dll.bw = 0.0;
-	impl->active = true;
+	{
+		/* start(), the initial request submission and stop() form one camera-I/O
+		 * transaction.  A concurrent recycle cannot queue into a half-started
+		 * camera, and stop() waits until the whole initial batch is settled. */
+		std::lock_guard<std::mutex> camera_guard(impl->camera_io_mutex);
+		spa_dll_init(&impl->dll);
+		res = impl->camera->start(&impl->initial_controls);
+		if (res >= 0) {
+			impl->camera_started.store(true, std::memory_order_release);
+			impl->camera->requestCompleted.connect(impl, &impl::requestComplete);
+			impl->signal_connected.store(true, std::memory_order_release);
+			impl->active.store(true, std::memory_order_release);
 
-	res = spa_loop_locked(
-		impl->data_loop,
-		[](spa_loop *, bool, uint32_t, const void *, size_t, void *user_data)
-		{
-			auto *impl = static_cast<struct impl *>(user_data);
-			return spa_loop_add_source(impl->data_loop, &impl->source);
-		},
-		0, nullptr, 0, impl
-	);
+			for (auto& req : impl->requestPool) {
+				req->reuse(libcamera::Request::ReuseFlag::ReuseBuffers);
+				res = impl->camera->queueRequest(req.get());
+				if (res < 0)
+					break;
+			}
+		}
+	}
 	if (res < 0)
 		goto err_stop;
 
 	return 0;
 
 err_stop:
-	impl->stop();
+	(void)impl->stop();
 
 	return res;
 }
 
 int spa_libcamera_stream_off(struct impl *impl)
 {
-	if (!impl->active)
+	if (impl == nullptr)
+		return -EINVAL;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	if (!impl->active.load(std::memory_order_acquire) &&
+		!impl->camera_started.load(std::memory_order_acquire) &&
+		!impl->source_registered.load(std::memory_order_acquire) &&
+		impl->source_fd.load(std::memory_order_acquire) < 0)
 		return 0;
 
-	spa_log_info(impl->log, "stopping camera %s", impl->camera->id().c_str());
+	if (impl->camera)
+		spa_log_info(impl->log, "stopping camera %s", impl->camera->id().c_str());
 
-	impl->stop();
-
-	return 0;
+	return impl->stop();
 }
 
 int port_get_format(struct impl *impl, struct port *port,
@@ -1573,6 +3755,21 @@ int port_get_format(struct impl *impl, struct port *port,
 		return -EIO;
 	if (index > 0)
 		return 0;
+	struct spa_fraction rate = defaultFramerate;
+	switch (port->current_format->media_subtype) {
+	case SPA_MEDIA_SUBTYPE_raw:
+		rate = normalized_framerate(&port->current_format->info.raw.framerate);
+		break;
+	case SPA_MEDIA_SUBTYPE_mjpg:
+	case SPA_MEDIA_SUBTYPE_jpeg:
+		rate = normalized_framerate(&port->current_format->info.mjpg.framerate);
+		break;
+	case SPA_MEDIA_SUBTYPE_h264:
+		rate = normalized_framerate(&port->current_format->info.h264.framerate);
+		break;
+	default:
+		return -EIO;
+	}
 
 	spa_pod_builder_push_object(builder, &f, SPA_TYPE_OBJECT_Format, SPA_PARAM_Format);
 	spa_pod_builder_add(builder,
@@ -1581,21 +3778,41 @@ int port_get_format(struct impl *impl, struct port *port,
 		0);
 
 	switch (port->current_format->media_subtype) {
-	case SPA_MEDIA_SUBTYPE_raw:
+	case SPA_MEDIA_SUBTYPE_raw: {
+		const auto &raw = port->current_format->info.raw;
 		spa_pod_builder_add(builder,
-			SPA_FORMAT_VIDEO_format,    SPA_POD_Id(port->current_format->info.raw.format),
-			SPA_FORMAT_VIDEO_size,      SPA_POD_Rectangle(&port->current_format->info.raw.size),
+			SPA_FORMAT_VIDEO_format,    SPA_POD_Id(raw.format),
+			SPA_FORMAT_VIDEO_size,      SPA_POD_Rectangle(&raw.size),
+			SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&rate),
 			0);
+		if (raw.flags & SPA_VIDEO_FLAG_MODIFIER) {
+			spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_modifier, 0);
+			spa_pod_builder_long(builder, raw.modifier);
+		}
+		if (raw.color_range != SPA_VIDEO_COLOR_RANGE_UNKNOWN ||
+			raw.color_matrix != SPA_VIDEO_COLOR_MATRIX_UNKNOWN ||
+			raw.transfer_function != SPA_VIDEO_TRANSFER_UNKNOWN ||
+			raw.color_primaries != SPA_VIDEO_COLOR_PRIMARIES_UNKNOWN) {
+			spa_pod_builder_add(builder,
+				SPA_FORMAT_VIDEO_colorRange, SPA_POD_Id(raw.color_range),
+				SPA_FORMAT_VIDEO_colorMatrix, SPA_POD_Id(raw.color_matrix),
+				SPA_FORMAT_VIDEO_transferFunction, SPA_POD_Id(raw.transfer_function),
+				SPA_FORMAT_VIDEO_colorPrimaries, SPA_POD_Id(raw.color_primaries),
+				0);
+		}
 		break;
+	}
 	case SPA_MEDIA_SUBTYPE_mjpg:
 	case SPA_MEDIA_SUBTYPE_jpeg:
 		spa_pod_builder_add(builder,
 			SPA_FORMAT_VIDEO_size,      SPA_POD_Rectangle(&port->current_format->info.mjpg.size),
+			SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&rate),
 			0);
 		break;
 	case SPA_MEDIA_SUBTYPE_h264:
 		spa_pod_builder_add(builder,
 			SPA_FORMAT_VIDEO_size,      SPA_POD_Rectangle(&port->current_format->info.h264.size),
+			SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&rate),
 			0);
 		break;
 	default:
@@ -1621,6 +3838,7 @@ int impl_node_enum_params(void *object, int seq,
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
 	spa_return_val_if_fail(num != 0, -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 
 	result.id = id;
 	result.next = start;
@@ -1677,29 +3895,21 @@ int impl_node_set_param(void *object,
 	auto *impl = static_cast<struct impl *>(object);
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	if (impl->camera == nullptr)
+		return -EIO;
 
 	switch (id) {
 	case SPA_PARAM_Props:
 	{
-		const auto *obj = reinterpret_cast<const spa_pod_object *>(param);
-		const struct spa_pod_prop *prop;
-
 		if (param == nullptr)
 			return 0;
 
 		libcamera::ControlList controls(impl->camera->controls());
-		int res;
-
-		SPA_POD_OBJECT_FOREACH(obj, prop) {
-			switch (prop->key) {
-			default:
-				res = control_list_update_from_prop(controls, prop, SPA_POD_BODY_CONST(&prop->value));
-				if (res < 0)
-					return res;
-
-				break;
-			}
-		}
+		int res = control_list_update_from_props_pod(controls, param,
+			SPA_POD_SIZE(param));
+		if (res < 0)
+			return res;
 
 		res = spa_libcamera_apply_controls(impl, std::move(controls));
 		if (res < 0)
@@ -1718,15 +3928,39 @@ int impl_node_set_io(void *object, uint32_t id, void *data, size_t size)
 	struct impl *impl = (struct impl*)object;
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
 
 	switch (id) {
 	case SPA_IO_Clock:
+		if (data != nullptr && size > std::numeric_limits<uint32_t>::max())
+			return -EOVERFLOW;
+		if (data != nullptr && size < sizeof(struct spa_io_clock))
+			return -ENOSPC;
+		if (!naturally_aligned<struct spa_io_clock>(data))
+			return -EINVAL;
+		if (const int io_res = validate_io_registration_locked(impl,
+				&impl->out_ports[0], registered_io_slot::clock, data,
+				data != nullptr ? size : 0, alignof(struct spa_io_clock));
+			io_res < 0)
+			return io_res;
 		impl->clock = (struct spa_io_clock*)data;
-		if (impl->clock)
-			SPA_FLAG_SET(impl->clock->flags, SPA_IO_CLOCK_FLAG_NO_RATE);
+		impl->clock_size = data != nullptr ? size : 0;
 		break;
 	case SPA_IO_Position:
+		if (data != nullptr && size > std::numeric_limits<uint32_t>::max())
+			return -EOVERFLOW;
+		if (data != nullptr && size < sizeof(struct spa_io_position))
+			return -ENOSPC;
+		if (!naturally_aligned<struct spa_io_position>(data))
+			return -EINVAL;
+		if (const int io_res = validate_io_registration_locked(impl,
+				&impl->out_ports[0], registered_io_slot::position, data,
+				data != nullptr ? size : 0, alignof(struct spa_io_position));
+			io_res < 0)
+			return io_res;
 		impl->position = (struct spa_io_position*)data;
+		impl->position_size = data != nullptr ? size : 0;
 		break;
 	default:
 		return -ENOENT;
@@ -1741,6 +3975,7 @@ int impl_node_send_command(void *object, const struct spa_command *command)
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
 	spa_return_val_if_fail(command != nullptr, -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 
 	switch (SPA_NODE_COMMAND_ID(command)) {
 	case SPA_NODE_COMMAND_Start:
@@ -1789,15 +4024,10 @@ void emit_node_info(struct impl *impl, bool full)
 
 void emit_port_info(struct impl *impl, struct port *port, bool full)
 {
-	static const struct spa_dict_item info_items[] = {
-		{ SPA_KEY_PORT_GROUP, "stream.0" },
-	};
 	uint64_t old = full ? port->info.change_mask : 0;
 	if (full)
 		port->info.change_mask = port->info_all;
 	if (port->info.change_mask) {
-		struct spa_dict dict = SPA_DICT_INIT_ARRAY(info_items);
-		port->info.props = &dict;
 		spa_node_emit_port_info(&impl->hooks,
 				SPA_DIRECTION_OUTPUT, 0, &port->info);
 		port->info.change_mask = old;
@@ -1814,6 +4044,7 @@ impl_node_add_listener(void *object,
 	struct spa_hook_list save;
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 
 	spa_hook_list_isolate(&impl->hooks, &save, listener, events, data);
 
@@ -1832,6 +4063,8 @@ int impl_node_set_callbacks(void *object,
 	struct impl *impl = (struct impl*)object;
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	std::lock_guard<std::recursive_mutex> callbacks_guard(impl->callbacks_mutex);
 
 	impl->callbacks = SPA_CALLBACKS_INIT(callbacks, data);
 
@@ -1843,6 +4076,7 @@ int impl_node_sync(void *object, int seq)
 	struct impl *impl = (struct impl*)object;
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 
 	spa_node_emit_result(&impl->hooks, seq, 0, 0, nullptr);
 
@@ -1882,6 +4116,7 @@ int impl_node_port_enum_params(void *object, int seq,
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
 	spa_return_val_if_fail(num != 0, -EINVAL);
 	spa_return_val_if_fail(CHECK_PORT(impl, direction, port_id), -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 
 	port = GET_PORT(impl, direction, port_id);
 
@@ -1989,21 +4224,90 @@ next:
 	return 0;
 }
 
+static bool negotiated_formats_equal(const struct spa_video_info &current,
+		const struct spa_video_info &candidate)
+{
+	if (current.media_type != candidate.media_type ||
+		current.media_subtype != candidate.media_subtype)
+		return false;
+
+	switch (candidate.media_subtype) {
+	case SPA_MEDIA_SUBTYPE_raw:
+		return current.info.raw.format == candidate.info.raw.format &&
+			current.info.raw.size.width == candidate.info.raw.size.width &&
+			current.info.raw.size.height == candidate.info.raw.size.height &&
+			current.info.raw.flags == candidate.info.raw.flags &&
+			(!(candidate.info.raw.flags & SPA_VIDEO_FLAG_MODIFIER) ||
+			 current.info.raw.modifier == candidate.info.raw.modifier) &&
+			(raw_colorimetry_unspecified(candidate.info.raw) ||
+			 raw_colorimetry_equal(current.info.raw, candidate.info.raw)) &&
+			fractions_equal(current.info.raw.framerate,
+				candidate.info.raw.framerate);
+	case SPA_MEDIA_SUBTYPE_mjpg:
+	case SPA_MEDIA_SUBTYPE_jpeg:
+		return current.info.mjpg.size.width == candidate.info.mjpg.size.width &&
+			current.info.mjpg.size.height == candidate.info.mjpg.size.height &&
+			fractions_equal(current.info.mjpg.framerate,
+				candidate.info.mjpg.framerate);
+	case SPA_MEDIA_SUBTYPE_h264:
+		return current.info.h264.size.width == candidate.info.h264.size.width &&
+			current.info.h264.size.height == candidate.info.h264.size.height &&
+			fractions_equal(current.info.h264.framerate,
+				candidate.info.h264.framerate);
+	default:
+		return false;
+	}
+}
+
 int port_set_format(struct impl *impl, struct port *port,
 		    uint32_t flags, const struct spa_pod *format)
 {
+	if (impl == nullptr || port == nullptr)
+		return -EINVAL;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 	const bool try_only = SPA_FLAG_IS_SET(flags, SPA_NODE_PARAM_FLAG_TEST_ONLY);
 
-	if (!try_only) {
-		spa_libcamera_stream_off(impl);
-		spa_libcamera_clear_buffers(port);
-		freeBuffers(impl, port);
-		port->current_format.reset();
-	}
-
 	if (format == nullptr) {
-		if (!try_only)
-			spa_libcamera_close(impl);
+		if (try_only)
+			return 0;
+		const int stop_res = impl->stop(true);
+		if (stop_res < 0)
+			return stop_res;
+		stopping_transaction_guard stopping_guard(impl);
+		auto terminal_failure = [&](int error) {
+			if (error >= 0)
+				error = -EIO;
+			impl->format_transaction_failed = true;
+			mark_completion_failure(impl, error);
+			stopping_guard.abandon();
+			return error;
+		};
+		if (port->n_buffers > 0) {
+			std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
+			const int clear_res = clear_buffers_locked(port);
+			if (clear_res < 0)
+				return terminal_failure(clear_res);
+		}
+		const int free_res = freeBuffers(impl, port);
+		if (free_res < 0)
+			return terminal_failure(free_res);
+		/* Keep both objects alive until close succeeds.  spa_libcamera_close()
+		 * intentionally refuses to release a configured port, so temporarily
+		 * detach only the public format marker and restore it on failure. */
+		auto old_format = std::move(port->current_format);
+		const int close_res = spa_libcamera_close(impl);
+		if (close_res < 0) {
+			port->current_format = std::move(old_format);
+			return terminal_failure(close_res);
+		}
+		old_format.reset();
+		impl->config.reset();
+		impl->rollback_config.reset();
+		port->streamConfig = {};
+		port->rate = defaultClockRate;
+		port->buffers_blocks = 1;
+		impl->format_transaction_failed = false;
+		impl->completion_error.store(0, std::memory_order_release);
 	} else {
 		spa_video_info info;
 		int res;
@@ -2039,6 +4343,12 @@ int port_set_format(struct impl *impl, struct port *port,
 		default:
 			return -EINVAL;
 		}
+		if (impl->format_transaction_failed || impl->rollback_config != nullptr)
+			return impl->completion_error.load(std::memory_order_acquire) < 0
+				? impl->completion_error.load(std::memory_order_acquire) : -EIO;
+		if (port->current_format &&
+			negotiated_formats_equal(*port->current_format, info))
+			return 0;
 
 		res = spa_libcamera_set_format(impl, port, &info, try_only);
 		if (res < 0)
@@ -2079,6 +4389,7 @@ int impl_node_port_set_param(void *object,
 
 	spa_return_val_if_fail(object != nullptr, -EINVAL);
 	spa_return_val_if_fail(CHECK_PORT(impl, direction, port_id), -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
 
 	port = GET_PORT(impl, direction, port_id);
 
@@ -2105,27 +4416,96 @@ int impl_node_port_use_buffers(void *object,
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
 	spa_return_val_if_fail(CHECK_PORT(impl, direction, port_id), -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	std::unique_ptr<stopping_transaction_guard> stopping_guard;
 
 	port = GET_PORT(impl, direction, port_id);
-
-	if (port->n_buffers) {
-		spa_libcamera_stream_off(impl);
-		if ((res = spa_libcamera_clear_buffers(port)) < 0)
-			return res;
-	}
-	if (n_buffers > 0 && !port->current_format)
-		return -EIO;
 	if (n_buffers > MAX_BUFFERS)
 		return -ENOSPC;
-	if (buffers == nullptr)
-		return 0;
+	if (n_buffers > 0) {
+		if (buffers == nullptr)
+			return -EINVAL;
+		if (!naturally_aligned<struct spa_buffer *>(buffers))
+			return -EINVAL;
+		if (!port->current_format)
+			return -EIO;
+		if (!(flags & SPA_NODE_BUFFERS_FLAG_ALLOC))
+			return -ENOTSUP;
 
-	if (flags & SPA_NODE_BUFFERS_FLAG_ALLOC) {
-		res = spa_libcamera_alloc_buffers(impl, port, buffers, n_buffers);
-	} else {
-		res = spa_libcamera_use_buffers(impl, port, buffers, n_buffers);
+		/* An exact repeat is idempotent.  Any partial alias would be mutated by
+		 * clearing the old graph, so reject it before either graph is touched. */
+		bool exact_graph = port->n_buffers == n_buffers;
+		{
+			std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
+			for (uint32_t i = 0; i < n_buffers; ++i) {
+				const bool matches_index = i < port->n_buffers &&
+					port->buffers[i].outbuf == buffers[i] &&
+					bound_spa_buffer_matches_locked(port->buffers[i]);
+				exact_graph = exact_graph && matches_index;
+			}
+			if (exact_graph)
+				return 0;
+
+			buffer_graph_manifest candidate_manifest{};
+			res = validate_spa_buffer_graph_locked(impl, port, buffers, n_buffers,
+				nullptr, &candidate_manifest);
+			if (res < 0)
+				return res;
+			if (port->n_buffers > 0) {
+				buffer_graph_manifest bound_manifest{};
+				res = build_bound_buffer_graph_manifest_locked(impl, port, &bound_manifest);
+				if (res < 0)
+					return res;
+				res = reject_buffer_graph_io_overlap(bound_manifest, impl, port);
+				if (res < 0)
+					return res;
+				if (buffer_graph_manifests_overlap(candidate_manifest, bound_manifest))
+					return -EINVAL;
+			}
+		}
 	}
-	return res;
+
+	if (port->n_buffers) {
+		if ((res = impl->stop(true)) < 0)
+			return res;
+		stopping_guard = std::make_unique<stopping_transaction_guard>(impl);
+	}
+
+	/* The final candidate validation, authentication of the old graph, detach
+	 * and new binding are one buffer-lock transaction.  Binding consumes the
+	 * already-built plan and has no validation failure after clear. */
+	std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
+	if (impl->active.load(std::memory_order_acquire) ||
+		impl->camera_started.load(std::memory_order_acquire) ||
+		(impl->stopping && !stopping_guard))
+		return -EBUSY;
+	spa_buffer_graph_plan plan{};
+	buffer_graph_manifest candidate_manifest{};
+	if (n_buffers > 0) {
+		res = validate_spa_buffer_graph_locked(impl, port, buffers, n_buffers,
+			&plan, &candidate_manifest);
+		if (res < 0)
+			return res;
+		if (port->n_buffers > 0) {
+			buffer_graph_manifest bound_manifest{};
+			res = build_bound_buffer_graph_manifest_locked(impl, port, &bound_manifest);
+			if (res < 0)
+				return res;
+			res = reject_buffer_graph_io_overlap(bound_manifest, impl, port);
+			if (res < 0)
+				return res;
+			if (buffer_graph_manifests_overlap(candidate_manifest, bound_manifest))
+				return -EINVAL;
+		}
+	}
+	if (port->n_buffers > 0) {
+		res = clear_buffers_locked(port);
+		if (res < 0)
+			return res;
+	}
+	if (n_buffers > 0)
+		bind_spa_buffer_graph_validated_locked(impl, port, buffers, n_buffers, plan);
+	return 0;
 }
 
 int impl_node_port_set_io(void *object,
@@ -2139,16 +4519,40 @@ int impl_node_port_set_io(void *object,
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
 	spa_return_val_if_fail(CHECK_PORT(impl, direction, port_id), -EINVAL);
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
 
 	port = GET_PORT(impl, direction, port_id);
 
 	switch (id) {
 	case SPA_IO_Buffers:
+		if (data != nullptr && size > std::numeric_limits<uint32_t>::max())
+			return -EOVERFLOW;
+		if (data != nullptr && size < sizeof(struct spa_io_buffers))
+			return -ENOSPC;
+		if (!naturally_aligned<struct spa_io_buffers>(data))
+			return -EINVAL;
+		if (const int io_res = validate_io_registration_locked(impl, port,
+				registered_io_slot::buffers, data, data != nullptr ? size : 0,
+				alignof(struct spa_io_buffers)); io_res < 0)
+			return io_res;
 		port->io = (struct spa_io_buffers*)data;
+		port->io_size = data != nullptr ? size : 0;
 		break;
 	case SPA_IO_Control:
+		if (data != nullptr && size > std::numeric_limits<uint32_t>::max())
+			return -EOVERFLOW;
+		if (data != nullptr && size < sizeof(struct spa_io_sequence))
+			return -ENOSPC;
+		if (!naturally_aligned<struct spa_io_sequence>(data) ||
+			(data != nullptr && size > std::numeric_limits<uint32_t>::max()))
+			return -EINVAL;
+		if (const int io_res = validate_io_registration_locked(impl, port,
+				registered_io_slot::control, data, data != nullptr ? size : 0,
+				alignof(struct spa_io_sequence)); io_res < 0)
+			return io_res;
 		port->control = (struct spa_io_sequence*)data;
-		port->control_size = size;
+		port->control_size = data != nullptr ? static_cast<uint32_t>(size) : 0;
 		break;
 	default:
 		return -ENOENT;
@@ -2162,55 +4566,64 @@ int impl_node_port_reuse_buffer(void *object,
 {
 	struct impl *impl = (struct impl*)object;
 	struct port *port;
-	int res;
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
 	spa_return_val_if_fail(port_id == 0, -EINVAL);
+	process_activity_guard activity{impl};
+	if (activity.stopping)
+		return -EBUSY;
+	std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
 
 	port = GET_OUT_PORT(impl, port_id);
 
 	spa_return_val_if_fail(buffer_id < port->n_buffers, -EINVAL);
 
-	res = spa_libcamera_buffer_recycle(impl, port, buffer_id);
-
-	return res;
+	return recycle_buffer_locked(impl, port, buffer_id);
 }
 
 int process_control(struct impl *impl, struct spa_pod_sequence *control, uint32_t size)
 {
 	libcamera::ControlList controls(impl->camera->controls());
-	struct spa_pod_parser parser[2];
-	struct spa_pod_frame frame[2];
-	struct spa_pod_sequence seq;
-	const void *seq_body, *c_body;
-	struct spa_pod_control c;
+	const auto *sequence_pod = static_cast<const struct spa_pod *>(
+		spa_pod_from_data(control, size, 0, size));
+	const uint8_t *cursor;
+	const uint8_t *end;
 	int res;
 
-	spa_pod_parser_init_from_data(&parser[0], control, size, 0, size);
-	if (spa_pod_parser_push_sequence_body(&parser[0], &frame[0], &seq, &seq_body) < 0)
-		return 0;
+	if (sequence_pod == nullptr || !spa_pod_is_sequence(sequence_pod))
+		return -EINVAL;
 
-	while (spa_pod_parser_get_control_body(&parser[0], &c, &c_body) >= 0) {
-		switch (c.type) {
+	cursor = reinterpret_cast<const uint8_t *>(&control->body) +
+		sizeof(control->body);
+	end = reinterpret_cast<const uint8_t *>(control) +
+		SPA_POD_SIZE(sequence_pod);
+	while (cursor < end) {
+		const uint64_t remaining = static_cast<uint64_t>(end - cursor);
+		if (remaining < sizeof(struct spa_pod_control))
+			return -EINVAL;
+
+		const auto *c = reinterpret_cast<const struct spa_pod_control *>(cursor);
+		const uint64_t control_size = sizeof(*c) +
+			static_cast<uint64_t>(c->value.size);
+		uint64_t padded_control_size;
+		if (!checked_pod_advance(control_size, remaining,
+				&padded_control_size))
+			return -EINVAL;
+
+		switch (c->type) {
 		case SPA_CONTROL_Properties: {
-			struct spa_pod_object obj;
-			struct spa_pod_prop prop;
-			const void *obj_body, *prop_body;
-
-			if (spa_pod_parser_init_object_body(&parser[1], &frame[1],
-					&c.value, c_body, &obj, &obj_body) < 0)
-				continue;
-			while (spa_pod_parser_get_prop_body(&parser[1], &prop, &prop_body) >= 0) {
-				res = control_list_update_from_prop(controls, &prop, prop_body);
-				if (res < 0)
-					return res;
-			}
+			res = control_list_update_from_props_pod(controls, &c->value,
+				control_size - offsetof(struct spa_pod_control, value));
+			if (res < 0)
+				return res;
 
 			break;
 		}
 		default:
 			break;
 		}
+
+		cursor += padded_control_size;
 	}
 
 	res = spa_libcamera_apply_controls(impl, std::move(controls));
@@ -2229,13 +4642,25 @@ int impl_node_process(void *object)
 	struct buffer *b;
 
 	spa_return_val_if_fail(impl != nullptr, -EINVAL);
+	process_activity_guard activity{impl};
+	if (activity.stopping)
+		return -EBUSY;
+	std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
 
 	port = GET_OUT_PORT(impl, 0);
+	if (const int terminal =
+		impl->completion_error.load(std::memory_order_acquire); terminal < 0)
+		return terminal;
 	if ((io = port->io) == nullptr)
 		return -EIO;
 
-	if (port->control)
-		process_control(impl, &port->control->sequence, port->control_size);
+	if (port->control) {
+		if (port->control_size < sizeof(struct spa_io_sequence))
+			return -EINVAL;
+		if ((res = process_control(impl, &port->control->sequence,
+				port->control_size)) < 0)
+			return res;
+	}
 
 	spa_log_trace(impl->log, "%p: status %d", impl, io->status);
 
@@ -2244,7 +4669,7 @@ int impl_node_process(void *object)
 	}
 
 	if (io->buffer_id < port->n_buffers) {
-		if ((res = spa_libcamera_buffer_recycle(impl, port, io->buffer_id)) < 0)
+		if ((res = recycle_buffer_locked(impl, port, io->buffer_id)) < 0)
 			return res;
 
 		io->buffer_id = SPA_ID_INVALID;
@@ -2256,6 +4681,8 @@ int impl_node_process(void *object)
 
 	b = spa_list_first(&port->queue, struct buffer, link);
 	spa_list_remove(&b->link);
+	b->queued = false;
+	spa_list_init(&b->link);
 	SPA_FLAG_SET(b->flags, BUFFER_FLAG_OUTSTANDING);
 
 	spa_log_trace(impl->log, "%p: dequeue buffer %d", impl, b->id);
@@ -2285,12 +4712,20 @@ const struct spa_node_methods impl_node = {
 	.process = impl_node_process,
 };
 
+struct handle_owner {
+	struct spa_handle handle;
+	std::unique_ptr<struct impl> state;
+};
+
+static_assert(offsetof(struct handle_owner, handle) == 0);
+
 int impl_get_interface(struct spa_handle *handle, const char *type, void **interface)
 {
-	auto *impl = reinterpret_cast<struct impl *>(handle);
-
 	spa_return_val_if_fail(handle != nullptr, -EINVAL);
 	spa_return_val_if_fail(interface != nullptr, -EINVAL);
+	auto *owner = reinterpret_cast<struct handle_owner *>(handle);
+	auto *impl = owner->state.get();
+	spa_return_val_if_fail(impl != nullptr, -EIO);
 
 	if (spa_streq(type, SPA_TYPE_INTERFACE_Node))
 		*interface = &impl->node;
@@ -2300,17 +4735,192 @@ int impl_get_interface(struct spa_handle *handle, const char *type, void **inter
 	return 0;
 }
 
+static bool impl_provider_ownership_retired(struct impl *impl)
+{
+	if (impl == nullptr)
+		return false;
+	std::lock_guard<std::mutex> activity_guard(impl->completion_mutex);
+	return impl->callbacks_inflight == 0 && impl->processes_inflight == 0 &&
+		!impl->source_registered.load(std::memory_order_acquire) &&
+		!impl->camera_started.load(std::memory_order_acquire) &&
+		!impl->signal_connected.load(std::memory_order_acquire) &&
+		impl->source_fd.load(std::memory_order_acquire) < 0;
+}
+
+/* Clear is terminal from PipeWire's point of view, but a provider is allowed
+ * to finish an already-running callback asynchronously.  Keep the complete
+ * implementation owner in a process-lifetime reaper until every provider
+ * object has been retired; dropping the unique_ptr here would turn a late
+ * libcamera callback into a use-after-free. */
+class impl_quarantine_reaper {
+public:
+	static impl_quarantine_reaper &instance()
+	{
+		/* Deliberately leaked so a broken provider cannot make process shutdown
+		 * join an infinite retry thread.  The NODELETE producer keeps this code
+		 * mapped while queued implementations are being retired. */
+		static auto *reaper = new impl_quarantine_reaper();
+		return *reaper;
+	}
+
+	void enqueue(std::shared_ptr<struct impl> state)
+	{
+		if (!state)
+			return;
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			pending_.push_back({ std::move(state), 0,
+				std::chrono::steady_clock::now() });
+			if (!worker_.joinable())
+				worker_ = std::thread([this] { run(); });
+		}
+		condition_.notify_one();
+	}
+
+private:
+	struct entry {
+		std::shared_ptr<struct impl> state;
+		unsigned int attempts;
+		std::chrono::steady_clock::time_point retry_at;
+	};
+
+	std::mutex mutex_;
+	std::condition_variable condition_;
+	std::deque<entry> pending_;
+	std::thread worker_;
+
+	void run()
+	{
+		for (;;) {
+			entry item;
+			{
+				std::unique_lock<std::mutex> lock(mutex_);
+				while (pending_.empty())
+					condition_.wait(lock);
+				auto next = std::min_element(pending_.begin(), pending_.end(),
+					[](const entry &left, const entry &right) {
+						return left.retry_at < right.retry_at;
+					});
+				const auto now = std::chrono::steady_clock::now();
+				if (next->retry_at > now) {
+					condition_.wait_until(lock, next->retry_at);
+					continue;
+				}
+				item = std::move(*next);
+				pending_.erase(next);
+			}
+
+			const int stop_res = item.state->stop(true);
+			(void)stop_res;
+			if (impl_provider_ownership_retired(item.state.get()) &&
+				finalize_impl_resources(item.state.get()) == 0)
+				continue;
+
+			/* A provider failure is retried with a bounded backoff.  There is no
+			 * unsafe timeout-based free: an unretirable owner remains queued until
+			 * a later callback/reset makes its ownership proof complete. */
+			item.attempts = std::min(item.attempts + 1, 120u);
+			const auto delay = std::chrono::milliseconds(
+				std::min<unsigned int>(30000u, 100u << std::min(item.attempts, 8u)));
+			item.retry_at = std::chrono::steady_clock::now() + delay;
+			{
+				std::lock_guard<std::mutex> lock(mutex_);
+				pending_.push_back(std::move(item));
+			}
+			condition_.notify_one();
+		}
+	}
+};
+
+static int finalize_impl_resources(struct impl *impl)
+{
+	if (impl == nullptr)
+		return -EINVAL;
+	std::lock_guard<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	struct port *port = &impl->out_ports[0];
+	if (port->n_buffers > 0) {
+		std::lock_guard<std::mutex> buffer_guard(impl->buffer_mutex);
+		const int clear_res = clear_buffers_locked(port);
+		if (clear_res < 0)
+			return clear_res;
+	}
+	if (!impl->requestPool.empty() || impl->allocator.allocated()) {
+		const int free_res = freeBuffers(impl, port);
+		if (free_res < 0)
+			return free_res;
+	}
+	if (impl->requestPool.size() != 0 || impl->allocator.allocated())
+		return -EBUSY;
+
+	/* spa_libcamera_close() deliberately refuses a configured port.  Detach the
+	 * public marker only for this terminal call and restore it if release fails. */
+	auto old_format = std::move(port->current_format);
+	const int close_res = spa_libcamera_close(impl);
+	if (close_res < 0) {
+		port->current_format = std::move(old_format);
+		return close_res;
+	}
+	old_format.reset();
+	impl->config.reset();
+	impl->rollback_config.reset();
+	port->streamConfig = {};
+	port->rate = defaultClockRate;
+	port->buffers_blocks = 1;
+	impl->format_transaction_failed = false;
+	impl->completion_error.store(0, std::memory_order_release);
+	y700_display_rotation_cleanup(impl);
+	return 0;
+}
+
 int impl_clear(struct spa_handle *handle)
 {
-	std::destroy_at(reinterpret_cast<impl *>(handle));
+	if (handle == nullptr)
+		return -EINVAL;
+	auto *owner = reinterpret_cast<struct handle_owner *>(handle);
+	std::unique_ptr<struct impl> state = std::move(owner->state);
+	std::shared_ptr<struct impl> shared_state(std::move(state));
+	auto *impl = shared_state.get();
+	if (impl == nullptr) {
+		std::destroy_at(owner);
+		return 0;
+	}
+	std::unique_lock<std::recursive_mutex> lifecycle_guard(impl->lifecycle_mutex);
+	auto log_clear_error = [impl](const char *operation, int error) {
+		if (error < 0 && impl->log)
+			spa_log_error(impl->log, "camera clear %s failed: %s",
+				operation, spa_strerror(error));
+	};
+	int stop_res = impl->stop(true);
+	log_clear_error("stop", stop_res);
+	if (stop_res < 0) {
+		/* The production PipeWire loader frees the handle regardless of this
+		 * method's return value.  Retry ownership retirement instead of exposing a
+		 * fake retry contract to a caller that cannot honour it. */
+		stop_res = impl->stop(true);
+		log_clear_error("stop retry", stop_res);
+	}
+	if (!impl_provider_ownership_retired(impl)) {
+		if (impl->log)
+			spa_log_error(impl->log,
+				"camera clear quarantined provider-owned state after stop failure");
+		lifecycle_guard.unlock();
+		impl_quarantine_reaper::instance().enqueue(std::move(shared_state));
+		std::destroy_at(owner);
+		return 0;
+	}
+	const int final_res = finalize_impl_resources(impl);
+	log_clear_error("terminal resource release", final_res);
+	lifecycle_guard.unlock();
+	std::destroy_at(owner);
+	if (final_res < 0)
+		impl_quarantine_reaper::instance().enqueue(std::move(shared_state));
 	return 0;
 }
 
 impl::impl(spa_log *log, spa_loop *data_loop, spa_system *system,
 	   std::shared_ptr<CameraManager> manager, std::shared_ptr<Camera> camera,
 	   std::unique_ptr<CameraConfiguration> config)
-	: handle({ SPA_VERSION_HANDLE, impl_get_interface, impl_clear }),
-	  log(log),
+	: log(log),
 	  data_loop(data_loop),
 	  system(system),
 	  out_ports{{this}},
@@ -2320,6 +4930,7 @@ impl::impl(spa_log *log, spa_loop *data_loop, spa_system *system,
 	  allocator(this->camera)
 {
 	libcamera_log_topic_init(log);
+	source.fd = -1;
 
 	spa_hook_list_init(&hooks);
 
@@ -2346,7 +4957,7 @@ size_t
 impl_get_size(const struct spa_handle_factory *factory,
 	      const struct spa_dict *params)
 {
-	return sizeof(struct impl);
+	return sizeof(struct handle_owner);
 }
 
 int
@@ -2387,7 +4998,7 @@ impl_init(const struct spa_handle_factory *factory,
 
 	auto camera = device_id ? manager->get(device_id) : nullptr;
 	if (!camera) {
-		spa_log_error(log, "unknown camera id: %s", device_id);
+		spa_log_error(log, "unknown camera id: %s", device_id ? device_id : "(unspecified)");
 		return -ENOENT;
 	}
 
@@ -2397,9 +5008,19 @@ impl_init(const struct spa_handle_factory *factory,
 		return -EINVAL;
 	}
 
-	new (handle) impl(log, data_loop, system,
-			  std::move(manager), std::move(camera),
-			  std::move(config));
+	try {
+		auto state = std::make_unique<struct impl>(
+			log, data_loop, system,
+			std::move(manager), std::move(camera), std::move(config));
+		new (handle) handle_owner{
+			{ SPA_VERSION_HANDLE, impl_get_interface, impl_clear },
+			std::move(state),
+		};
+	} catch (const std::bad_alloc &) {
+		return -ENOMEM;
+	} catch (...) {
+		return -EIO;
+	}
 
 	return 0;
 }

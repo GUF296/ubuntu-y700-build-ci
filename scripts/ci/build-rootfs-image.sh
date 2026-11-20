@@ -99,6 +99,7 @@ APT_HTTPS_PROXY=${APT_HTTPS_PROXY:-${https_proxy:-${HTTPS_PROXY:-${APT_HTTP_PROX
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-${DISTRO}-${ARCH}}
 ci_validate_output_prefix "$OUTPUT_PREFIX"
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-rootfs}
+ci_validate_output_dir "$OUTPUT_DIR"
 ROOTFS_IMAGE_SIZE=${ROOTFS_IMAGE_SIZE:-14G}
 ROOTFS_LABEL=${ROOTFS_LABEL:-Ubuntu}
 ROOTFS_PARTLABEL=${ROOTFS_PARTLABEL:-userdata}
@@ -133,7 +134,43 @@ SENSOR_DEB_ARCHIVE_SHA256=${SENSOR_DEB_ARCHIVE_SHA256:-}
 HAPTICS_DEB_ARCHIVE_SHA256=${HAPTICS_DEB_ARCHIVE_SHA256:-}
 OVERLAY_ARCHIVE_SHA256=${OVERLAY_ARCHIVE_SHA256:-}
 ci_require_sudo_password_hash "$USER_SUDO_MODE" "$DEFAULT_USER_PASSWORD_HASH"
+ci_validate_root_password_mode "$ROOT_PASSWORD_MODE"
+if [ "$ROOT_PASSWORD_MODE" = set ]; then
+  [ -n "$ROOT_PASSWORD_HASH" ] ||
+    ci_die 'ROOT_PASSWORD_MODE=set requires ROOT_PASSWORD_HASH'
+  ci_validate_password_hash "$ROOT_PASSWORD_HASH"
+fi
+ci_validate_bool "$SDDM_AUTOLOGIN" SDDM_AUTOLOGIN
+ci_validate_sddm_session "$SDDM_AUTOLOGIN_SESSION"
+ci_validate_distro_name "$DISTRO"
+ci_validate_arch_name "$ARCH"
+ci_validate_debootstrap_variant "$DEBOOTSTRAP_VARIANT"
+ci_validate_uuid "$ROOTFS_UUID" ROOTFS_UUID
+ci_validate_partlabel "$ROOTFS_PARTLABEL" ROOTFS_PARTLABEL
+ci_validate_compression "$COMPRESS"
+ci_validate_volume_size "$CHUNK_SIZE" CHUNK_SIZE
+for path_name in OVERLAY_ARCHIVE DEB_ARCHIVE DEB_DIR SENSOR_DEB_ARCHIVE SENSOR_DEB_DIR \
+  HAPTICS_DEB_ARCHIVE HAPTICS_DEB_DIR CAMERA_STACK_DEB_DIR TB321FU_GPU_SENSOR_SOURCE_DIR; do
+  ci_validate_local_path_value "${!path_name}" "$path_name"
+done
+for bool_name in \
+  BUILD_TB321FU_GPU_SENSOR INSTALL_GNOME_SNAPSHOT INSTALL_FIREFOX \
+  INSTALL_FCITX5_CHINESE DISABLE_SNAPD APPLY_Y700_FIRMWARE_FIXES \
+  APPLY_Y700_AUDIO_POLICY_FIXES CLEAN_APT_CACHE KEEP_RAW_IMAGE; do
+  ci_validate_bool "${!bool_name}" "$bool_name"
+done
+ci_validate_rootfs_image_size "$ROOTFS_IMAGE_SIZE"
+ci_validate_rootfs_label "$ROOTFS_LABEL"
+ci_validate_hostname "$HOSTNAME_NAME"
+ci_validate_account_name "$DEFAULT_USER_NAME"
+ci_validate_timezone "$TZ_REGION"
 ci_validate_https_apt_uri "$MIRROR"
+ci_validate_apt_proxy "$APT_HTTP_PROXY"
+ci_validate_apt_proxy "$APT_HTTPS_PROXY"
+ci_validate_resolv_conf_content "$RESOLV_CONF_CONTENT"
+ci_validate_locales "$LOCALES"
+ci_validate_locale_name "$LANG_NAME"
+ci_validate_lang_name_in_locales "$LANG_NAME" "$LOCALES"
 if [ -n "${APT_SOURCES_LIST:-}" ]; then
   ci_validate_https_apt_sources_list "$APT_SOURCES_LIST"
 fi
@@ -256,12 +293,21 @@ apply_y700_firmware_fixes() {
   copy_firmware_if_missing() {
     local source_rel=$1
     local dest_rel=$2
-    [ -f "$root/$source_rel" ] || return 1
-    if [ -e "$root/$dest_rel" ]; then
+    local source="$root/$source_rel" destination="$root/$dest_rel"
+    [ -f "$source" ] && [ ! -L "$source" ] || return 1
+    if [ -L "$destination" ]; then
+      ci_die "required firmware destination is a symlink: $dest_rel"
+    fi
+    if [ -e "$destination" ]; then
+      [ -f "$destination" ] || ci_die "required firmware destination is not regular: $dest_rel"
+      cmp -s "$source" "$destination" ||
+        ci_die "existing firmware destination differs from the verified source: $dest_rel"
+      [ "$(stat -c '%a' -- "$destination")" = 644 ] ||
+        ci_die "existing firmware destination has an unsafe mode: $dest_rel"
       return 0
     fi
-    install -d -m 0755 "$(dirname "$root/$dest_rel")"
-    install -m 0644 "$root/$source_rel" "$root/$dest_rel"
+    install -d -m 0755 "$(dirname "$destination")"
+    install -m 0644 "$source" "$destination"
   }
 
   # The device overlay stores some firmware under /usr/lib/firmware or vendor-specific
@@ -301,7 +347,10 @@ apply_y700_firmware_fixes() {
   )
   local rel
   for rel in "${required[@]}"; do
-    [ -e "$root/$rel" ] || [ -L "$root/$rel" ] || ci_die "missing Y700 required compatibility file: $rel"
+    [ -f "$root/$rel" ] && [ ! -L "$root/$rel" ] ||
+      ci_die "missing or non-regular Y700 required compatibility file: $rel"
+    [ "$(stat -c '%a' -- "$root/$rel")" = 644 ] ||
+      ci_die "unsafe Y700 required compatibility file mode: $rel"
   done
 }
 
@@ -383,7 +432,7 @@ CONF
 
 prepare_tb321fu_compat_firmware_deb() {
   local payload_dir=$1
-  local archive archive_sha actual_files expected_files member mode leftover
+  local archive archive_sha actual_files expected_files member mode leftover unsupported
   local stage="$work_dir/tb321fu-compat-firmware-stage"
   local package_root="$work_dir/tb321fu-compat-firmware-package"
   local expected="$work_dir/tb321fu-compat-firmware.sha256"
@@ -391,9 +440,12 @@ prepare_tb321fu_compat_firmware_deb() {
   local -a archives=()
 
   [ -d "$payload_dir" ] || return 0
+  unsupported=$(find "$payload_dir" -type f -name '*.tar.zst' -print -quit)
+  [ -z "$unsupported" ] ||
+    ci_die "unsupported .tar.zst device overlay (no bounded decoder): $unsupported"
   while IFS= read -r -d '' archive; do
     archives+=("$archive")
-  done < <(find "$payload_dir" -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' -o -name '*.tar.zst' \) -print0 | sort -z)
+  done < <(find "$payload_dir" -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' \) -print0 | sort -z)
 
   [ "${#archives[@]}" -gt 0 ] || return 0
   [ "${#archives[@]}" -eq 1 ] || ci_die "expected one TB321FU compat overlay, found ${#archives[@]}"
@@ -451,7 +503,7 @@ CONTROL
   rm -rf -- "$stage" "$package_root"
   rm -f -- "$expected"
 
-  leftover=$(find "$payload_dir" -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' -o -name '*.tar.zst' \) -print -quit)
+  leftover=$(find "$payload_dir" -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' \) -print -quit)
   [ -z "$leftover" ] || ci_die "unconverted nested device overlay remains: $leftover"
   ci_log "converted verified TB321FU compat overlay to managed package: $(basename "$output")"
 }
@@ -918,6 +970,33 @@ assert_apt_recorder_integrity()
   }
 }
 
+. /root/ci-apt-common.sh
+ci_validate_apt_proxy "$APT_HTTP_PROXY"
+ci_validate_apt_proxy "$APT_HTTPS_PROXY"
+ci_validate_timezone "$TZ_REGION"
+ci_validate_root_password_mode "$ROOT_PASSWORD_MODE"
+ci_validate_user_sudo_mode "$USER_SUDO_MODE"
+ci_validate_bool "$SDDM_AUTOLOGIN" SDDM_AUTOLOGIN
+ci_validate_sddm_session "$SDDM_AUTOLOGIN_SESSION"
+for bool_name in \
+  INSTALL_FCITX5_CHINESE INSTALL_FIREFOX DISABLE_SNAPD CLEAN_APT_CACHE; do
+  ci_validate_bool "${!bool_name}" "$bool_name"
+done
+if [ "$ROOT_PASSWORD_MODE" = set ]; then
+  [ -n "$ROOT_PASSWORD_HASH" ] ||
+    { echo 'ROOT_PASSWORD_MODE=set requires ROOT_PASSWORD_HASH' >&2; exit 1; }
+  ci_validate_password_hash "$ROOT_PASSWORD_HASH"
+fi
+if [ -n "$DEFAULT_USER_PASSWORD_HASH" ] && [ "$DEFAULT_USER_PASSWORD_HASH" != '!' ]; then
+  ci_validate_password_hash "$DEFAULT_USER_PASSWORD_HASH"
+fi
+if [ -n "$DEFAULT_USER_AUTHORIZED_KEYS" ]; then
+  ci_validate_authorized_keys "$DEFAULT_USER_AUTHORIZED_KEYS"
+fi
+ci_validate_locales "$LOCALES"
+ci_validate_locale_name "$LANG_NAME"
+ci_validate_lang_name_in_locales "$LANG_NAME" "$LOCALES"
+
 ci_bool_chroot()
 {
   case "${1:-}" in
@@ -1178,14 +1257,93 @@ if [ -n "$TZ_REGION" ] && [ -f "/usr/share/zoneinfo/$TZ_REGION" ]; then
   dpkg-reconfigure -f noninteractive tzdata || true
 fi
 
+enable_locale_record() {
+  local locale_line=$1 locale charset extra tmp match_file matched
+  local locale_mode locale_uid locale_gid
+
+  locale_line=${locale_line%$'\r'}
+  locale= charset= extra=
+  read -r locale charset extra <<< "$locale_line"
+  [ -n "$locale" ] && [ -n "$charset" ] && [ -z "$extra" ] || {
+    echo 'invalid LOCALES record' >&2
+    return 1
+  }
+  ci_validate_locale_name "$locale"
+  [[ ${#charset} -le 64 &&
+     $charset =~ ^[A-Za-z0-9][A-Za-z0-9_.@+-]*$ ]] ||
+    ci_die 'locale charset contains unsupported characters'
+  [ -f /etc/locale.gen ] && [ ! -L /etc/locale.gen ] || {
+    echo '/etc/locale.gen is not a regular file' >&2
+    return 1
+  }
+  if ! locale_mode=$(stat -c '%a' /etc/locale.gen) ||
+     ! locale_uid=$(stat -c '%u' /etc/locale.gen) ||
+     ! locale_gid=$(stat -c '%g' /etc/locale.gen); then
+    echo 'unable to read /etc/locale.gen metadata' >&2
+    return 1
+  fi
+  tmp=$(mktemp /etc/locale.gen.XXXXXX)
+  match_file=$(mktemp /etc/locale.gen.match.XXXXXX)
+  if ! awk -v target_locale="$locale" -v target_charset="$charset" '
+    {
+      candidate = $0
+      sub(/^[[:space:]]*#[[:space:]]*/, "", candidate)
+      sub(/^[[:space:]]+/, "", candidate)
+      field_count = split(candidate, parts, /[[:space:]]+/)
+      if (field_count == 2 && parts[1] == target_locale &&
+          parts[2] == target_charset)
+        sub(/^[[:space:]]*#[[:space:]]*/, "", $0)
+      print
+    }
+  ' /etc/locale.gen > "$tmp"; then
+    rm -f -- "$tmp"
+    rm -f -- "$match_file"
+    return 1
+  fi
+  # Keep the transformation atomic while making a missing locale an explicit
+  # error.  A syntactically valid but absent locale would otherwise leave
+  # update-locale pointing at a locale that locale-gen never produced.
+  if ! awk -v target_locale="$locale" -v target_charset="$charset" -v marker="$match_file" '
+    {
+      candidate = $0
+      sub(/^[[:space:]]*#[[:space:]]*/, "", candidate)
+      sub(/^[[:space:]]+/, "", candidate)
+      field_count = split(candidate, parts, /[[:space:]]+/)
+      if (field_count == 2 && parts[1] == target_locale &&
+          parts[2] == target_charset)
+        found = 1
+    }
+    END { print (found ? 1 : 0) > marker }
+  ' /etc/locale.gen; then
+    rm -f -- "$tmp" "$match_file"
+    return 1
+  fi
+  matched=$(<"$match_file")
+  rm -f -- "$match_file"
+  [ "$matched" = 1 ] || {
+    rm -f -- "$tmp"
+    echo "locale is not present in /etc/locale.gen: $locale $charset" >&2
+    return 1
+  }
+  # mktemp creates a 0600 file.  Apply the package file's metadata before the
+  # same-directory rename so locale consumers retain the original access
+  # contract while the content replacement remains atomic.
+  if ! chown -- "$locale_uid:$locale_gid" "$tmp" ||
+     ! chmod -- "$locale_mode" "$tmp" ||
+     ! mv -f -- "$tmp" /etc/locale.gen; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
 while IFS= read -r locale_line; do
-  [ -n "$locale_line" ] || continue
-  sed -i "s/^# *\($locale_line\)/\1/" /etc/locale.gen || true
+  [ -n "${locale_line//[[:space:]]/}" ] || continue
+  enable_locale_record "$locale_line"
 done <<LOCALES_EOF
 $LOCALES
 LOCALES_EOF
-locale-gen || true
-update-locale LANG="$LANG_NAME" || true
+locale-gen
+update-locale LANG="$LANG_NAME"
 
 if compgen -G "/var/tmp/ci-debs/*.deb" >/dev/null; then
   apt_secure install -y --no-install-recommends /var/tmp/ci-debs/*.deb
@@ -1400,6 +1558,11 @@ ci_assert_privileged_payload_security "$rootfs_dir" \
   usr/local/bin/y700-camera-env \
   usr/local/bin/y700-camera-cam \
   usr/local/bin/y700-camera-preview
+
+if [ -n "${CAMERA_STACK_DEB_DIR:-}" ] || [ -f "$rootfs_dir/opt/libcamera-y700/lib/aarch64-linux-gnu/libcamera.so.0.7.1" ]; then
+  ci_log "validating camera dependencies with the target dynamic loader"
+  python3 -I -B "$SCRIPT_DIR/verify-camera-runtime-loader.py" --rootfs "$rootfs_dir"
+fi
 
 cat > "$build_info" <<INFO
 generated=$(ci_iso8601_timestamp)

@@ -876,6 +876,14 @@ ci_prepare_y700_daily_payload_deb() {
   dpkg-deb -R "$daily_deb" "$daily_stage"
   dpkg-deb -x "$haptics_deb" "$haptics_stage"
   ci_remove_tb321fu_legacy_sensor_haptics "$daily_stage"
+  if [ -z "$camera_deb" ]; then
+    # A daily package that still owns camera files is not safe to install
+    # without the dedicated camera package: leaving those files in place
+    # recreates the historical duplicate-ownership path.  Fail before the
+    # daily package is rebuilt so callers cannot silently produce a mixed
+    # payload.
+    ci_assert_no_tb321fu_camera_paths_in_tree "$daily_stage"
+  fi
   for relative in "${firmware[@]}"; do
     [ -f "$daily_stage/$relative" ] || ci_die "daily haptics firmware is missing: /$relative"
     [ -f "$haptics_stage/$relative" ] || ci_die "canonical haptics firmware is missing: /$relative"

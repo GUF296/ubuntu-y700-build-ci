@@ -5,8 +5,11 @@ output=${1:?usage: write-portable-checksums.sh OUTPUT PATH...}
 shift
 [ "$#" -gt 0 ] || { printf 'at least one input path is required\n' >&2; exit 1; }
 
-mkdir -p "$(dirname -- "$output")"
-temporary=$(mktemp "${output}.tmp.XXXXXX")
+output_parent=${output%/*}
+[ "$output_parent" != "$output" ] || output_parent=.
+[ ! -L "$output_parent" ] || { printf 'checksum output parent must not be a symlink\n' >&2; exit 1; }
+mkdir -p -- "$output_parent"
+temporary=$(mktemp "$output_parent/.$(basename -- "$output").tmp.XXXXXX")
 cleanup() { rm -f -- "$temporary"; }
 trap cleanup EXIT INT TERM
 
@@ -20,13 +23,13 @@ write_entry() {
 }
 
 for input in "$@"; do
-  if [ -d "$input" ]; then
+  if [ -d "$input" ] && [ ! -L "$input" ]; then
     label=${input%/}
     label=${label##*/}
     while IFS= read -r -d '' file; do
       write_entry "$file" "$label"
-    done < <(find "$input" -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
-  elif [ -f "$input" ]; then
+    done < <(find -P "$input" -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
+  elif [ -f "$input" ] && [ ! -L "$input" ]; then
     parent=${input%/*}
     [ "$parent" != "$input" ] || parent=.
     label=${parent%/}

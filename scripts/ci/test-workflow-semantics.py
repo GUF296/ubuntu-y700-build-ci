@@ -4,12 +4,20 @@
 from __future__ import annotations
 
 import pathlib
+import importlib.util
 import re
 import subprocess
 import sys
 import tempfile
 
 import yaml
+
+_camera_policy_spec = importlib.util.spec_from_file_location(
+    "workflow_camera_version_policy", pathlib.Path(__file__).with_name("camera-package-policy.py"))
+_camera_policy = importlib.util.module_from_spec(_camera_policy_spec)
+_camera_policy_spec.loader.exec_module(_camera_policy)
+APPROVED_CAMERA_VERSION = _camera_policy.approved_version()
+CAMERA_VERSION_DEFAULT_COMMAND = 'python3 -I -B scripts/ci/camera-package-policy.py rootfs-default >> "$RUNNER_TEMP/rootfs.env"'
 
 
 class WorkflowLoader(yaml.SafeLoader):
@@ -24,14 +32,90 @@ for first, resolvers in list(WorkflowLoader.yaml_implicit_resolvers.items()):
 
 
 PINNED_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
+CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+UPLOAD_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+EXACT_WORKFLOW_SHA = "$" + "{{ github.sha }}"
+CAMERA_ARTIFACT_NAME = (
+    "camera-stack-" + "$" + "{{ github.run_id }}-" + "$" + "{{ github.run_attempt }}"
+)
+CAMERA_ARTIFACT_DIGEST = (
+    "$" + "{{ needs.camera-producer.outputs.artifact_digest }}"
+)
+CAMERA_ARTIFACT_ID = "$" + "{{ needs.camera-producer.outputs.artifact_id }}"
 SECRET_EXPR = re.compile(r"^\$\{\{\s*secrets\.([A-Z0-9_]+)\s*}}$")
 FORBIDDEN_INPUT = re.compile(
     r"(?:^|_)(?:secret|token|authorized_keys|password|password_hash)$"
 )
+MAX_WORKFLOW_DISPATCH_INPUTS = 10
+APPROVED_KERNEL_SOURCE_PROFILE = {
+    "KERNEL_ARTIFACT_ARCHIVE": (
+        "https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/"
+        "tb321fu-kernel-bootstrap-570b90203d97-20260729.4/"
+        "tb321fu-kernel-artifacts-7.1.1-00009-g570b90203d97.tar.gz"
+    ),
+    "KERNEL_ARTIFACT_ARCHIVE_SHA256": (
+        "05f4a3e391988d8b6980b2c94304096e34e089661867f0c3b0f3048c54cba83c"
+    ),
+    "KERNEL_BUILD_ARCHIVE": (
+        "https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/"
+        "tb321fu-kernel-bootstrap-570b90203d97-20260729.4/"
+        "tb321fu-kernel-build-sdk-7.1.1-00009-g570b90203d97.tar.gz"
+    ),
+    "KERNEL_BUILD_ARCHIVE_SHA256": (
+        "7f9b12bd02c1155c9900a33c823d088e1a9f72689dea28c8ee582a31304c7c49"
+    ),
+    "KERNEL_BOOTSTRAP_PRODUCER_COMMIT": (
+        "cbc1b36c37c140271bb688c5b1a79b10e669ba2c"
+    ),
+    "KERNEL_BOOTSTRAP_PRODUCER_TREE": (
+        "0d84ed4c3d8cd13b70624e47800ae932cb80acac"
+    ),
+    "KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256": (
+        "f554dc63a60a8a5c31f7acac67ca654596d7ff006cdb6845be940e03ac0c3e90"
+    ),
+}
+APPROVED_DEVICE_PROFILE = {
+    "DEB_ARCHIVE": (
+        "https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/"
+        "tb321fu-kernel-bootstrap-570b90203d97-20260729.4/"
+        "tb321fu-device-debs-7.1.1-00009-g570b90203d97.tar.gz"
+    ),
+    "DEB_ARCHIVE_SHA256": (
+        "1d9aec962398a4ee6876f013cf8348e57a76034c466c77df62a5bbba1488940a"
+    ),
+    "BUILD_TB321FU_CAMERA_STACK": "1",
+    "CAMERA_STACK_ARCHIVE": "",
+    "CAMERA_STACK_ARCHIVE_SHA256": "",
+    "CAMERA_STACK_DIR": "",
+    "CAMERA_STACK_DEB_VERSION": APPROVED_CAMERA_VERSION,
+}
+APPROVED_CAMERA_PROFILE = {
+    "ARCH": "arm64",
+    "BUILD_TB321FU_CAMERA_STACK": "1",
+    "CAMERA_STACK_ARCHIVE": "",
+    "CAMERA_STACK_ARCHIVE_SHA256": "",
+    "CAMERA_STACK_DIR": "",
+    "CAMERA_STACK_DEB_VERSION": APPROVED_CAMERA_VERSION,
+}
 
 
 def fail(message: str) -> None:
     raise SystemExit(f"workflow semantic check failed: {message}")
+
+
+def validate_camera_version_default(run: str) -> None:
+    if run.splitlines().count(CAMERA_VERSION_DEFAULT_COMMAND) != 1:
+        fail("camera defaults must read the committed version policy exactly once")
+    if re.search(r"(?m)^\s*CAMERA_STACK_DEB_VERSION=", run):
+        fail("camera default version must not be duplicated as a literal")
+    root_open = 'cat > "$RUNNER_TEMP/rootfs.env" <<' + chr(39) + 'CONFIG_EOF' + chr(39)
+    start = run.find(root_open)
+    end = run.find(chr(10) + 'CONFIG_EOF', start)
+    command = run.find(CAMERA_VERSION_DEFAULT_COMMAND)
+    override = run.find('if [ -n "$INPUT_ROOTFS_CONFIG" ]')
+    if start < 0 or end < 0 or not end < command or (override >= 0 and command >= override):
+        fail("camera version default must follow rootfs defaults and precede user overrides")
 
 
 def scalar_nodes(value: object, path: tuple[object, ...] = ()):
@@ -59,6 +143,10 @@ def require_mapping(value: object, label: str) -> dict:
     if not isinstance(value, dict):
         fail(f"{label} must be a mapping")
     return value
+
+
+def dispatch_input_count_is_supported(inputs: dict) -> bool:
+    return len(inputs) <= MAX_WORKFLOW_DISPATCH_INPUTS
 
 
 def run_verified_rootfs_fixtures(rootfs_run: str) -> None:
@@ -139,6 +227,8 @@ def run_tagged_haptics_policy_fixtures(handoff_run: str) -> None:
         "PATH": "/usr/bin:/bin",
         "RELEASE_TAG": "",
         "PRERELEASE": "1",
+        "DEB_ARCHIVE": "https://example.invalid/device.tar.gz",
+        "DEB_ARCHIVE_SHA256": "a" * 64,
         "HAPTICS_DEB_ARCHIVE": "",
         "HAPTICS_DEB_ARCHIVE_SHA256": "",
         "HAPTICS_DEB_DIR": "",
@@ -162,6 +252,30 @@ def run_tagged_haptics_policy_fixtures(handoff_run: str) -> None:
                 "HAPTICS_DEB_ARCHIVE": archive,
                 "HAPTICS_DEB_ARCHIVE_SHA256": digest,
                 "HAPTICS_DEB_DIR": "/verified/haptics-dir",
+            },
+            False,
+        ),
+        (
+            "tagged device directory",
+            {
+                "RELEASE_TAG": "test-20260723",
+                "DEB_ARCHIVE": archive,
+                "DEB_ARCHIVE_SHA256": digest,
+                "HAPTICS_DEB_ARCHIVE": archive,
+                "HAPTICS_DEB_ARCHIVE_SHA256": digest,
+                "DEB_DIR": "/unverified/device-dir",
+            },
+            False,
+        ),
+        (
+            "tagged sensor directory",
+            {
+                "RELEASE_TAG": "test-20260723",
+                "DEB_ARCHIVE": archive,
+                "DEB_ARCHIVE_SHA256": digest,
+                "HAPTICS_DEB_ARCHIVE": archive,
+                "HAPTICS_DEB_ARCHIVE_SHA256": digest,
+                "SENSOR_DEB_DIR": "/unverified/sensor-dir",
             },
             False,
         ),
@@ -206,6 +320,16 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         "on.workflow_dispatch",
     )
     inputs = require_mapping(dispatch.get("inputs"), "workflow_dispatch.inputs")
+    if not dispatch_input_count_is_supported(inputs):
+        fail(
+            "workflow_dispatch exceeds GitHub's 10-input limit: "
+            f"{len(inputs)}"
+        )
+    source_config = require_mapping(
+        inputs.get("source_config"), "workflow_dispatch.inputs.source_config"
+    )
+    if source_config.get("type") != "string":
+        fail("source_config must remain the single advanced source-profile input")
     for name in inputs:
         if not isinstance(name, str):
             fail("dispatch input names must be strings")
@@ -221,7 +345,27 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         fail("ubuntu_mirror may offer only the pinned HTTPS ports mirror")
 
     jobs = require_mapping(data.get("jobs"), "jobs")
+    camera = require_mapping(jobs.get("camera-producer"), "jobs.camera-producer")
     build = require_mapping(jobs.get("build"), "jobs.build")
+    if camera.get("runs-on") != "ubuntu-24.04":
+        fail("camera producer must run on the amd64 ubuntu-24.04 runner")
+    if build.get("runs-on") != "ubuntu-24.04-arm":
+        fail("rootfs build must remain on ubuntu-24.04-arm")
+    if build.get("needs") != "camera-producer":
+        fail("rootfs build must depend directly on the camera producer")
+    camera_permissions = require_mapping(
+        camera.get("permissions"), "jobs.camera-producer.permissions"
+    )
+    if camera_permissions != {"contents": "read"}:
+        fail("camera producer must have only contents: read")
+    camera_outputs = require_mapping(
+        camera.get("outputs"), "jobs.camera-producer.outputs"
+    )
+    if camera_outputs != {
+        "artifact_id": "$" + "{{ steps.upload_camera.outputs.artifact-id }}",
+        "artifact_digest": "$" + "{{ steps.upload_camera.outputs.artifact-digest }}"
+    }:
+        fail("camera producer does not expose the upload action identity exactly")
     permissions = require_mapping(build.get("permissions"), "jobs.build.permissions")
     if permissions.get("contents") != "read":
         fail("build job must have contents: read")
@@ -259,6 +403,318 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
     if rootfs_step is None:
         fail("rootfs build step is missing")
 
+    # The validators import PyYAML and run before the large build-tool install.
+    # Make that dependency an explicit, ordered workflow contract so a runner
+    # image change cannot turn the first validation step into an import failure.
+    validation_indexes = [
+        index
+        for index, raw_step in enumerate(steps)
+        if isinstance(raw_step, dict)
+        and raw_step.get("name") == "Validate workflow input boundaries"
+    ]
+    if len(validation_indexes) != 1:
+        fail("workflow must contain exactly one validation step")
+    validation_index = validation_indexes[0]
+    validation_step = require_mapping(
+        steps[validation_index], "workflow validation step"
+    )
+    validation_run = validation_step.get("run")
+    if not isinstance(validation_run, str):
+        fail("workflow validation step must have a shell body")
+    dependency_indexes = [
+        index
+        for index, raw_step in enumerate(steps)
+        if isinstance(raw_step, dict)
+        and raw_step.get("name") == "Install validation dependencies"
+    ]
+    if len(dependency_indexes) != 1:
+        fail("workflow must install validation dependencies exactly once")
+    dependency_index = dependency_indexes[0]
+    dependency_step = require_mapping(
+        steps[dependency_index], "validation dependency step"
+    )
+    dependency_run = dependency_step.get("run")
+    if not isinstance(dependency_run, str) or "python3-yaml" not in dependency_run:
+        fail("validation dependency step must install python3-yaml")
+    if "sudo apt-get install -y python3-yaml g++" not in dependency_run:
+        fail("validation must install the native C++ camera-regression dependency")
+    if dependency_index >= validation_index:
+        fail("python3-yaml must be installed before workflow validation")
+
+    required_camera_gates = (
+        "python3 -B scripts/ci/test-camera-artifact-handoff.py",
+        "python3 -B scripts/ci/test-camera-release-assets.py",
+        "python3 -B scripts/ci/test-camera-overlay-verifier.py",
+        "python3 -B scripts/ci/test-camera-plugin-producer.py",
+        "python3 -B scripts/ci/test-libcamera-source-export.py",
+        "python3 -B scripts/ci/test-libcamera-source-materialization.py",
+        "python3 -B scripts/ci/test-libcamera-build-adapter.py",
+        "python3 -B scripts/ci/test-libcamera-build-environment.py",
+        "python3 -B scripts/ci/test-libcamera-environment-preparation.py",
+        "python3 -B scripts/ci/test-libcamera-runtime.py",
+        "python3 -B scripts/ci/test-camera-runtime-dependencies.py",
+        "python3 -B scripts/ci/test-camera-runtime-loader.py",
+        "python3 -B scripts/ci/test-camera-source-contract.py",
+        "bash scripts/ci/test-camera-overlay-installer.sh",
+    )
+    for gate in required_camera_gates:
+        if validation_run.count(gate) != 1:
+            fail(f"workflow must run the camera gate exactly once: {gate}")
+    if validation_run.count("python3 -B scripts/ci/test-camera-data-loop.py") != 1:
+        fail("workflow must run the native camera data-loop regression exactly once")
+    if "export PYTHONDONTWRITEBYTECODE=1" not in validation_run:
+        fail("workflow validation must disable Python bytecode residue")
+
+    apply_config_run = step_scripts.get("Apply workflow configuration")
+    if apply_config_run is None:
+        fail("workflow configuration step is missing")
+    validate_camera_version_default(apply_config_run)
+    for domain in ("rootfs", "boot", "source"):
+        call_head = (
+            f'scripts/ci/apply-workflow-config.sh "$RUNNER_TEMP/{domain}.env"'
+        )
+        notes_argument = f'"$config_notes_dir/{domain}.env"'
+        if apply_config_run.count(call_head) != 1 or apply_config_run.count(
+            notes_argument
+        ) != 1:
+            fail(f"{domain} configuration does not produce validated canonical notes")
+        call_index = apply_config_run.index(call_head)
+        notes_index = apply_config_run.index(notes_argument)
+        if not call_index < notes_index <= call_index + len(call_head) + 32:
+            fail(f"{domain} canonical notes path is detached from its validator call")
+        raw_copy = (
+            f'cp "$RUNNER_TEMP/{domain}.env" "$config_notes_dir/{domain}.env"'
+        )
+        if raw_copy in apply_config_run:
+            fail(f"{domain} raw configuration is copied into public notes")
+
+    build_dependency_indexes = [
+        index
+        for index, raw_step in enumerate(steps)
+        if isinstance(raw_step, dict) and raw_step.get("name") == "Install dependencies"
+    ]
+    if len(build_dependency_indexes) != 1:
+        fail("workflow must contain one ARM build dependency step")
+    build_dependency_run = require_mapping(
+        steps[build_dependency_indexes[0]], "build dependency step"
+    ).get("run")
+    if not isinstance(build_dependency_run, str):
+        fail("ARM build dependency step must have a shell body")
+
+    camera_steps = camera.get("steps")
+    if not isinstance(camera_steps, list) or not camera_steps:
+        fail("jobs.camera-producer.steps must be a non-empty list")
+    camera_named: dict[str, tuple[int, dict]] = {}
+    for index, raw_step in enumerate(camera_steps):
+        step = require_mapping(raw_step, f"jobs.camera-producer.steps[{index}]")
+        name = step.get("name")
+        if isinstance(name, str):
+            if name in camera_named:
+                fail(f"camera producer has a duplicate step name: {name}")
+            camera_named[name] = index, step
+        uses = step.get("uses")
+        if uses is not None and (
+            not isinstance(uses, str) or not PINNED_ACTION.fullmatch(uses)
+        ):
+            fail(f"camera step {index} action is not commit-pinned: {uses!r}")
+
+    expected_camera_steps = (
+        "Checkout exact camera source",
+        "Apply camera build configuration",
+        "Install locked camera producer dependencies",
+        "Validate camera producer contracts",
+        "Build camera artifact handoff",
+        "Upload camera artifact handoff",
+    )
+    for name in expected_camera_steps:
+        if name not in camera_named:
+            fail(f"camera producer step is missing: {name}")
+
+    _, camera_checkout = camera_named["Checkout exact camera source"]
+    if camera_checkout.get("uses") != CHECKOUT_ACTION:
+        fail("camera producer checkout is not pinned to the approved action")
+    camera_checkout_with = require_mapping(
+        camera_checkout.get("with"), "camera checkout.with"
+    )
+    if camera_checkout_with != {
+        "ref": EXACT_WORKFLOW_SHA,
+        "persist-credentials": "false",
+    }:
+        fail("camera producer must checkout github.sha without persisted credentials")
+
+    config_index, camera_config = camera_named["Apply camera build configuration"]
+    config_env = require_mapping(camera_config.get("env"), "camera config env")
+    if config_env != {"INPUT_ROOTFS_CONFIG": "$" + "{{ inputs.rootfs_config }}"}:
+        fail("camera producer config must receive only rootfs_config through env")
+    config_run = camera_config.get("run")
+    if not isinstance(config_run, str):
+        fail("camera producer config step has no shell body")
+    for key, expected in APPROVED_CAMERA_PROFILE.items():
+        if key == "CAMERA_STACK_DEB_VERSION":
+            validate_camera_version_default(config_run)
+            continue
+        token = f"{key}={expected}"
+        if token not in config_run:
+            fail(f"camera producer default config is missing: {token}")
+    if 'scripts/ci/apply-workflow-config.sh "$RUNNER_TEMP/rootfs.env"' not in config_run:
+        fail("camera producer bypasses the shared workflow config validator")
+
+    dependency_index, camera_dependency = camera_named[
+        "Install locked camera producer dependencies"
+    ]
+    camera_dependency_run = camera_dependency.get("run")
+    if not isinstance(camera_dependency_run, str):
+        fail("camera dependency step has no shell body")
+    expected_provisioning = chr(10).join((
+        "set -euo pipefail",
+        "sudo --preserve-env=GITHUB_ACTIONS,RUNNER_OS,RUNNER_ARCH " + chr(92),
+        "  bash scripts/ci/install-libcamera-build-environment.sh --install",
+    ))
+    if camera_dependency_run.strip() != expected_provisioning:
+        fail("camera dependency step must use the exact locked full-runtime installer")
+    camera_toolchain_lock = (
+        workflow.parent.parent.parent
+        / "source/tb321fu-camera-rootfs-overlay/source/"
+        "spa-libcamera-producer/TOOLCHAIN.tsv"
+    )
+    try:
+        toolchain_lines = camera_toolchain_lock.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        fail("camera toolchain lock is missing")
+    if not toolchain_lines or toolchain_lines[0] != "kind\tname\tversion\tsha256":
+        fail("camera toolchain lock header mismatch")
+    locked_camera_packages: list[tuple[str, str]] = []
+    for line in toolchain_lines[1:]:
+        fields = line.split("\t")
+        if len(fields) != 4:
+            fail("camera toolchain lock row is malformed")
+        if fields[0] == "package":
+            locked_camera_packages.append((fields[1], fields[2]))
+    if not locked_camera_packages:
+        fail("camera toolchain lock has no package closure")
+    planner_spec = importlib.util.spec_from_file_location(
+        "workflow_camera_package_plan",
+        pathlib.Path(__file__).with_name("prepare-libcamera-build-environment.py"),
+    )
+    planner = importlib.util.module_from_spec(planner_spec)
+    planner_spec.loader.exec_module(planner)
+    plan = set(planner.package_plan(spa_lock=camera_toolchain_lock))
+    for package, version in locked_camera_packages:
+        if f"{package}={version}" not in plan and f"{package}:amd64={version}" not in plan:
+            fail(f"camera dependency step omits locked package/version: {package}")
+        if f"{package}={version}" in build_dependency_run:
+            fail(f"amd64 camera package leaked into the ARM dependency step: {package}")
+    if "libspa-0.2-dev:amd64" in build_dependency_run:
+        fail("ARM build dependency step requests an amd64 Camera header package")
+
+    validation_index_camera, camera_validation = camera_named[
+        "Validate camera producer contracts"
+    ]
+    camera_validation_run = camera_validation.get("run")
+    if not isinstance(camera_validation_run, str):
+        fail("camera producer validation step has no shell body")
+    for gate in required_camera_gates:
+        if camera_validation_run.count(gate) != 1:
+            fail(f"camera producer must run its gate exactly once: {gate}")
+
+    camera_build_index, camera_build = camera_named["Build camera artifact handoff"]
+    camera_build_run = camera_build.get("run")
+    if not isinstance(camera_build_run, str):
+        fail("camera producer build step has no shell body")
+    for token in (
+        "bash scripts/ci/build-tb321fu-camera-stack-deb.sh",
+        "scripts/ci/camera-artifact-handoff.py create",
+        "scripts/ci/camera-artifact-handoff.py verify",
+        '--repository="$GITHUB_REPOSITORY"',
+        '--commit="$GITHUB_SHA"',
+        '--run-id="$GITHUB_RUN_ID"',
+        '--run-attempt="$GITHUB_RUN_ATTEMPT"',
+    ):
+        if camera_build_run.count(token) != 1:
+            fail(f"camera producer build/handoff contract is missing: {token}")
+    if not config_index < dependency_index < validation_index_camera < camera_build_index:
+        fail("camera configuration, dependencies, validation, and build are misordered")
+
+    upload_index, camera_upload = camera_named["Upload camera artifact handoff"]
+    if camera_upload.get("id") != "upload_camera":
+        fail("camera upload step must retain the output-producing id")
+    if camera_upload.get("uses") != UPLOAD_ACTION:
+        fail("camera handoff upload action is not pinned to the approved commit")
+    camera_upload_with = require_mapping(camera_upload.get("with"), "camera upload.with")
+    if camera_upload_with != {
+        "name": CAMERA_ARTIFACT_NAME,
+        "path": "out/tb321fu-camera-stack-debs",
+        "if-no-files-found": "error",
+        "retention-days": 3,
+        "compression-level": 0,
+    }:
+        fail("camera handoff upload does not have the exact bounded artifact contract")
+    if camera_build_index >= upload_index:
+        fail("camera handoff is uploaded before it is built and verified")
+
+    build_named = {
+        step.get("name"): (index, step)
+        for index, step in enumerate(steps)
+        if isinstance(step, dict) and isinstance(step.get("name"), str)
+    }
+    if "Build verified camera stack deb" in build_named:
+        fail("ARM rootfs job still builds the amd64-hosted Camera producer")
+    try:
+        download_index, camera_download = build_named[
+            "Download camera artifact handoff"
+        ]
+        verify_index, camera_verify = build_named["Verify camera artifact handoff"]
+    except KeyError:
+        fail("ARM rootfs job is missing the Camera artifact consumer")
+    if camera_download.get("uses") != DOWNLOAD_ACTION:
+        fail("camera handoff download action is not pinned to the approved commit")
+    if require_mapping(camera_download.get("with"), "camera download.with") != {
+        "artifact-ids": CAMERA_ARTIFACT_ID,
+        "path": "out/tb321fu-camera-stack-debs",
+        "merge-multiple": "true",
+    }:
+        fail("ARM job downloads an unexpected Camera artifact")
+    camera_verify_env = require_mapping(camera_verify.get("env"), "camera verify env")
+    if camera_verify_env != {
+        "CAMERA_ARTIFACT_ID": CAMERA_ARTIFACT_ID,
+        "CAMERA_ARTIFACT_DIGEST": CAMERA_ARTIFACT_DIGEST,
+    }:
+        fail("ARM Camera consumer does not receive the producer artifact identity")
+    camera_verify_run = camera_verify.get("run")
+    if not isinstance(camera_verify_run, str):
+        fail("ARM Camera consumer has no shell body")
+    for token in (
+        "scripts/ci/camera-artifact-handoff.py verify",
+        '[[ $CAMERA_ARTIFACT_ID =~ ^[1-9][0-9]*$ ]]',
+        'CAMERA_PRODUCER_ARTIFACT_ID=%s',
+        'ci_assert_tb321fu_camera_stack_deb "$camera_deb" "$camera_policy_stage"',
+        'TB321FU_CAMERA_STACK_DEB_DIR=out/tb321fu-camera-stack-debs',
+    ):
+        if camera_verify_run.count(token) != 1:
+            fail(f"ARM Camera consumer is missing its verification contract: {token}")
+    apply_index = build_named["Apply workflow configuration"][0]
+    rootfs_index = build_named["Build rootfs image"][0]
+    if not apply_index < download_index < verify_index < rootfs_index:
+        fail("Camera artifact is not configured, downloaded, verified, then consumed")
+
+    grub_integrity_indexes = [
+        index
+        for index, raw_step in enumerate(steps)
+        if isinstance(raw_step, dict)
+        and raw_step.get("name") == "Validate GRUB image integrity"
+    ]
+    if len(grub_integrity_indexes) != 1:
+        fail("workflow must contain exactly one GRUB image integrity step")
+    grub_integrity_run = require_mapping(
+        steps[grub_integrity_indexes[0]], "GRUB image integrity step"
+    ).get("run")
+    if not isinstance(grub_integrity_run, str) or grub_integrity_run.count(
+        "bash scripts/ci/test-grub-image-integrity.sh"
+    ) != 1:
+        fail("GRUB image integrity step must run its real-FAT fixture exactly once")
+    if build_dependency_indexes[0] >= grub_integrity_indexes[0]:
+        fail("dosfstools and mtools must be installed before the GRUB integrity fixture")
+
     for name in ("Build source sensor debs", "Build source haptics deb"):
         if name in step_scripts:
             fail(f"unverified inline package producer remains reachable: {name}")
@@ -292,13 +748,15 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
     if handoff_run is None:
         fail("kernel bundle handoff step is missing")
     tagged_haptics_guard = (
-        'if [ -n "$RELEASE_TAG" ] && { [ -n "${HAPTICS_DEB_DIR:-}" ] || '
+        'if [ -n "$RELEASE_TAG" ] && { [ -n "${DEB_DIR:-}" ] || '
+        '[ -n "${HAPTICS_DEB_DIR:-}" ] || [ -n "${SENSOR_DEB_DIR:-}" ] || '
+        '[ -z "${DEB_ARCHIVE:-}" ] || [ -z "${DEB_ARCHIVE_SHA256:-}" ] || '
         '[ -z "${HAPTICS_DEB_ARCHIVE:-}" ] || '
         '[ -z "${HAPTICS_DEB_ARCHIVE_SHA256:-}" ]; }; then'
     )
     haptics_policy_message = (
-        "Tagged releases require HAPTICS_DEB_ARCHIVE and "
-        "HAPTICS_DEB_ARCHIVE_SHA256; HAPTICS_DEB_DIR is artifact-only."
+        "Tagged releases require pinned DEB_ARCHIVE/HAPTICS_DEB_ARCHIVE inputs; "
+        "local DEB_DIR, SENSOR_DEB_DIR, and HAPTICS_DEB_DIR are artifact-only."
     )
     handoff_call = "bash scripts/ci/verify-kernel-bundle.sh"
     release_provenance_call = "bash scripts/ci/validate-release-input-provenance.sh"
@@ -311,6 +769,21 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         fail("tagged release input provenance gate is missing")
     if handoff_run.index(release_provenance_call) > handoff_run.index(handoff_call):
         fail("tagged release input provenance gate runs after bundle verification")
+    kernel_source_handoff = (
+        'KERNEL_BUILD_ARCHIVE="$KERNEL_BUILD_ARCHIVE"',
+        'KERNEL_BUILD_ARCHIVE_SHA256="$KERNEL_BUILD_ARCHIVE_SHA256"',
+        'KERNEL_BOOTSTRAP_PRODUCER_COMMIT="$KERNEL_BOOTSTRAP_PRODUCER_COMMIT"',
+        'KERNEL_BOOTSTRAP_PRODUCER_TREE="$KERNEL_BOOTSTRAP_PRODUCER_TREE"',
+        (
+            'KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256='
+            '"$KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256"'
+        ),
+    )
+    for token in kernel_source_handoff:
+        if token not in handoff_run:
+            fail(f"kernel source-profile handoff is missing: {token}")
+        if handoff_run.index(token) > handoff_run.index(handoff_call):
+            fail(f"kernel source-profile input is assigned after verifier: {token}")
     run_tagged_haptics_policy_fixtures(handoff_run)
 
     release_run = step_scripts.get("Upload release assets")
@@ -321,6 +794,8 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         '${OUTPUT_PREFIX}-rootfs.packages.tsv"'
     )
     release_notes = 'notes="$release_dir/BUILD-PARAMETERS.md"'
+    camera_artifact_id_note = "Camera producer artifact ID:"
+    camera_artifact_digest_note = "Camera producer artifact SHA-256:"
     release_staging_validator = 'bash scripts/ci/validate-release-staging.sh "$release_stage"'
     release_checksums = 'bash scripts/ci/write-release-manifest.sh "$release_stage"'
     apt_provenance = (
@@ -353,6 +828,21 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         'stage_release_file "$VERIFIED_KERNEL_BUNDLE_DIR/KBUILD-FLAGS.tsv"',
         '"$release_dir/KBUILD-FLAGS.tsv"',
     )
+    camera_evidence = (
+        'stage_release_file out/tb321fu-camera-stack-debs/CAMERA-HANDOFF.tsv',
+        '"$release_dir/CAMERA-HANDOFF.tsv"',
+        (
+            "stage_release_file out/tb321fu-camera-stack-debs/"
+            "tb321fu-camera-stack-build-report.txt"
+        ),
+        '"$release_dir/CAMERA-BUILD-REPORT.txt"',
+        'camera_release_deb=$(python3 -I -B scripts/ci/camera-package-policy.py deb-name)',
+        'stage_release_file "out/tb321fu-camera-stack-debs/$camera_release_deb"',
+        '"$release_dir/$camera_release_deb"',
+        'stage_release_file out/tb321fu-camera-stack-debs/SHA256SUMS-tb321fu-camera-stack-debs.txt',
+        '"$release_dir/SHA256SUMS-tb321fu-camera-stack-debs.txt"',
+        'python3 -I -B scripts/ci/verify-camera-release-assets.py "$release_dir"',
+    )
     for token in (
         package_inventory,
         '"$release_dir/ROOTFS-PACKAGES.tsv"',
@@ -363,13 +853,23 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         apt_sources,
         '"$release_dir/APT-SOURCES.txt"',
         release_notes,
+        camera_artifact_id_note,
+        camera_artifact_digest_note,
         release_staging_validator,
         release_checksums,
         *kernel_evidence,
+        *camera_evidence,
     ):
         if token not in release_run:
             fail(f"release staging is missing rooted provenance evidence: {token}")
-    for token in (package_inventory, apt_provenance, apt_bootstrap, apt_sources, *kernel_evidence):
+    for token in (
+        package_inventory,
+        apt_provenance,
+        apt_bootstrap,
+        apt_sources,
+        *kernel_evidence,
+        *camera_evidence,
+    ):
         if release_run.index(token) > release_run.index(release_checksums):
             fail("rootfs provenance evidence is staged after release checksums")
     if release_run.index(release_notes) > release_run.index(release_checksums):
@@ -382,6 +882,13 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         fail("combined checksum step is missing")
     if "out/ci-release/APT-BOOTSTRAP.tsv" not in combined_checksums_run:
         fail("combined checksum manifest omits APT bootstrap evidence")
+    for token in (
+        "out/tb321fu-camera-stack-debs/CAMERA-HANDOFF.tsv",
+        "out/ci-release/CAMERA-HANDOFF.tsv",
+        "checksum_dirs+=(out/tb321fu-camera-stack-debs)",
+    ):
+        if token not in combined_checksums_run:
+            fail(f"combined checksum manifest omits Camera evidence: {token}")
 
     secret_paths: list[tuple[tuple[object, ...], str]] = []
     for path, value in scalar_nodes(data):
@@ -417,6 +924,17 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
 
 def validate_rootfs_contract(rootfs: pathlib.Path) -> None:
     text = rootfs.read_text(encoding="utf-8")
+    loader_block = chr(10).join((
+        'if [ -n "${CAMERA_STACK_DEB_DIR:-}" ] || [ -f "$rootfs_dir/opt/libcamera-y700/lib/aarch64-linux-gnu/libcamera.so.0.7.1" ]; then',
+        '  ci_log "validating camera dependencies with the target dynamic loader"',
+        '  python3 -I -B "$SCRIPT_DIR/verify-camera-runtime-loader.py" --rootfs "$rootfs_dir"',
+        'fi',
+    ))
+    if text.count(loader_block) != 1:
+        fail(f"{rootfs}: final camera loader gate is missing or bypassed")
+    if not (text.index('ci_assert_privileged_payload_security "$rootfs_dir"')
+            < text.index(loader_block) < text.index('cat > "$build_info" <<INFO')):
+        fail(f"{rootfs}: camera loader gate must follow payload checks and precede output metadata")
     required = (
         "DEFAULT_USER_PASSWORD_HASH=${DEFAULT_USER_PASSWORD_HASH:-!}",
         "ROOT_PASSWORD_MODE=${ROOT_PASSWORD_MODE:-locked}",
@@ -431,7 +949,38 @@ def validate_rootfs_contract(rootfs: pathlib.Path) -> None:
         '"$(basename "$apt_sources")"',
         '"$(basename "$apt_bootstrap")"',
         'ci_validate_https_apt_uri "$MIRROR"',
+        'ci_validate_apt_proxy "$APT_HTTP_PROXY"',
+        'ci_validate_apt_proxy "$APT_HTTPS_PROXY"',
+        'ci_validate_resolv_conf_content "$RESOLV_CONF_CONTENT"',
+        'ci_validate_locales "$LOCALES"',
+        'ci_validate_locale_name "$LANG_NAME"',
+        'ci_validate_lang_name_in_locales "$LANG_NAME" "$LOCALES"',
+        'ci_validate_account_name "$DEFAULT_USER_NAME"',
+        'ci_validate_timezone "$TZ_REGION"',
+        'ci_validate_root_password_mode "$ROOT_PASSWORD_MODE"',
+        'ci_validate_password_hash "$ROOT_PASSWORD_HASH"',
+        'ci_validate_bool "$SDDM_AUTOLOGIN" SDDM_AUTOLOGIN',
+        'ci_validate_sddm_session "$SDDM_AUTOLOGIN_SESSION"',
+        'ci_validate_distro_name "$DISTRO"',
+        'ci_validate_arch_name "$ARCH"',
+        'ci_validate_debootstrap_variant "$DEBOOTSTRAP_VARIANT"',
+        'ci_validate_uuid "$ROOTFS_UUID" ROOTFS_UUID',
+        'ci_validate_partlabel "$ROOTFS_PARTLABEL" ROOTFS_PARTLABEL',
+        'ci_validate_compression "$COMPRESS"',
+        'ci_validate_volume_size "$CHUNK_SIZE" CHUNK_SIZE',
         'ci_validate_https_apt_sources_list "$APT_SOURCES_LIST"',
+        '. /root/ci-apt-common.sh',
+        'enable_locale_record()',
+        'awk -v target_locale="$locale" -v target_charset="$charset"',
+        'match_file=$(mktemp /etc/locale.gen.match.XXXXXX)',
+        "locale_mode=$(stat -c '%a' /etc/locale.gen)",
+        "locale_uid=$(stat -c '%u' /etc/locale.gen)",
+        "locale_gid=$(stat -c '%g' /etc/locale.gen)",
+        'chown -- "$locale_uid:$locale_gid" "$tmp"',
+        'chmod -- "$locale_mode" "$tmp"',
+        'mv -f -- "$tmp" /etc/locale.gen',
+        'locale is not present in /etc/locale.gen',
+        'locale-gen\nupdate-locale LANG="$LANG_NAME"',
         'install -m 0755 "$SCRIPT_DIR/apt-transaction-provenance.sh"',
         'APT_PROVENANCE_PHASE=rootfs-provision',
         'APT_PROVENANCE_PHASE=gpu-build',
@@ -443,6 +992,12 @@ def validate_rootfs_contract(rootfs: pathlib.Path) -> None:
     for token in required:
         if token not in text:
             fail(f"{rootfs}: missing locked absent-secret default: {token}")
+    if 'cp --preserve=mode,ownership -- "$tmp" /etc/locale.gen' in text:
+        fail(f"{rootfs}: locale replacement can inherit mktemp's restrictive mode")
+    metadata_probe = "locale_mode=$(stat -c '%a' /etc/locale.gen)"
+    temp_probe = 'tmp=$(mktemp /etc/locale.gen.XXXXXX)'
+    if text.find(metadata_probe) < 0 or text.find(metadata_probe) > text.find(temp_probe):
+        fail(f"{rootfs}: locale metadata is not captured before temporary replacement")
 
     password_sudo_guard = (
         'ci_require_sudo_password_hash "$USER_SUDO_MODE" '
@@ -455,27 +1010,60 @@ def validate_rootfs_contract(rootfs: pathlib.Path) -> None:
 
 
 def run_builtin_config_fixtures(
-    workflow: pathlib.Path, apply_config: pathlib.Path
+    workflow: pathlib.Path, apply_config: pathlib.Path, data: dict
 ) -> None:
-    workflow_text = workflow.read_text(encoding="utf-8")
+    jobs = require_mapping(data.get("jobs"), "jobs")
+    build = require_mapping(jobs.get("build"), "jobs.build")
+    steps = build.get("steps")
+    if not isinstance(steps, list):
+        fail("jobs.build.steps must be a list")
+    config_bodies = [
+        step.get("run")
+        for step in steps
+        if isinstance(step, dict)
+        and step.get("name") == "Apply workflow configuration"
+        and isinstance(step.get("run"), str)
+    ]
+    if len(config_bodies) != 1:
+        fail("ARM build must contain exactly one workflow configuration body")
+    config_body = config_bodies[0]
     with tempfile.TemporaryDirectory(prefix="tb321fu-workflow-default-config.") as temp:
         root = pathlib.Path(temp)
         for domain in ("rootfs", "boot", "source"):
             opening = f'cat > "$RUNNER_TEMP/{domain}.env" <<\'CONFIG_EOF\''
-            start = workflow_text.find(opening)
+            start = config_body.find(opening)
             if start < 0:
                 fail(f"{workflow}: missing built-in {domain} config block")
-            start = workflow_text.find("\n", start)
+            if config_body.find(opening, start + len(opening)) >= 0:
+                fail(f"{workflow}: duplicate built-in {domain} config block")
+            start = config_body.find("\n", start)
             if start < 0:
                 fail(f"{workflow}: malformed built-in {domain} config block")
             start += 1
-            end = workflow_text.find("\n          CONFIG_EOF", start)
+            end = config_body.find("\nCONFIG_EOF", start)
             if end < 0:
                 fail(f"{workflow}: unterminated built-in {domain} config block")
-            config_text = "\n".join(
-                line.removeprefix("          ")
-                for line in workflow_text[start:end].splitlines()
-            )
+            config_text = config_body[start:end]
+            if domain == "rootfs":
+                config_text += chr(10) + 'CAMERA_STACK_DEB_VERSION=' + APPROVED_CAMERA_VERSION
+            if domain in {"rootfs", "source"}:
+                profile: dict[str, str] = {}
+                for line in config_text.splitlines():
+                    if not line or line.startswith("#"):
+                        continue
+                    key, separator, value = line.partition("=")
+                    if not separator:
+                        fail(f"{workflow}: malformed built-in {domain} profile: {line}")
+                    profile[key] = value
+                approved_profile = (
+                    APPROVED_KERNEL_SOURCE_PROFILE if domain == "source" else APPROVED_DEVICE_PROFILE
+                )
+                for key, expected in approved_profile.items():
+                    if profile.get(key) != expected:
+                        fail(
+                            f"{workflow}: built-in {domain} profile does not lock "
+                            f"approved {key}"
+                        )
             config = root / f"{domain}.env"
             github_env = root / f"{domain}.github.env"
             config.write_text(f"{config_text}\n", encoding="utf-8")
@@ -554,6 +1142,67 @@ def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
         if proxy_output.exists() and proxy_output.stat().st_size:
             fail("rejected proxy credentials were partially serialized")
 
+        injection_cases = {
+            "proxy-apt-syntax": (
+                'APT_HTTP_PROXY=http://127.0.0.1:9"; '
+                'APT::Update::Pre-Invoke {"printf PWNED";}; //\n'
+            ),
+            "proxy-newline": (
+                "APT_HTTPS_PROXY=http://proxy.invalid:8080\n"
+                'APT::Update::Pre-Invoke {"id";};\n'
+            ),
+            "locales-sed-program": (
+                r"LOCALES=\)/\1/;e printf PWNED;#\n"
+            ),
+            "locales-extra-field": "LOCALES=en_US.UTF-8 UTF-8 extra\n",
+            "timezone-traversal": "TZ_REGION=../../etc/passwd\n",
+            "config-nul": "ROOTFS_LABEL=Ubuntu\x00ROOT_PASSWORD_MODE=empty\n",
+            "scalar-cr": "ROOTFS_LABEL=Ubuntu\rROOT_PASSWORD_MODE=empty\n",
+            "locale-lang-mismatch": (
+                "LOCALES=en_US.UTF-8 UTF-8\n"
+                "LANG_NAME=zh_CN.UTF-8\n"
+            ),
+        }
+        for label, contents in injection_cases.items():
+            injection_config = root / "rootfs.env"
+            injection_output = root / f"injection-{label}-github.env"
+            injection_config.write_text(contents, encoding="utf-8")
+            result = subprocess.run(
+                ["bash", str(apply_config), str(injection_config)],
+                env={"PATH": "/usr/bin:/bin", "GITHUB_ENV": str(injection_output)},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if result.returncode == 0:
+                fail(f"workflow config accepted hostile {label} input")
+            if injection_output.exists() and injection_output.stat().st_size:
+                fail(f"rejected hostile {label} input was partially serialized")
+
+        invalid_source_values = {
+            "KERNEL_BUILD_ARCHIVE_SHA256": "f" * 63,
+            "KERNEL_BOOTSTRAP_PRODUCER_COMMIT": "A" * 40,
+            "KERNEL_BOOTSTRAP_PRODUCER_TREE": "0" * 39,
+            "KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256": "B" * 64,
+        }
+        for key, value in invalid_source_values.items():
+            invalid_config = root / "source.env"
+            invalid_output = root / f"invalid-{key}-github.env"
+            invalid_config.write_text(f"{key}={value}\n", encoding="utf-8")
+            result = subprocess.run(
+                ["bash", str(apply_config), str(invalid_config)],
+                env={"PATH": "/usr/bin:/bin", "GITHUB_ENV": str(invalid_output)},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if result.returncode == 0:
+                fail(f"workflow config accepted malformed source identity: {key}")
+            if invalid_output.exists() and invalid_output.stat().st_size:
+                fail(f"rejected source identity was partially serialized: {key}")
+
         for key in (
             "BUILD_Y700_SENSOR_DEBS",
             "SENSOR_SOURCE_DIR",
@@ -578,6 +1227,9 @@ def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
             if deprecated_output.exists() and deprecated_output.stat().st_size:
                 fail(f"rejected inline-producer key was partially serialized: {key}")
 
+        source_commit = "a" * 40
+        source_tree = "b" * 40
+        source_sha = "c" * 64
         allowed_configs = (
             (
                 "rootfs.env",
@@ -601,8 +1253,20 @@ def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
             ),
             (
                 "source.env",
-                "KERNEL_ARTIFACT_ARCHIVE=https://example.invalid/kernel.tar.gz\n",
-                ("KERNEL_ARTIFACT_ARCHIVE",),
+                "KERNEL_ARTIFACT_ARCHIVE=https://example.invalid/kernel.tar.gz\n"
+                "KERNEL_BUILD_ARCHIVE=https://example.invalid/kernel-sdk.tar.gz\n"
+                f"KERNEL_BUILD_ARCHIVE_SHA256={source_sha}\n"
+                f"KERNEL_BOOTSTRAP_PRODUCER_COMMIT={source_commit}\n"
+                f"KERNEL_BOOTSTRAP_PRODUCER_TREE={source_tree}\n"
+                f"KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256={source_sha}\n",
+                (
+                    "KERNEL_ARTIFACT_ARCHIVE",
+                    "KERNEL_BUILD_ARCHIVE",
+                    "KERNEL_BUILD_ARCHIVE_SHA256",
+                    "KERNEL_BOOTSTRAP_PRODUCER_COMMIT",
+                    "KERNEL_BOOTSTRAP_PRODUCER_TREE",
+                    "KERNEL_BOOTSTRAP_PRODUCER_TREE_SHA256",
+                ),
             ),
         )
         for config_name, content, expected_keys in allowed_configs:
@@ -734,6 +1398,130 @@ def run_hostile_config_fixtures(apply_config: pathlib.Path) -> None:
                     )
 
 
+def run_local_qcomramp_propagation_fixture(
+    workflow: pathlib.Path, apply_config: pathlib.Path
+) -> None:
+    """Exercise the local direct-GRUB EFI handoff across workflow steps.
+
+    ``sudo`` is used only by the rootfs step; GitHub carries values written to
+    ``GITHUB_ENV`` into the later GRUB step.  A tiny fake ``bash`` executable
+    lets this fixture execute the exact GRUB-step shell without running a
+    build, while still proving that the local EFI path arrives at the builder.
+    """
+
+    workflow_data = load_workflow(workflow)
+    steps = require_mapping(workflow_data.get("jobs"), "jobs").get("build", {}).get(
+        "steps", []
+    )
+    if not isinstance(steps, list):
+        fail("workflow build steps are not a list")
+    grub_run = next(
+        (
+            step.get("run")
+            for step in steps
+            if isinstance(step, dict) and step.get("name") == "Build GRUB boot image"
+        ),
+        None,
+    )
+    if not isinstance(grub_run, str):
+        fail("Build GRUB boot image step has no shell body")
+    for token in (
+        'QCOMRAMP_EFI="${QCOMRAMP_EFI:-}"',
+        'QCOMRAMP_EFI_URL="$QCOMRAMP_EFI_URL"',
+        "bash scripts/ci/build-grub-image.sh",
+    ):
+        if token not in grub_run:
+            fail(f"GRUB step does not forward local QCOMRAMP input: {token}")
+
+    with tempfile.TemporaryDirectory(prefix="tb321fu-qcomramp-propagation.") as temp:
+        root = pathlib.Path(temp)
+        qcomramp = root / "QCOMRAMP.EFI"
+        qcomramp.write_bytes(b"fixture direct grub efi\n")
+        source_config = root / "source.env"
+        github_env = root / "github.env"
+        source_config.write_text(
+            f"QCOMRAMP_EFI={qcomramp}\nQCOMRAMP_EFI_URL=\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["bash", str(apply_config), str(source_config)],
+            env={"PATH": "/usr/bin:/bin", "GITHUB_ENV": str(github_env)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode:
+            fail(f"local QCOMRAMP source config was rejected: {result.stderr}")
+        exported = github_env.read_text(encoding="utf-8")
+        if f"QCOMRAMP_EFI<<" not in exported or f"\n{qcomramp}\n" not in exported:
+            fail("local QCOMRAMP EFI was not serialized as a literal GITHUB_ENV value")
+
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        capture = root / "builder-env.txt"
+        fake_bash = fake_bin / "bash"
+        fake_bash.write_text(
+            "#!/bin/sh\n"
+            ": \"${QCOMRAMP_CAPTURE:?}\"\n"
+            "printf '%s\\n' \"${QCOMRAMP_EFI-}\" > \"$QCOMRAMP_CAPTURE\"\n"
+            "printf '%s\\n' \"${QCOMRAMP_EFI_URL-}\" >> \"$QCOMRAMP_CAPTURE\"\n",
+            encoding="utf-8",
+        )
+        fake_bash.chmod(0o755)
+
+        # These are the values consumed by the exact workflow shell fragment.
+        # The fake builder exits before any image/tool lookup, so no build is run.
+        env = {
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "QCOMRAMP_CAPTURE": str(capture),
+            "QCOMRAMP_EFI": str(qcomramp),
+            "QCOMRAMP_EFI_URL": "",
+            "OUTPUT_DIR_GRUB": str(root / "out"),
+            "OUTPUT_PREFIX": "fixture",
+            "BOOT_TEMPLATE_IMAGE": "",
+            "BOOT_TEMPLATE_IMAGE_URL": "",
+            "BOOT_TEMPLATE_IMAGE_SHA256": "",
+            "BOOT_IMAGE_SIZE": "256M",
+            "BOOT_FAT_BITS": "32",
+            "BOOT_FAT_LABEL": "Y700GRUB",
+            "BOOT_FAT_VOLUME_ID": "00000000",
+            "BOOT_SECTOR_SIZE": "512",
+            "BOOT_CLUSTER_SECTORS": "",
+            "GRUB_TIMEOUT": "3",
+            "KERNEL_ARTIFACT_ARCHIVE": "",
+            "KERNEL_ARTIFACT_ARCHIVE_SHA256": "",
+            "BOOTAA64_EFI_URL": "",
+            "BOOTAA64_EFI_SHA256": "",
+            "QCOMRAMP_EFI_SHA256": "",
+            "QCOMRAMP_CFG_NAME": "qcomramp.cfg",
+            "DTB_NAME": "sm8650-lenovo-tb321fu.dtb",
+            "ROOT_SELECTOR": "partlabel",
+            "ROOT_PARTLABEL": "userdata",
+            "ROOT_UUID": "",
+            "ROOTARGS": "",
+            "ROOTARGS_EXTRA": "",
+            "STABLEARGS": "drm_client_lib.active=none",
+            "BOOT_COMPRESS": "none",
+            "BOOT_CHUNK_SIZE": "",
+            "KEEP_BOOT_IMAGE": "1",
+            "Y700_GRUB_BUILD_DIR": "",
+        }
+        result = subprocess.run(
+            ["/bin/bash", "-c", grub_run],
+            cwd=root,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode:
+            fail(f"local QCOMRAMP did not reach the GRUB builder: {result.stderr}")
+        if capture.read_text(encoding="utf-8").split("\n") != [str(qcomramp), "", ""]:
+            fail("GRUB builder received a different or missing local QCOMRAMP EFI path")
+
+
 def self_test() -> None:
     if not FORBIDDEN_INPUT.search("default_user_password_hash"):
         fail("self-test did not reject credential dispatch input")
@@ -745,6 +1533,10 @@ def self_test() -> None:
         "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
     ):
         fail("self-test rejected a commit-pinned action")
+    if not dispatch_input_count_is_supported(dict.fromkeys(range(10))):
+        fail("self-test rejected the supported 10-input workflow boundary")
+    if dispatch_input_count_is_supported(dict.fromkeys(range(11))):
+        fail("self-test accepted a workflow with more than 10 dispatch inputs")
     print("workflow semantic self-test: PASS")
 
 
@@ -759,10 +1551,12 @@ def main() -> None:
         )
 
     workflow, rootfs, apply_config = map(pathlib.Path, sys.argv[1:])
-    validate_structure(workflow, load_workflow(workflow))
+    data = load_workflow(workflow)
+    validate_structure(workflow, data)
     validate_rootfs_contract(rootfs)
-    run_builtin_config_fixtures(workflow, apply_config)
+    run_builtin_config_fixtures(workflow, apply_config, data)
     run_hostile_config_fixtures(apply_config)
+    run_local_qcomramp_propagation_fixture(workflow, apply_config)
     print("WORKFLOW_SEMANTICS=PASS")
 
 

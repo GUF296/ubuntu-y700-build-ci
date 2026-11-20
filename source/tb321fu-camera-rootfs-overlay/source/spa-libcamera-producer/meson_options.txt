@@ -1,0 +1,6 @@
+option(
+  'libcamera_staging',
+  type : 'string',
+  value : '',
+  description : 'DESTDIR-style root containing /opt/libcamera-y700 for cross builds',
+)

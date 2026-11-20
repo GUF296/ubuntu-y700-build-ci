@@ -69,7 +69,15 @@ def main() -> None:
     text = "\n".join(lines)
     required = (
         "INPUT_OUTPUT_PREFIX: ${{ inputs.output_prefix }}",
+        'ci_validate_single_line "$INPUT_OUTPUT_PREFIX" INPUT_OUTPUT_PREFIX',
+        'ci_validate_single_line "$INPUT_UBUNTU_MIRROR" INPUT_UBUNTU_MIRROR',
+        'ci_validate_single_line "$INPUT_ROOTFS_IMAGE_SIZE" INPUT_ROOTFS_IMAGE_SIZE',
+        'ci_validate_single_line "$INPUT_ROOTFS_LABEL" INPUT_ROOTFS_LABEL',
+        'ci_validate_single_line "$INPUT_HOSTNAME_NAME" INPUT_HOSTNAME_NAME',
         'ci_validate_output_prefix "$INPUT_OUTPUT_PREFIX"',
+        'ci_validate_rootfs_image_size "$INPUT_ROOTFS_IMAGE_SIZE"',
+        'ci_validate_rootfs_label "$INPUT_ROOTFS_LABEL"',
+        'ci_validate_hostname "$INPUT_HOSTNAME_NAME"',
         "printf 'OUTPUT_PREFIX=%s\\n' \"$INPUT_OUTPUT_PREFIX\"",
     )
     for token in required:

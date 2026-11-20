@@ -161,6 +161,19 @@ ci_normalize_system_payload_modes "$camera_root"
 ci_assert_normalized_system_payload_modes "$camera_root"
 dpkg-deb --build --root-owner-group "$camera_root" "$payload/camera.deb" >/dev/null
 
+# A daily package carrying camera files must not be accepted when the
+# dedicated camera package is absent.  Otherwise the old package remains the
+# owner of the camera stack and a later camera install can collide silently.
+missing_camera_payload="$tmp/missing-camera-payload"
+install -d -m 0755 "$missing_camera_payload"
+cp "$payload/daily.deb" "$missing_camera_payload/daily.deb"
+cp "$payload/haptics.deb" "$missing_camera_payload/haptics.deb"
+if (ci_prepare_y700_daily_payload_deb \
+    "$missing_camera_payload" "$tmp/missing-camera-rewrite" >/dev/null 2>&1); then
+  echo 'daily package with camera payload was accepted without camera package' >&2
+  exit 1
+fi
+
 ci_assert_unique_deb_packages "$payload"
 duplicate_package_dir="$tmp/duplicate-package"
 install -d -m 0755 "$duplicate_package_dir"

@@ -1,0 +1,20 @@
+{
+  "archive": "libcamera-source.tar.xz",
+  "archive_bytes": 1452012,
+  "archive_sha256": "5329c1c4241f3b84cc82658d412f658f7ec8b784f2da63e6742f62880397cd3d",
+  "extra_source_paths": [
+    "include/libcamera/internal/camera_flash.h",
+    "src/ipa/simple/data/gc13a0.yaml",
+    "src/ipa/simple/data/sc202cs.yaml",
+    "src/ipa/simple/data/sc820cs.yaml",
+    "src/libcamera/camera_flash.cpp"
+  ],
+  "git_head": "2985ca6ac024ff89a077f088de49f7a69ab40d37",
+  "manifest_sha256": "ab0e834f4e861c0fd609d508b4cee4964e1be6c5370feb6d767714ca19ba9161",
+  "members": 1489,
+  "schema": "tb321fu-libcamera-source-v1",
+  "source_epoch": 1780486138,
+  "source_kind": "worktree-snapshot",
+  "source_tree_sha256": "328f60d3a36125a8e17be8ef93ae49836eae95b5991ba81e0239fdb1c9556668",
+  "version": "0.7.1+tb321fu.328f60d3a36125a8"
+}

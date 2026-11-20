@@ -227,17 +227,24 @@ def make_toolchain(
     return tsv(fields)
 
 
-def make_sdk_manifest(config_sha: str) -> bytes:
-    return tsv(
-        [
-            ("schema", "tb321fu.kernel-sdk-manifest/v1"),
-            ("file", f"{config_sha}\t644\t./.config"),
-            ("file", f"{'d' * 64}\t644\t./Module.symvers"),
-            ("file", f"{'e' * 64}\t644\t./include/config/kernel.release"),
-            ("file", f"{'f' * 64}\t644\t./include/generated/autoconf.h"),
-            ("file", f"{'0' * 64}\t644\t./include/generated/utsrelease.h"),
-        ]
-    )
+def make_sdk_manifest(
+    config_sha: str, schema: str = "tb321fu.kernel-sdk-manifest/v2"
+) -> bytes:
+    empty_sha = sha(b"")
+    records = [
+        ("schema", schema),
+        ("file", f"{config_sha}\t644\t./.config"),
+        ("file", f"{'d' * 64}\t644\t./Module.symvers"),
+        ("directory", f"{empty_sha}\t755\t./include"),
+        ("directory", f"{empty_sha}\t755\t./include/config"),
+        ("file", f"{'e' * 64}\t644\t./include/config/kernel.release"),
+        ("directory", f"{empty_sha}\t755\t./include/generated"),
+        ("file", f"{'f' * 64}\t644\t./include/generated/autoconf.h"),
+        ("file", f"{'0' * 64}\t644\t./include/generated/utsrelease.h"),
+    ]
+    if schema == "tb321fu.kernel-sdk-manifest/v1":
+        records = [record for record in records if record[0] != "directory"]
+    return tsv(records)
 
 
 def make_bundle(**overrides: str) -> tuple[bytes, bytes, bytes, bytes]:
@@ -252,7 +259,10 @@ def make_bundle(**overrides: str) -> tuple[bytes, bytes, bytes, bytes]:
         overrides.get("_pahole_sha256", "unused"),
         overrides.get("_pahole_version", "unused"),
     )
-    sdk_manifest = make_sdk_manifest(config_sha)
+    sdk_manifest = make_sdk_manifest(
+        config_sha,
+        overrides.get("_sdk_schema", "tb321fu.kernel-sdk-manifest/v2"),
+    )
     fields = [
         ("schema", "tb321fu.kernel-bundle/v2"),
         ("kernel-source-commit", "1" * 40),
@@ -355,6 +365,21 @@ def main() -> None:
             raise SystemExit(
                 f"valid fixture failed: status={result.returncode} "
                 f"stderr={result.stderr!r}"
+            )
+
+        legacy_bundle = root / "KERNEL-BUNDLE-v1.tsv"
+        legacy_manifest = root / "KERNEL-SDK-MANIFEST-v1.tsv"
+        legacy, legacy_flags, legacy_toolchain, legacy_manifest_bytes = make_bundle(
+            _sdk_schema="tb321fu.kernel-sdk-manifest/v1"
+        )
+        legacy_bundle.write_bytes(legacy)
+        legacy_manifest.write_bytes(legacy_manifest_bytes)
+        if legacy_flags != flags_bytes or legacy_toolchain != toolchain_bytes:
+            raise SystemExit("SDK schema selection changed unrelated bundle inputs")
+        legacy_result = run(legacy_bundle, flags, toolchain, legacy_manifest)
+        if legacy_result.returncode:
+            raise SystemExit(
+                "legacy v1 SDK manifest fixture failed: " + legacy_result.stderr
             )
 
         require_failure(

@@ -1,0 +1,6540 @@
+{
+  "commands": [
+    {
+      "package_owners": [
+        "gcc-13-aarch64-linux-gnu"
+      ],
+      "path": "/usr/bin/aarch64-linux-gnu-gcc-13",
+      "resolved": "/usr/bin/aarch64-linux-gnu-gcc-13",
+      "sha256": "3717c3f6635b032e577b9ed80ca9f8b5c21cc8ff6726f22e0ca0bc992f9d45a9"
+    },
+    {
+      "package_owners": [
+        "g++-13-aarch64-linux-gnu"
+      ],
+      "path": "/usr/bin/aarch64-linux-gnu-g++-13",
+      "resolved": "/usr/bin/aarch64-linux-gnu-g++-13",
+      "sha256": "a71dd7f1b286c430743571469d9817da02e732f4a6e9e084295b34e6153d1eb3"
+    },
+    {
+      "package_owners": [
+        "binutils-aarch64-linux-gnu"
+      ],
+      "path": "/usr/bin/aarch64-linux-gnu-ar",
+      "resolved": "/usr/bin/aarch64-linux-gnu-ar",
+      "sha256": "953d293f275c969e2a9058b66021c12122f166dcb1c8480bc68738f54b8db542"
+    },
+    {
+      "package_owners": [
+        "binutils-aarch64-linux-gnu"
+      ],
+      "path": "/usr/bin/aarch64-linux-gnu-strip",
+      "resolved": "/usr/bin/aarch64-linux-gnu-strip",
+      "sha256": "6e50534a5ce122f368ccbadceebb5450c1b1c3e1db5c70a2d5050edba7636e66"
+    },
+    {
+      "package_owners": [
+        "binutils-aarch64-linux-gnu"
+      ],
+      "path": "/usr/bin/aarch64-linux-gnu-readelf",
+      "resolved": "/usr/bin/aarch64-linux-gnu-readelf",
+      "sha256": "708bf3b87fcafaa198169fc160c24c80926249c50ff58cd5978facefebf28af7"
+    },
+    {
+      "package_owners": [
+        "meson"
+      ],
+      "path": "/usr/bin/meson",
+      "resolved": "/usr/bin/meson",
+      "sha256": "86ce39b460ec729602cd68281c44fce77779aaf7fe0bca39a840d73fe63033e0"
+    },
+    {
+      "package_owners": [
+        "ninja-build"
+      ],
+      "path": "/usr/bin/ninja",
+      "resolved": "/usr/bin/ninja",
+      "sha256": "5965527e09fe2b3787772aa4f711d6a36b393e7f2fcaa744a7a96c5a4ddf59cb"
+    },
+    {
+      "package_owners": [
+        "pkgconf-bin",
+        "pkgconf:amd64",
+        "pkgconf:arm64"
+      ],
+      "path": "/usr/bin/pkg-config",
+      "resolved": "/usr/bin/pkgconf",
+      "sha256": "7e8152db1b0c7e49d47b4b82a70dc9997b557951c5d4d938b0e7f208ce9eb10b"
+    },
+    {
+      "package_owners": [
+        "python3-minimal",
+        "python3.12-minimal"
+      ],
+      "path": "/usr/bin/python3",
+      "resolved": "/usr/bin/python3.12",
+      "sha256": "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f"
+    },
+    {
+      "package_owners": [
+        "openssl"
+      ],
+      "path": "/usr/bin/openssl",
+      "resolved": "/usr/bin/openssl",
+      "sha256": "30cc7c491903d6d8bca54406889c0334a167777397458214b5bd498c51b6fd97"
+    },
+    {
+      "package_owners": [
+        "qemu-user-static"
+      ],
+      "path": "/usr/bin/qemu-aarch64-static",
+      "resolved": "/usr/bin/qemu-aarch64-static",
+      "sha256": "a27658c701c79bfb779cac181c3bfe4948236ac9415c11e2c4bb48e3c584a567"
+    },
+    {
+      "package_owners": [
+        "gcc-13-x86-64-linux-gnu"
+      ],
+      "path": "/usr/bin/cc",
+      "resolved": "/usr/bin/x86_64-linux-gnu-gcc-13",
+      "sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26"
+    },
+    {
+      "package_owners": [
+        "g++-13-x86-64-linux-gnu"
+      ],
+      "path": "/usr/bin/c++",
+      "resolved": "/usr/bin/x86_64-linux-gnu-g++-13",
+      "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769"
+    },
+    {
+      "package_owners": [
+        "git"
+      ],
+      "path": "/usr/bin/git",
+      "resolved": "/usr/bin/git",
+      "sha256": "2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668"
+    },
+    {
+      "package_owners": [
+        "dpkg"
+      ],
+      "path": "/usr/bin/dpkg-deb",
+      "resolved": "/usr/bin/dpkg-deb",
+      "sha256": "fc9dde782ca8309b65ab92e61d13318bf463cd1aa71daa8967b87b81b48b63d2"
+    },
+    {
+      "package_owners": [
+        "dpkg"
+      ],
+      "path": "/usr/bin/dpkg-query",
+      "resolved": "/usr/bin/dpkg-query",
+      "sha256": "cc2a19017c37132e4ad46c1fbddea6472262d0a62a0b8585c383706c20005ea1"
+    },
+    {
+      "package_owners": [
+        "rsync"
+      ],
+      "path": "/usr/bin/rsync",
+      "resolved": "/usr/bin/rsync",
+      "sha256": "6b4fb867cb49d0332b72b234656311c807ab68b0537905fda7a3e7481a139f16"
+    },
+    {
+      "package_owners": [
+        "coreutils"
+      ],
+      "path": "/usr/bin/install",
+      "resolved": "/usr/bin/install",
+      "sha256": "14e9088c53f771fea828d81866a22c7817177504d1f993a1f5ed2f70373ebe17"
+    },
+    {
+      "package_owners": [
+        "coreutils"
+      ],
+      "path": "/usr/bin/cat",
+      "resolved": "/usr/bin/cat",
+      "sha256": "0d5c6788b9e87eb2f6672ae7dd1fb1fc9e4d13b930d988f28e4c040ff5b79c19"
+    },
+    {
+      "package_owners": [
+        "coreutils"
+      ],
+      "path": "/usr/bin/basename",
+      "resolved": "/usr/bin/basename",
+      "sha256": "fc455c57afe3afb1772c097c6be408725ece261be9182840a490bbe1545992c8"
+    },
+    {
+      "package_owners": [
+        "coreutils"
+      ],
+      "path": "/usr/bin/dirname",
+      "resolved": "/usr/bin/dirname",
+      "sha256": "0c6767fd8f78935fef72524709bf57e147498a077eaf47ad29eacf8f8e8d4413"
+    },
+    {
+      "package_owners": [
+        "coreutils"
+      ],
+      "path": "/usr/bin/tr",
+      "resolved": "/usr/bin/tr",
+      "sha256": "35ee22fe3bc5387017902f243d19f5d967e74d9f682b10d1c25fe0bce2b03733"
+    },
+    {
+      "package_owners": [
+        "coreutils"
+      ],
+      "path": "/usr/bin/sha256sum",
+      "resolved": "/usr/bin/sha256sum",
+      "sha256": "4d2db56c867e5324e0084c9e897f6360d37517de77ac96f2bd31494223d69a60"
+    },
+    {
+      "package_owners": [
+        "gawk"
+      ],
+      "path": "/usr/bin/awk",
+      "resolved": "/usr/bin/gawk",
+      "sha256": "9150b42e78b22231bd83131e1db2530a7a7fa0677e189ac7c5cc1520c42c9e88"
+    },
+    {
+      "package_owners": [
+        "dash"
+      ],
+      "path": "/bin/sh",
+      "resolved": "/usr/bin/dash",
+      "sha256": "86d31f6fb799e91fa21bad341484564510ca287703a16e9e46c53338776f4f42"
+    },
+    {
+      "package_owners": [
+        "bash"
+      ],
+      "path": "/bin/bash",
+      "resolved": "/usr/bin/bash",
+      "sha256": "bc5945feb8bd26203ebfafea5ce1878bb2e32cb8fb50ab7ae395cfb1e1aaaef1"
+    },
+    {
+      "package_owners": [
+        "coreutils"
+      ],
+      "path": "/usr/bin/env",
+      "resolved": "/usr/bin/env",
+      "sha256": "886e5fa8be716b03eeda48856e0f04493f2969fc148fb7812594ffac647fa050"
+    }
+  ],
+  "dependency_edges": [
+    {
+      "from": "base-files:amd64",
+      "requirement": "awk",
+      "to": "gawk:amd64"
+    },
+    {
+      "from": "base-files:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "base-files:amd64",
+      "requirement": "libcrypt1 >= 1:4.4.10-10ubuntu3",
+      "to": "libcrypt1:amd64"
+    },
+    {
+      "from": "bash:amd64",
+      "requirement": "base-files >= 2.1.12",
+      "to": "base-files:amd64"
+    },
+    {
+      "from": "bash:amd64",
+      "requirement": "debianutils >= 5.6-0.1",
+      "to": "debianutils:amd64"
+    },
+    {
+      "from": "bash:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "bash:amd64",
+      "requirement": "libtinfo6 >= 6",
+      "to": "libtinfo6:amd64"
+    },
+    {
+      "from": "binutils-aarch64-linux-gnu:amd64",
+      "requirement": "binutils-common = 2.42-4ubuntu2.10",
+      "to": "binutils-common:amd64"
+    },
+    {
+      "from": "binutils-aarch64-linux-gnu:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "binutils-aarch64-linux-gnu:amd64",
+      "requirement": "libgcc-s1 >= 4.2",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "binutils-aarch64-linux-gnu:amd64",
+      "requirement": "libjansson4 >= 2.14",
+      "to": "libjansson4:amd64"
+    },
+    {
+      "from": "binutils-aarch64-linux-gnu:amd64",
+      "requirement": "libsframe1 >= 2.41",
+      "to": "libsframe1:amd64"
+    },
+    {
+      "from": "binutils-aarch64-linux-gnu:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "binutils-aarch64-linux-gnu:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "binutils-common = 2.42-4ubuntu2.10",
+      "to": "binutils-common:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libbinutils = 2.42-4ubuntu2.10",
+      "to": "libbinutils:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libctf-nobfd0 >= 2.36",
+      "to": "libctf-nobfd0:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libctf0 >= 2.36",
+      "to": "libctf0:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libgcc-s1 >= 4.2",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libgprofng0 >= 2.41",
+      "to": "libgprofng0:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libjansson4 >= 2.14",
+      "to": "libjansson4:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libsframe1 >= 2.41",
+      "to": "libsframe1:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libstdc++6 >= 13.1",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "binutils-x86-64-linux-gnu:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "coreutils:amd64",
+      "requirement": "libacl1 >= 2.2.23",
+      "to": "libacl1:amd64"
+    },
+    {
+      "from": "coreutils:amd64",
+      "requirement": "libattr1 >= 1:2.4.48",
+      "to": "libattr1:amd64"
+    },
+    {
+      "from": "coreutils:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "coreutils:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "coreutils:amd64",
+      "requirement": "libselinux1 >= 3.1~",
+      "to": "libselinux1:amd64"
+    },
+    {
+      "from": "coreutils:amd64",
+      "requirement": "libssl3t64 >= 3.0.0",
+      "to": "libssl3t64:amd64"
+    },
+    {
+      "from": "cpp-13-aarch64-linux-gnu:amd64",
+      "requirement": "gcc-13-aarch64-linux-gnu-base = 13.3.0-6ubuntu2~24.04cross1",
+      "to": "gcc-13-aarch64-linux-gnu-base:amd64"
+    },
+    {
+      "from": "cpp-13-aarch64-linux-gnu:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "cpp-13-aarch64-linux-gnu:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "cpp-13-aarch64-linux-gnu:amd64",
+      "requirement": "libisl23 >= 0.15",
+      "to": "libisl23:amd64"
+    },
+    {
+      "from": "cpp-13-aarch64-linux-gnu:amd64",
+      "requirement": "libmpc3 >= 1.1.0",
+      "to": "libmpc3:amd64"
+    },
+    {
+      "from": "cpp-13-aarch64-linux-gnu:amd64",
+      "requirement": "libmpfr6 >= 3.1.3",
+      "to": "libmpfr6:amd64"
+    },
+    {
+      "from": "cpp-13-aarch64-linux-gnu:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "cpp-13-aarch64-linux-gnu:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "cpp-13-x86-64-linux-gnu:amd64",
+      "requirement": "gcc-13-base = 13.3.0-6ubuntu2~24.04.1",
+      "to": "gcc-13-base:amd64"
+    },
+    {
+      "from": "cpp-13-x86-64-linux-gnu:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "cpp-13-x86-64-linux-gnu:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "cpp-13-x86-64-linux-gnu:amd64",
+      "requirement": "libisl23 >= 0.15",
+      "to": "libisl23:amd64"
+    },
+    {
+      "from": "cpp-13-x86-64-linux-gnu:amd64",
+      "requirement": "libmpc3 >= 1.1.0",
+      "to": "libmpc3:amd64"
+    },
+    {
+      "from": "cpp-13-x86-64-linux-gnu:amd64",
+      "requirement": "libmpfr6 >= 3.1.3",
+      "to": "libmpfr6:amd64"
+    },
+    {
+      "from": "cpp-13-x86-64-linux-gnu:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "cpp-13-x86-64-linux-gnu:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "dash:amd64",
+      "requirement": "debianutils >= 5.6-0.1",
+      "to": "debianutils:amd64"
+    },
+    {
+      "from": "dash:amd64",
+      "requirement": "dpkg >= 1.19.1",
+      "to": "dpkg:amd64"
+    },
+    {
+      "from": "dash:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "debianutils:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "dpkg:amd64",
+      "requirement": "libbz2-1.0",
+      "to": "libbz2-1.0:amd64"
+    },
+    {
+      "from": "dpkg:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "dpkg:amd64",
+      "requirement": "liblzma5 >= 5.4.0",
+      "to": "liblzma5:amd64"
+    },
+    {
+      "from": "dpkg:amd64",
+      "requirement": "libmd0 >= 0.0.0",
+      "to": "libmd0:amd64"
+    },
+    {
+      "from": "dpkg:amd64",
+      "requirement": "libselinux1 >= 3.1~",
+      "to": "libselinux1:amd64"
+    },
+    {
+      "from": "dpkg:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "dpkg:amd64",
+      "requirement": "tar >= 1.28-1",
+      "to": "tar:amd64"
+    },
+    {
+      "from": "dpkg:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "gcc-13-aarch64-linux-gnu = 13.3.0-6ubuntu2~24.04cross1",
+      "to": "gcc-13-aarch64-linux-gnu:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "gcc-13-aarch64-linux-gnu-base = 13.3.0-6ubuntu2~24.04cross1",
+      "to": "gcc-13-aarch64-linux-gnu-base:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "libisl23 >= 0.15",
+      "to": "libisl23:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "libmpc3 >= 1.1.0",
+      "to": "libmpc3:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "libmpfr6 >= 3.1.3",
+      "to": "libmpfr6:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "libstdc++-13-dev-arm64-cross >= 13",
+      "to": "libstdc++-13-dev-arm64-cross"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "g++-13-aarch64-linux-gnu:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "gcc-13-base = 13.3.0-6ubuntu2~24.04.1",
+      "to": "gcc-13-base:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "gcc-13-x86-64-linux-gnu = 13.3.0-6ubuntu2~24.04.1",
+      "to": "gcc-13-x86-64-linux-gnu:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "libisl23 >= 0.15",
+      "to": "libisl23:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "libmpc3 >= 1.1.0",
+      "to": "libmpc3:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "libmpfr6 >= 3.1.3",
+      "to": "libmpfr6:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "libstdc++-13-dev = 13.3.0-6ubuntu2~24.04.1",
+      "to": "libstdc++-13-dev:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "g++-13-x86-64-linux-gnu:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "gawk:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "gawk:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "gawk:amd64",
+      "requirement": "libmpfr6 >= 3.1.3",
+      "to": "libmpfr6:amd64"
+    },
+    {
+      "from": "gawk:amd64",
+      "requirement": "libreadline8t64 >= 6.0",
+      "to": "libreadline8t64:amd64"
+    },
+    {
+      "from": "gawk:amd64",
+      "requirement": "libsigsegv2 >= 2.9",
+      "to": "libsigsegv2:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "binutils-aarch64-linux-gnu >= 2.39",
+      "to": "binutils-aarch64-linux-gnu:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "cpp-13-aarch64-linux-gnu = 13.3.0-6ubuntu2~24.04cross1",
+      "to": "cpp-13-aarch64-linux-gnu:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "gcc-13-aarch64-linux-gnu-base = 13.3.0-6ubuntu2~24.04cross1",
+      "to": "gcc-13-aarch64-linux-gnu-base:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libcc1-0 >= 13",
+      "to": "libcc1-0:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libgcc-13-dev-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libgcc-13-dev-arm64-cross"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libgcc-s1 >= 3.0",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libisl23 >= 0.15",
+      "to": "libisl23:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libmpc3 >= 1.1.0",
+      "to": "libmpc3:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libmpfr6 >= 3.1.3",
+      "to": "libmpfr6:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libstdc++6 >= 5",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "gcc-13-aarch64-linux-gnu:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "binutils-x86-64-linux-gnu >= 2.39",
+      "to": "binutils-x86-64-linux-gnu:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "cpp-13-x86-64-linux-gnu = 13.3.0-6ubuntu2~24.04.1",
+      "to": "cpp-13-x86-64-linux-gnu:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "gcc-13-base = 13.3.0-6ubuntu2~24.04.1",
+      "to": "gcc-13-base:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libcc1-0 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libcc1-0:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libgcc-13-dev = 13.3.0-6ubuntu2~24.04.1",
+      "to": "libgcc-13-dev:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libgcc-s1 >= 3.0",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libisl23 >= 0.15",
+      "to": "libisl23:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libmpc3 >= 1.1.0",
+      "to": "libmpc3:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libmpfr6 >= 3.1.3",
+      "to": "libmpfr6:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libstdc++6 >= 5",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "gcc-13-x86-64-linux-gnu:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "gir1.2-glib-2.0:arm64",
+      "requirement": "libglib2.0-0t64 = 2.80.0-6ubuntu3.8",
+      "to": "libglib2.0-0t64:arm64"
+    },
+    {
+      "from": "gir1.2-gst-plugins-base-1.0:arm64",
+      "requirement": "gir1.2-gio-2.0",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gst-plugins-base-1.0:arm64",
+      "requirement": "gir1.2-glib-2.0 >= 0.9.12-4~",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gst-plugins-base-1.0:arm64",
+      "requirement": "gir1.2-gmodule-2.0",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gst-plugins-base-1.0:arm64",
+      "requirement": "gir1.2-gobject-2.0",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gst-plugins-base-1.0:arm64",
+      "requirement": "gir1.2-gstreamer-1.0 >= 1.24.0",
+      "to": "gir1.2-gstreamer-1.0:arm64"
+    },
+    {
+      "from": "gir1.2-gst-plugins-base-1.0:arm64",
+      "requirement": "libgstreamer-gl1.0-0 >= 1.23.1",
+      "to": "libgstreamer-gl1.0-0:arm64"
+    },
+    {
+      "from": "gir1.2-gst-plugins-base-1.0:arm64",
+      "requirement": "libgstreamer-plugins-base1.0-0 >= 1.23.2",
+      "to": "libgstreamer-plugins-base1.0-0:arm64"
+    },
+    {
+      "from": "gir1.2-gstreamer-1.0:arm64",
+      "requirement": "gir1.2-gio-2.0",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gstreamer-1.0:arm64",
+      "requirement": "gir1.2-glib-2.0",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gstreamer-1.0:arm64",
+      "requirement": "gir1.2-gmodule-2.0",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gstreamer-1.0:arm64",
+      "requirement": "gir1.2-gobject-2.0",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gstreamer-1.0:arm64",
+      "requirement": "libgstreamer1.0-0 >= 1.23.90",
+      "to": "libgstreamer1.0-0:arm64"
+    },
+    {
+      "from": "gir1.2-gudev-1.0:arm64",
+      "requirement": "gir1.2-gobject-2.0",
+      "to": "gir1.2-glib-2.0:arm64"
+    },
+    {
+      "from": "gir1.2-gudev-1.0:arm64",
+      "requirement": "libgudev-1.0-0 >= 238",
+      "to": "libgudev-1.0-0:arm64"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "git-man << 1:2.43.0-.",
+      "to": "git-man"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "git-man >> 1:2.43.0",
+      "to": "git-man"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "libcurl3t64-gnutls >= 7.56.1",
+      "to": "libcurl3t64-gnutls:amd64"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "liberror-perl",
+      "to": "liberror-perl"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "libexpat1 >= 2.0.1",
+      "to": "libexpat1:amd64"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "libpcre2-8-0 >= 10.34",
+      "to": "libpcre2-8-0:amd64"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "perl",
+      "to": "perl:amd64"
+    },
+    {
+      "from": "git:amd64",
+      "requirement": "zlib1g >= 1:1.2.2",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libacl1:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libasan8-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libasan8-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libasan8-arm64-cross",
+      "requirement": "libgcc-s1-arm64-cross >= 3.3",
+      "to": "libgcc-s1-arm64-cross"
+    },
+    {
+      "from": "libasan8:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libasan8:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libasan8:amd64",
+      "requirement": "libgcc-s1 >= 3.3",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libatomic1-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libatomic1-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libatomic1:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libatomic1:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libattr1:amd64",
+      "requirement": "libc6 >= 2.4",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libbinutils:amd64",
+      "requirement": "binutils-common = 2.42-4ubuntu2.10",
+      "to": "binutils-common:amd64"
+    },
+    {
+      "from": "libbinutils:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libbinutils:amd64",
+      "requirement": "libsframe1",
+      "to": "libsframe1:amd64"
+    },
+    {
+      "from": "libbinutils:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "libbinutils:amd64",
+      "requirement": "zlib1g >= 1:1.2.0",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libblkid-dev:arm64",
+      "requirement": "libblkid1 = 2.39.3-9ubuntu6.6",
+      "to": "libblkid1:arm64"
+    },
+    {
+      "from": "libblkid-dev:arm64",
+      "requirement": "libc6-dev | libc-dev",
+      "to": "libc6-dev:arm64"
+    },
+    {
+      "from": "libblkid-dev:arm64",
+      "requirement": "uuid-dev",
+      "to": "uuid-dev:arm64"
+    },
+    {
+      "from": "libblkid1:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libblkid1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libbrotli1:amd64",
+      "requirement": "libc6 >= 2.29",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libbsd0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libbsd0:arm64",
+      "requirement": "libmd0 >= 1.0.3-2",
+      "to": "libmd0:arm64"
+    },
+    {
+      "from": "libbz2-1.0:amd64",
+      "requirement": "libc6 >= 2.4",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libbz2-1.0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libc-dev-bin:amd64",
+      "requirement": "libc6 << 2.40",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libc-dev-bin:amd64",
+      "requirement": "libc6 >> 2.39",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libc6-dev-arm64-cross",
+      "requirement": "libc6-arm64-cross = 2.39-0ubuntu8cross1",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libc6-dev-arm64-cross",
+      "requirement": "linux-libc-dev-arm64-cross",
+      "to": "linux-libc-dev-arm64-cross"
+    },
+    {
+      "from": "libc6-dev:amd64",
+      "requirement": "libc-dev-bin = 2.39-0ubuntu8.9",
+      "to": "libc-dev-bin:amd64"
+    },
+    {
+      "from": "libc6-dev:amd64",
+      "requirement": "libc6 = 2.39-0ubuntu8.9",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libc6-dev:amd64",
+      "requirement": "libcrypt-dev",
+      "to": "libcrypt-dev:amd64"
+    },
+    {
+      "from": "libc6-dev:amd64",
+      "requirement": "linux-libc-dev",
+      "to": "linux-libc-dev:amd64"
+    },
+    {
+      "from": "libc6-dev:amd64",
+      "requirement": "rpcsvc-proto",
+      "to": "rpcsvc-proto:amd64"
+    },
+    {
+      "from": "libc6-dev:arm64",
+      "requirement": "libc-dev-bin = 2.39-0ubuntu8.9",
+      "to": "libc-dev-bin:amd64"
+    },
+    {
+      "from": "libc6-dev:arm64",
+      "requirement": "libc6 = 2.39-0ubuntu8.9",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libc6-dev:arm64",
+      "requirement": "libcrypt-dev",
+      "to": "libcrypt-dev:arm64"
+    },
+    {
+      "from": "libc6-dev:arm64",
+      "requirement": "linux-libc-dev",
+      "to": "linux-libc-dev:arm64"
+    },
+    {
+      "from": "libc6-dev:arm64",
+      "requirement": "rpcsvc-proto",
+      "to": "rpcsvc-proto:amd64"
+    },
+    {
+      "from": "libc6:amd64",
+      "requirement": "libgcc-s1",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libc6:arm64",
+      "requirement": "libgcc-s1",
+      "to": "libgcc-s1:arm64"
+    },
+    {
+      "from": "libcap2-bin:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libcap2-bin:amd64",
+      "requirement": "libcap2 >= 1:2.63",
+      "to": "libcap2:amd64"
+    },
+    {
+      "from": "libcap2:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libcap2:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libcc1-0:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libcc1-0:amd64",
+      "requirement": "libc6 >= 2.15",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libcc1-0:amd64",
+      "requirement": "libgcc-s1 >= 3.0",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libcc1-0:amd64",
+      "requirement": "libstdc++6 >= 5.2",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "libcom-err2:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libcrypt-dev:amd64",
+      "requirement": "libcrypt1 = 1:4.4.36-4build1",
+      "to": "libcrypt1:amd64"
+    },
+    {
+      "from": "libcrypt-dev:arm64",
+      "requirement": "libcrypt1 = 1:4.4.36-4build1",
+      "to": "libcrypt1:arm64"
+    },
+    {
+      "from": "libcrypt1:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libcrypt1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libctf-nobfd0:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libctf-nobfd0:amd64",
+      "requirement": "zlib1g >= 1:1.2.0",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libctf0:amd64",
+      "requirement": "libbinutils = 2.42-4ubuntu2.10",
+      "to": "libbinutils:amd64"
+    },
+    {
+      "from": "libctf0:amd64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libctf0:amd64",
+      "requirement": "zlib1g >= 1:1.2.0",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libbrotli1 >= 0.6.0",
+      "to": "libbrotli1:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libc6 >= 2.36",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libgnutls30t64 >= 3.8.2",
+      "to": "libgnutls30t64:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libgssapi-krb5-2 >= 1.17",
+      "to": "libgssapi-krb5-2:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libidn2-0 >= 2.0.0",
+      "to": "libidn2-0:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libldap2 >= 2.6.2",
+      "to": "libldap2:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libnettle8t64",
+      "to": "libnettle8t64:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libnghttp2-14 >= 1.50.0",
+      "to": "libnghttp2-14:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libpsl5t64 >= 0.16.0",
+      "to": "libpsl5t64:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "librtmp1 >= 2.3",
+      "to": "librtmp1:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libssh-4 >= 0.9.0",
+      "to": "libssh-4:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "libcurl3t64-gnutls:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libdb5.3t64:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libdrm-amdgpu1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libdrm-amdgpu1:arm64",
+      "requirement": "libdrm2 >= 2.4.108",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libdrm-dev:arm64",
+      "requirement": "libdrm-amdgpu1 = 2.4.125-1ubuntu0.1~24.04.2",
+      "to": "libdrm-amdgpu1:arm64"
+    },
+    {
+      "from": "libdrm-dev:arm64",
+      "requirement": "libdrm-etnaviv1 = 2.4.125-1ubuntu0.1~24.04.2",
+      "to": "libdrm-etnaviv1:arm64"
+    },
+    {
+      "from": "libdrm-dev:arm64",
+      "requirement": "libdrm-freedreno1 = 2.4.125-1ubuntu0.1~24.04.2",
+      "to": "libdrm-freedreno1:arm64"
+    },
+    {
+      "from": "libdrm-dev:arm64",
+      "requirement": "libdrm-nouveau2 = 2.4.125-1ubuntu0.1~24.04.2",
+      "to": "libdrm-nouveau2:arm64"
+    },
+    {
+      "from": "libdrm-dev:arm64",
+      "requirement": "libdrm-radeon1 = 2.4.125-1ubuntu0.1~24.04.2",
+      "to": "libdrm-radeon1:arm64"
+    },
+    {
+      "from": "libdrm-dev:arm64",
+      "requirement": "libdrm-tegra0 = 2.4.125-1ubuntu0.1~24.04.2",
+      "to": "libdrm-tegra0:arm64"
+    },
+    {
+      "from": "libdrm-dev:arm64",
+      "requirement": "libdrm2 = 2.4.125-1ubuntu0.1~24.04.2",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libdrm-dev:arm64",
+      "requirement": "libpciaccess-dev",
+      "to": "libpciaccess-dev:arm64"
+    },
+    {
+      "from": "libdrm-etnaviv1:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libdrm-etnaviv1:arm64",
+      "requirement": "libdrm2 >= 2.4.108",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libdrm-freedreno1:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libdrm-freedreno1:arm64",
+      "requirement": "libdrm2 >= 2.4.108",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libdrm-nouveau2:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libdrm-nouveau2:arm64",
+      "requirement": "libdrm2 >= 2.4.108",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libdrm-radeon1:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libdrm-radeon1:arm64",
+      "requirement": "libdrm2 >= 2.4.108",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libdrm-tegra0:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libdrm-tegra0:arm64",
+      "requirement": "libdrm2 >= 2.4.108",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libdrm2:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libdrm2:arm64",
+      "requirement": "libdrm-common >= 2.4.125-1ubuntu0.1~24.04.2",
+      "to": "libdrm-common"
+    },
+    {
+      "from": "libdw-dev:arm64",
+      "requirement": "libdw1t64 = 0.190-1.1ubuntu0.1",
+      "to": "libdw1t64:arm64"
+    },
+    {
+      "from": "libdw-dev:arm64",
+      "requirement": "libelf-dev",
+      "to": "libelf-dev:arm64"
+    },
+    {
+      "from": "libdw-dev:arm64",
+      "requirement": "liblzma-dev",
+      "to": "liblzma-dev:arm64"
+    },
+    {
+      "from": "libdw-dev:arm64",
+      "requirement": "zlib1g-dev",
+      "to": "zlib1g-dev:arm64"
+    },
+    {
+      "from": "libdw1t64:arm64",
+      "requirement": "libbz2-1.0",
+      "to": "libbz2-1.0:arm64"
+    },
+    {
+      "from": "libdw1t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libdw1t64:arm64",
+      "requirement": "libelf1t64 = 0.190-1.1ubuntu0.1",
+      "to": "libelf1t64:arm64"
+    },
+    {
+      "from": "libdw1t64:arm64",
+      "requirement": "liblzma5 >= 5.1.1alpha+20120614",
+      "to": "liblzma5:arm64"
+    },
+    {
+      "from": "libdw1t64:arm64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:arm64"
+    },
+    {
+      "from": "libdw1t64:arm64",
+      "requirement": "zlib1g >= 1:1.2.2.3",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "libedit2:arm64",
+      "requirement": "libbsd0 >= 0.1.3",
+      "to": "libbsd0:arm64"
+    },
+    {
+      "from": "libedit2:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libedit2:arm64",
+      "requirement": "libtinfo6 >= 6",
+      "to": "libtinfo6:arm64"
+    },
+    {
+      "from": "libegl-dev:arm64",
+      "requirement": "libegl1 = 1.7.0-1build1",
+      "to": "libegl1:arm64"
+    },
+    {
+      "from": "libegl-dev:arm64",
+      "requirement": "libgl-dev",
+      "to": "libgl-dev:arm64"
+    },
+    {
+      "from": "libegl-dev:arm64",
+      "requirement": "libx11-dev",
+      "to": "libx11-dev:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libdrm2 >= 2.4.125-1",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libexpat1 >= 2.0.1",
+      "to": "libexpat1:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libgbm1 = 25.2.8-0ubuntu0.24.04.2",
+      "to": "libgbm1:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libwayland-client0 >= 1.20.0",
+      "to": "libwayland-client0:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libx11-xcb1 >= 2:1.8.7",
+      "to": "libx11-xcb1:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libxcb-dri3-0 >= 1.13",
+      "to": "libxcb-dri3-0:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libxcb-present0",
+      "to": "libxcb-present0:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libxcb-randr0 >= 1.3",
+      "to": "libxcb-randr0:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libxcb-shm0",
+      "to": "libxcb-shm0:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libxcb-xfixes0",
+      "to": "libxcb-xfixes0:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "libxcb1 >= 1.6",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libegl-mesa0:arm64",
+      "requirement": "mesa-libgallium = 25.2.8-0ubuntu0.24.04.2",
+      "to": "mesa-libgallium:arm64"
+    },
+    {
+      "from": "libegl1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libegl1:arm64",
+      "requirement": "libegl-mesa0",
+      "to": "libegl-mesa0:arm64"
+    },
+    {
+      "from": "libegl1:arm64",
+      "requirement": "libglvnd0 = 1.7.0-1build1",
+      "to": "libglvnd0:arm64"
+    },
+    {
+      "from": "libelf-dev:arm64",
+      "requirement": "libelf1t64 = 0.190-1.1ubuntu0.1",
+      "to": "libelf1t64:arm64"
+    },
+    {
+      "from": "libelf-dev:arm64",
+      "requirement": "libzstd-dev",
+      "to": "libzstd-dev:arm64"
+    },
+    {
+      "from": "libelf-dev:arm64",
+      "requirement": "zlib1g-dev",
+      "to": "zlib1g-dev:arm64"
+    },
+    {
+      "from": "libelf1t64:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libelf1t64:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "libelf1t64:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libelf1t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libelf1t64:arm64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:arm64"
+    },
+    {
+      "from": "libelf1t64:arm64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "liberror-perl",
+      "requirement": "perl:any",
+      "to": "perl:amd64"
+    },
+    {
+      "from": "libevent-2.1-7t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libevent-core-2.1-7t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libevent-dev:arm64",
+      "requirement": "libevent-2.1-7t64 = 2.1.12-stable-9ubuntu2.1",
+      "to": "libevent-2.1-7t64:arm64"
+    },
+    {
+      "from": "libevent-dev:arm64",
+      "requirement": "libevent-core-2.1-7t64 = 2.1.12-stable-9ubuntu2.1",
+      "to": "libevent-core-2.1-7t64:arm64"
+    },
+    {
+      "from": "libevent-dev:arm64",
+      "requirement": "libevent-extra-2.1-7t64 = 2.1.12-stable-9ubuntu2.1",
+      "to": "libevent-extra-2.1-7t64:arm64"
+    },
+    {
+      "from": "libevent-dev:arm64",
+      "requirement": "libevent-openssl-2.1-7t64 = 2.1.12-stable-9ubuntu2.1",
+      "to": "libevent-openssl-2.1-7t64:arm64"
+    },
+    {
+      "from": "libevent-dev:arm64",
+      "requirement": "libevent-pthreads-2.1-7t64 = 2.1.12-stable-9ubuntu2.1",
+      "to": "libevent-pthreads-2.1-7t64:arm64"
+    },
+    {
+      "from": "libevent-extra-2.1-7t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libevent-extra-2.1-7t64:arm64",
+      "requirement": "libevent-core-2.1-7t64 = 2.1.12-stable-9ubuntu2.1",
+      "to": "libevent-core-2.1-7t64:arm64"
+    },
+    {
+      "from": "libevent-openssl-2.1-7t64:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libevent-openssl-2.1-7t64:arm64",
+      "requirement": "libevent-core-2.1-7t64 = 2.1.12-stable-9ubuntu2.1",
+      "to": "libevent-core-2.1-7t64:arm64"
+    },
+    {
+      "from": "libevent-openssl-2.1-7t64:arm64",
+      "requirement": "libssl3t64 >= 3.0.0",
+      "to": "libssl3t64:arm64"
+    },
+    {
+      "from": "libevent-pthreads-2.1-7t64:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libevent-pthreads-2.1-7t64:arm64",
+      "requirement": "libevent-core-2.1-7t64 = 2.1.12-stable-9ubuntu2.1",
+      "to": "libevent-core-2.1-7t64:arm64"
+    },
+    {
+      "from": "libexpat1:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libexpat1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libffi-dev:arm64",
+      "requirement": "libffi8 = 3.4.6-1build1",
+      "to": "libffi8:arm64"
+    },
+    {
+      "from": "libffi8:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libffi8:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgbm-dev:arm64",
+      "requirement": "libgbm1 = 25.2.8-0ubuntu0.24.04.2",
+      "to": "libgbm1:arm64"
+    },
+    {
+      "from": "libgbm1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgbm1:arm64",
+      "requirement": "libdrm2 >= 2.4.125-1",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libgbm1:arm64",
+      "requirement": "libexpat1 >= 2.0.1",
+      "to": "libexpat1:arm64"
+    },
+    {
+      "from": "libgbm1:arm64",
+      "requirement": "mesa-libgallium = 25.2.8-0ubuntu0.24.04.2",
+      "to": "mesa-libgallium:arm64"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "gcc-13-cross-base >= 13.3.0-6ubuntu2~24.04",
+      "to": "gcc-13-cross-base"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "libasan8-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libasan8-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "libatomic1-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libatomic1-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "libgcc-s1-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libgcc-s1-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "libgomp1-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libgomp1-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "libhwasan0-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libhwasan0-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "libitm1-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libitm1-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "liblsan0-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "liblsan0-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "libtsan2-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libtsan2-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev-arm64-cross",
+      "requirement": "libubsan1-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libubsan1-arm64-cross"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "gcc-13-base = 13.3.0-6ubuntu2~24.04.1",
+      "to": "gcc-13-base:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libasan8 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libasan8:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libatomic1 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libatomic1:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libgcc-s1 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libgomp1 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libgomp1:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libhwasan0 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libhwasan0:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libitm1 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libitm1:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "liblsan0 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "liblsan0:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libquadmath0 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libquadmath0:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libtsan2 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libtsan2:amd64"
+    },
+    {
+      "from": "libgcc-13-dev:amd64",
+      "requirement": "libubsan1 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libubsan1:amd64"
+    },
+    {
+      "from": "libgcc-s1-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libgcc-s1-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libgcc-s1:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libgcc-s1:amd64",
+      "requirement": "libc6 >= 2.35",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libgcc-s1:arm64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:arm64"
+    },
+    {
+      "from": "libgcc-s1:arm64",
+      "requirement": "libc6 >= 2.35",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgdbm-compat4t64:amd64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libgdbm-compat4t64:amd64",
+      "requirement": "libgdbm6t64 >= 1.16",
+      "to": "libgdbm6t64:amd64"
+    },
+    {
+      "from": "libgdbm6t64:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libgirepository-2.0-0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgirepository-2.0-0:arm64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:arm64"
+    },
+    {
+      "from": "libgirepository-2.0-0:arm64",
+      "requirement": "libglib2.0-0t64 = 2.80.0-6ubuntu3.8",
+      "to": "libglib2.0-0t64:arm64"
+    },
+    {
+      "from": "libgl-dev:arm64",
+      "requirement": "libgl1 = 1.7.0-1build1",
+      "to": "libgl1:arm64"
+    },
+    {
+      "from": "libgl-dev:arm64",
+      "requirement": "libglx-dev",
+      "to": "libglx-dev:arm64"
+    },
+    {
+      "from": "libgl1-mesa-dri:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgl1-mesa-dri:arm64",
+      "requirement": "libgbm1 = 25.2.8-0ubuntu0.24.04.2",
+      "to": "libgbm1:arm64"
+    },
+    {
+      "from": "libgl1-mesa-dri:arm64",
+      "requirement": "libvulkan1",
+      "to": "libvulkan1:arm64"
+    },
+    {
+      "from": "libgl1:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgl1:arm64",
+      "requirement": "libglvnd0 = 1.7.0-1build1",
+      "to": "libglvnd0:arm64"
+    },
+    {
+      "from": "libgl1:arm64",
+      "requirement": "libglx0 = 1.7.0-1build1",
+      "to": "libglx0:arm64"
+    },
+    {
+      "from": "libgles-dev:arm64",
+      "requirement": "libegl-dev",
+      "to": "libegl-dev:arm64"
+    },
+    {
+      "from": "libgles-dev:arm64",
+      "requirement": "libgl-dev",
+      "to": "libgl-dev:arm64"
+    },
+    {
+      "from": "libgles-dev:arm64",
+      "requirement": "libgles1 = 1.7.0-1build1",
+      "to": "libgles1:arm64"
+    },
+    {
+      "from": "libgles-dev:arm64",
+      "requirement": "libgles2 = 1.7.0-1build1",
+      "to": "libgles2:arm64"
+    },
+    {
+      "from": "libgles1:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgles1:arm64",
+      "requirement": "libglvnd0 = 1.7.0-1build1",
+      "to": "libglvnd0:arm64"
+    },
+    {
+      "from": "libgles2:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgles2:arm64",
+      "requirement": "libglvnd0 = 1.7.0-1build1",
+      "to": "libglvnd0:arm64"
+    },
+    {
+      "from": "libglib2.0-0t64:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libglib2.0-0t64:amd64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:amd64"
+    },
+    {
+      "from": "libglib2.0-0t64:amd64",
+      "requirement": "libmount1 >= 2.26.2",
+      "to": "libmount1:amd64"
+    },
+    {
+      "from": "libglib2.0-0t64:amd64",
+      "requirement": "libpcre2-8-0 >= 10.22",
+      "to": "libpcre2-8-0:amd64"
+    },
+    {
+      "from": "libglib2.0-0t64:amd64",
+      "requirement": "libselinux1 >= 3.1~",
+      "to": "libselinux1:amd64"
+    },
+    {
+      "from": "libglib2.0-0t64:amd64",
+      "requirement": "zlib1g >= 1:1.2.2",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libglib2.0-0t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libglib2.0-0t64:arm64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:arm64"
+    },
+    {
+      "from": "libglib2.0-0t64:arm64",
+      "requirement": "libmount1 >= 2.26.2",
+      "to": "libmount1:arm64"
+    },
+    {
+      "from": "libglib2.0-0t64:arm64",
+      "requirement": "libpcre2-8-0 >= 10.22",
+      "to": "libpcre2-8-0:arm64"
+    },
+    {
+      "from": "libglib2.0-0t64:arm64",
+      "requirement": "libselinux1 >= 3.1~",
+      "to": "libselinux1:arm64"
+    },
+    {
+      "from": "libglib2.0-0t64:arm64",
+      "requirement": "zlib1g >= 1:1.2.2",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "libglib2.0-bin:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libglib2.0-bin:amd64",
+      "requirement": "libelf1t64 >= 0.142",
+      "to": "libelf1t64:amd64"
+    },
+    {
+      "from": "libglib2.0-bin:amd64",
+      "requirement": "libglib2.0-0t64 = 2.80.0-6ubuntu3.8",
+      "to": "libglib2.0-0t64:amd64"
+    },
+    {
+      "from": "libglib2.0-bin:amd64",
+      "requirement": "libglib2.0-data",
+      "to": "libglib2.0-data"
+    },
+    {
+      "from": "libglib2.0-dev-bin:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libglib2.0-dev-bin:amd64",
+      "requirement": "libglib2.0-0t64 = 2.80.0-6ubuntu3.8",
+      "to": "libglib2.0-0t64:amd64"
+    },
+    {
+      "from": "libglib2.0-dev-bin:amd64",
+      "requirement": "python3-packaging",
+      "to": "python3-packaging"
+    },
+    {
+      "from": "libglib2.0-dev-bin:amd64",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libffi-dev",
+      "to": "libffi-dev:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libgirepository-2.0-0 = 2.80.0-6ubuntu3.8",
+      "to": "libgirepository-2.0-0:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libglib2.0-0t64 = 2.80.0-6ubuntu3.8",
+      "to": "libglib2.0-0t64:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libglib2.0-bin = 2.80.0-6ubuntu3.8",
+      "to": "libglib2.0-bin:amd64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libglib2.0-dev-bin = 2.80.0-6ubuntu3.8",
+      "to": "libglib2.0-dev-bin:amd64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libglib2.0-dev-bin-linux = 2.80.0-6ubuntu3.8",
+      "to": "libglib2.0-dev-bin:amd64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libmount-dev",
+      "to": "libmount-dev:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libpcre2-dev",
+      "to": "libpcre2-dev:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "libselinux1-dev",
+      "to": "libselinux1-dev:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "pkgconf",
+      "to": "pkgconf:arm64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "python3 | qemu-user | qemu-user-static",
+      "to": "qemu-user-static:amd64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "libglib2.0-dev:arm64",
+      "requirement": "zlib1g-dev",
+      "to": "zlib1g-dev:arm64"
+    },
+    {
+      "from": "libglvnd0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libglx-dev:arm64",
+      "requirement": "libglx0 = 1.7.0-1build1",
+      "to": "libglx0:arm64"
+    },
+    {
+      "from": "libglx-dev:arm64",
+      "requirement": "libx11-dev",
+      "to": "libx11-dev:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libdrm2 >= 2.4.125-1",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libexpat1 >= 2.0.1",
+      "to": "libexpat1:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libgl1-mesa-dri",
+      "to": "libgl1-mesa-dri:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libx11-6 >= 2:1.4.99.1",
+      "to": "libx11-6:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libx11-xcb1 >= 2:1.8.7",
+      "to": "libx11-xcb1:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libxcb-dri3-0",
+      "to": "libxcb-dri3-0:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libxcb-glx0 >= 1.8",
+      "to": "libxcb-glx0:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libxcb-present0",
+      "to": "libxcb-present0:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libxcb-shm0",
+      "to": "libxcb-shm0:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libxcb-xfixes0",
+      "to": "libxcb-xfixes0:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libxcb1",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libxext6",
+      "to": "libxext6:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "libxxf86vm1",
+      "to": "libxxf86vm1:arm64"
+    },
+    {
+      "from": "libglx-mesa0:arm64",
+      "requirement": "mesa-libgallium = 25.2.8-0ubuntu0.24.04.2",
+      "to": "mesa-libgallium:arm64"
+    },
+    {
+      "from": "libglx0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libglx0:arm64",
+      "requirement": "libglvnd0 = 1.7.0-1build1",
+      "to": "libglvnd0:arm64"
+    },
+    {
+      "from": "libglx0:arm64",
+      "requirement": "libglx-mesa0",
+      "to": "libglx-mesa0:arm64"
+    },
+    {
+      "from": "libglx0:arm64",
+      "requirement": "libx11-6 >= 2:1.4.99.1",
+      "to": "libx11-6:arm64"
+    },
+    {
+      "from": "libgmp-dev:arm64",
+      "requirement": "libgmp10 = 2:6.3.0+dfsg-2ubuntu6.1",
+      "to": "libgmp10:arm64"
+    },
+    {
+      "from": "libgmp-dev:arm64",
+      "requirement": "libgmpxx4ldbl = 2:6.3.0+dfsg-2ubuntu6.1",
+      "to": "libgmpxx4ldbl:arm64"
+    },
+    {
+      "from": "libgmp10:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libgmp10:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgmpxx4ldbl:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgmpxx4ldbl:arm64",
+      "requirement": "libgcc-s1 >= 3.3.1",
+      "to": "libgcc-s1:arm64"
+    },
+    {
+      "from": "libgmpxx4ldbl:arm64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:arm64"
+    },
+    {
+      "from": "libgmpxx4ldbl:arm64",
+      "requirement": "libstdc++6 >= 13.1",
+      "to": "libstdc++6:arm64"
+    },
+    {
+      "from": "libgnutls-dane0t64:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgnutls-dane0t64:arm64",
+      "requirement": "libgnutls30t64 = 3.8.3-1.1ubuntu3.6",
+      "to": "libgnutls30t64:arm64"
+    },
+    {
+      "from": "libgnutls-dane0t64:arm64",
+      "requirement": "libunbound8 >= 1.8.0",
+      "to": "libunbound8:arm64"
+    },
+    {
+      "from": "libgnutls-openssl27t64:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgnutls-openssl27t64:arm64",
+      "requirement": "libgnutls30t64 = 3.8.3-1.1ubuntu3.6",
+      "to": "libgnutls30t64:arm64"
+    },
+    {
+      "from": "libgnutls28-dev:arm64",
+      "requirement": "libc6-dev | libc-dev",
+      "to": "libc6-dev:arm64"
+    },
+    {
+      "from": "libgnutls28-dev:arm64",
+      "requirement": "libgnutls-dane0t64 = 3.8.3-1.1ubuntu3.6",
+      "to": "libgnutls-dane0t64:arm64"
+    },
+    {
+      "from": "libgnutls28-dev:arm64",
+      "requirement": "libgnutls-openssl27t64 = 3.8.3-1.1ubuntu3.6",
+      "to": "libgnutls-openssl27t64:arm64"
+    },
+    {
+      "from": "libgnutls28-dev:arm64",
+      "requirement": "libgnutls30t64 = 3.8.3-1.1ubuntu3.6",
+      "to": "libgnutls30t64:arm64"
+    },
+    {
+      "from": "libgnutls28-dev:arm64",
+      "requirement": "libidn2-dev",
+      "to": "libidn2-dev:arm64"
+    },
+    {
+      "from": "libgnutls28-dev:arm64",
+      "requirement": "libp11-kit-dev",
+      "to": "libp11-kit-dev:arm64"
+    },
+    {
+      "from": "libgnutls28-dev:arm64",
+      "requirement": "libtasn1-6-dev",
+      "to": "libtasn1-6-dev:arm64"
+    },
+    {
+      "from": "libgnutls28-dev:arm64",
+      "requirement": "nettle-dev >= 3.6",
+      "to": "nettle-dev:arm64"
+    },
+    {
+      "from": "libgnutls30t64:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libgnutls30t64:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "libgnutls30t64:amd64",
+      "requirement": "libhogweed6t64 >= 3.6",
+      "to": "libhogweed6t64:amd64"
+    },
+    {
+      "from": "libgnutls30t64:amd64",
+      "requirement": "libidn2-0 >= 2.0.0",
+      "to": "libidn2-0:amd64"
+    },
+    {
+      "from": "libgnutls30t64:amd64",
+      "requirement": "libnettle8t64 >= 3.9~",
+      "to": "libnettle8t64:amd64"
+    },
+    {
+      "from": "libgnutls30t64:amd64",
+      "requirement": "libp11-kit0 >= 0.25.1",
+      "to": "libp11-kit0:amd64"
+    },
+    {
+      "from": "libgnutls30t64:amd64",
+      "requirement": "libtasn1-6 >= 4.14",
+      "to": "libtasn1-6:amd64"
+    },
+    {
+      "from": "libgnutls30t64:amd64",
+      "requirement": "libunistring5 >= 1.1",
+      "to": "libunistring5:amd64"
+    },
+    {
+      "from": "libgnutls30t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgnutls30t64:arm64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:arm64"
+    },
+    {
+      "from": "libgnutls30t64:arm64",
+      "requirement": "libhogweed6t64 >= 3.6",
+      "to": "libhogweed6t64:arm64"
+    },
+    {
+      "from": "libgnutls30t64:arm64",
+      "requirement": "libidn2-0 >= 2.0.0",
+      "to": "libidn2-0:arm64"
+    },
+    {
+      "from": "libgnutls30t64:arm64",
+      "requirement": "libnettle8t64 >= 3.9~",
+      "to": "libnettle8t64:arm64"
+    },
+    {
+      "from": "libgnutls30t64:arm64",
+      "requirement": "libp11-kit0 >= 0.25.1",
+      "to": "libp11-kit0:arm64"
+    },
+    {
+      "from": "libgnutls30t64:arm64",
+      "requirement": "libtasn1-6 >= 4.14",
+      "to": "libtasn1-6:arm64"
+    },
+    {
+      "from": "libgnutls30t64:arm64",
+      "requirement": "libunistring5 >= 1.1",
+      "to": "libunistring5:arm64"
+    },
+    {
+      "from": "libgomp1-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libgomp1-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libgomp1:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libgomp1:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libgprofng0:amd64",
+      "requirement": "libbinutils = 2.42-4ubuntu2.10",
+      "to": "libbinutils:amd64"
+    },
+    {
+      "from": "libgprofng0:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libgprofng0:amd64",
+      "requirement": "libgcc-s1 >= 3.3.1",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libgprofng0:amd64",
+      "requirement": "libstdc++6 >= 13.1",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "libgprofng0:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libgssapi-krb5-2:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libgssapi-krb5-2:amd64",
+      "requirement": "libcom-err2 >= 1.43.9",
+      "to": "libcom-err2:amd64"
+    },
+    {
+      "from": "libgssapi-krb5-2:amd64",
+      "requirement": "libk5crypto3 >= 1.20",
+      "to": "libk5crypto3:amd64"
+    },
+    {
+      "from": "libgssapi-krb5-2:amd64",
+      "requirement": "libkrb5-3 = 1.20.1-6ubuntu2.7",
+      "to": "libkrb5-3:amd64"
+    },
+    {
+      "from": "libgssapi-krb5-2:amd64",
+      "requirement": "libkrb5support0 = 1.20.1-6ubuntu2.7",
+      "to": "libkrb5support0:amd64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libdrm2 >= 2.4.55",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libegl1",
+      "to": "libegl1:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libgbm1 >= 8.1~0",
+      "to": "libgbm1:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libgl1",
+      "to": "libgl1:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libglib2.0-0t64 >= 2.79.0",
+      "to": "libglib2.0-0t64:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libgstreamer-plugins-base1.0-0 >= 1.23.1",
+      "to": "libgstreamer-plugins-base1.0-0:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libgstreamer1.0-0 >= 1.24.0",
+      "to": "libgstreamer1.0-0:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libgudev-1.0-0 >= 165",
+      "to": "libgudev-1.0-0:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libwayland-client0 >= 1.20.0",
+      "to": "libwayland-client0:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libwayland-cursor0 >= 1.11",
+      "to": "libwayland-cursor0:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libwayland-egl1 >= 1.15.0",
+      "to": "libwayland-egl1:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libx11-6",
+      "to": "libx11-6:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libx11-xcb1 >= 2:1.8.7",
+      "to": "libx11-xcb1:arm64"
+    },
+    {
+      "from": "libgstreamer-gl1.0-0:arm64",
+      "requirement": "libxcb1",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-0:arm64",
+      "requirement": "iso-codes",
+      "to": "iso-codes"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-0:arm64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-0:arm64",
+      "requirement": "libdrm2 >= 2.4.74",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-0:arm64",
+      "requirement": "libglib2.0-0t64 >= 2.79.0",
+      "to": "libglib2.0-0t64:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-0:arm64",
+      "requirement": "libgstreamer1.0-0 >= 1.24.0",
+      "to": "libgstreamer1.0-0:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-0:arm64",
+      "requirement": "liborc-0.4-0t64 >= 1:0.4.34",
+      "to": "liborc-0.4-0t64:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-0:arm64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "gir1.2-gst-plugins-base-1.0 = 1.24.2-1ubuntu0.4",
+      "to": "gir1.2-gst-plugins-base-1.0:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libc6-dev | libc-dev",
+      "to": "libc6-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libdrm-dev >= 2.4.55",
+      "to": "libdrm-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libegl-dev",
+      "to": "libegl-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libgbm-dev",
+      "to": "libgbm-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libgl-dev",
+      "to": "libgl-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libgles-dev",
+      "to": "libgles-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libglib2.0-dev",
+      "to": "libglib2.0-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libgstreamer-gl1.0-0 = 1.24.2-1ubuntu0.4",
+      "to": "libgstreamer-gl1.0-0:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libgstreamer-plugins-base1.0-0 = 1.24.2-1ubuntu0.4",
+      "to": "libgstreamer-plugins-base1.0-0:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libgstreamer1.0-dev >= 1.16.2",
+      "to": "libgstreamer1.0-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libgudev-1.0-dev >= 147",
+      "to": "libgudev-1.0-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "liborc-0.4-dev >= 1:0.4.24",
+      "to": "liborc-0.4-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libwayland-dev >= 1.11",
+      "to": "libwayland-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "libx11-xcb-dev",
+      "to": "libx11-xcb-dev:arm64"
+    },
+    {
+      "from": "libgstreamer-plugins-base1.0-dev:arm64",
+      "requirement": "pkgconf",
+      "to": "pkgconf:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-0:arm64",
+      "requirement": "libcap2 >= 1:2.10",
+      "to": "libcap2:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-0:arm64",
+      "requirement": "libcap2-bin",
+      "to": "libcap2-bin:amd64"
+    },
+    {
+      "from": "libgstreamer1.0-0:arm64",
+      "requirement": "libdw1t64 >= 0.126",
+      "to": "libdw1t64:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-0:arm64",
+      "requirement": "libgcc-s1 >= 4.2",
+      "to": "libgcc-s1:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-0:arm64",
+      "requirement": "libglib2.0-0t64 >= 2.79.0",
+      "to": "libglib2.0-0t64:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-0:arm64",
+      "requirement": "libunwind8",
+      "to": "libunwind8:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "gir1.2-gstreamer-1.0 = 1.24.2-1ubuntu0.1",
+      "to": "gir1.2-gstreamer-1.0:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "libc6-dev | libc-dev",
+      "to": "libc6-dev:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "libdw-dev",
+      "to": "libdw-dev:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "libglib2.0-0t64 >= 2.12.0",
+      "to": "libglib2.0-0t64:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "libglib2.0-dev",
+      "to": "libglib2.0-dev:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "libgstreamer1.0-0 = 1.24.2-1ubuntu0.1",
+      "to": "libgstreamer1.0-0:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "libunwind-dev",
+      "to": "libunwind-dev:arm64"
+    },
+    {
+      "from": "libgstreamer1.0-dev:arm64",
+      "requirement": "pkgconf",
+      "to": "pkgconf:arm64"
+    },
+    {
+      "from": "libgudev-1.0-0:arm64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libgudev-1.0-0:arm64",
+      "requirement": "libglib2.0-0t64 >= 2.79.0",
+      "to": "libglib2.0-0t64:arm64"
+    },
+    {
+      "from": "libgudev-1.0-0:arm64",
+      "requirement": "libudev1 >= 251",
+      "to": "libudev1:arm64"
+    },
+    {
+      "from": "libgudev-1.0-dev:arm64",
+      "requirement": "gir1.2-gudev-1.0 = 1:238-5ubuntu1",
+      "to": "gir1.2-gudev-1.0:arm64"
+    },
+    {
+      "from": "libgudev-1.0-dev:arm64",
+      "requirement": "libglib2.0-dev >= 2.38.0",
+      "to": "libglib2.0-dev:arm64"
+    },
+    {
+      "from": "libgudev-1.0-dev:arm64",
+      "requirement": "libgudev-1.0-0 = 1:238-5ubuntu1",
+      "to": "libgudev-1.0-0:arm64"
+    },
+    {
+      "from": "libgudev-1.0-dev:arm64",
+      "requirement": "libudev-dev >= 199",
+      "to": "libudev-dev:arm64"
+    },
+    {
+      "from": "libgudev-1.0-dev:arm64",
+      "requirement": "pkg-config",
+      "to": "pkgconf:arm64"
+    },
+    {
+      "from": "libhogweed6t64:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libhogweed6t64:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "libhogweed6t64:amd64",
+      "requirement": "libnettle8t64",
+      "to": "libnettle8t64:amd64"
+    },
+    {
+      "from": "libhogweed6t64:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libhogweed6t64:arm64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:arm64"
+    },
+    {
+      "from": "libhogweed6t64:arm64",
+      "requirement": "libnettle8t64",
+      "to": "libnettle8t64:arm64"
+    },
+    {
+      "from": "libhwasan0-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libhwasan0-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libhwasan0-arm64-cross",
+      "requirement": "libgcc-s1-arm64-cross >= 3.3",
+      "to": "libgcc-s1-arm64-cross"
+    },
+    {
+      "from": "libhwasan0:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libhwasan0:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libhwasan0:amd64",
+      "requirement": "libgcc-s1 >= 3.3",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libicu74:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libicu74:amd64",
+      "requirement": "libgcc-s1 >= 3.3.1",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libicu74:amd64",
+      "requirement": "libstdc++6 >= 13.1",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "libicu74:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libicu74:arm64",
+      "requirement": "libgcc-s1 >= 3.3.1",
+      "to": "libgcc-s1:arm64"
+    },
+    {
+      "from": "libicu74:arm64",
+      "requirement": "libstdc++6 >= 13.1",
+      "to": "libstdc++6:arm64"
+    },
+    {
+      "from": "libidn2-0:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libidn2-0:amd64",
+      "requirement": "libunistring5 >= 1.1",
+      "to": "libunistring5:amd64"
+    },
+    {
+      "from": "libidn2-0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libidn2-0:arm64",
+      "requirement": "libunistring5 >= 1.1",
+      "to": "libunistring5:arm64"
+    },
+    {
+      "from": "libidn2-dev:arm64",
+      "requirement": "libidn2-0 = 2.3.7-2build1.1",
+      "to": "libidn2-0:arm64"
+    },
+    {
+      "from": "libisl23:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libisl23:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "libitm1-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libitm1-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libitm1:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libitm1:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libjansson4:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libk5crypto3:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libk5crypto3:amd64",
+      "requirement": "libkrb5support0 = 1.20.1-6ubuntu2.7",
+      "to": "libkrb5support0:amd64"
+    },
+    {
+      "from": "libkeyutils1:amd64",
+      "requirement": "libc6 >= 2.7",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libkrb5-3:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libkrb5-3:amd64",
+      "requirement": "libcom-err2 >= 1.43.9",
+      "to": "libcom-err2:amd64"
+    },
+    {
+      "from": "libkrb5-3:amd64",
+      "requirement": "libk5crypto3 >= 1.20",
+      "to": "libk5crypto3:amd64"
+    },
+    {
+      "from": "libkrb5-3:amd64",
+      "requirement": "libkeyutils1 >= 1.5.9",
+      "to": "libkeyutils1:amd64"
+    },
+    {
+      "from": "libkrb5-3:amd64",
+      "requirement": "libkrb5support0 = 1.20.1-6ubuntu2.7",
+      "to": "libkrb5support0:amd64"
+    },
+    {
+      "from": "libkrb5-3:amd64",
+      "requirement": "libssl3t64 >= 3.0.0",
+      "to": "libssl3t64:amd64"
+    },
+    {
+      "from": "libkrb5support0:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libldap2:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libldap2:amd64",
+      "requirement": "libgnutls30t64 >= 3.8.2",
+      "to": "libgnutls30t64:amd64"
+    },
+    {
+      "from": "libldap2:amd64",
+      "requirement": "libsasl2-2 >= 2.1.28+dfsg1",
+      "to": "libsasl2-2:amd64"
+    },
+    {
+      "from": "libllvm20:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libllvm20:arm64",
+      "requirement": "libedit2 >= 2.11-20080614-0",
+      "to": "libedit2:arm64"
+    },
+    {
+      "from": "libllvm20:arm64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:arm64"
+    },
+    {
+      "from": "libllvm20:arm64",
+      "requirement": "libgcc-s1 >= 4.2",
+      "to": "libgcc-s1:arm64"
+    },
+    {
+      "from": "libllvm20:arm64",
+      "requirement": "libstdc++6 >= 13.1",
+      "to": "libstdc++6:arm64"
+    },
+    {
+      "from": "libllvm20:arm64",
+      "requirement": "libxml2 >= 2.7.4",
+      "to": "libxml2:arm64"
+    },
+    {
+      "from": "libllvm20:arm64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:arm64"
+    },
+    {
+      "from": "libllvm20:arm64",
+      "requirement": "zlib1g >= 1:1.2.0",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "liblsan0-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "liblsan0-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "liblsan0-arm64-cross",
+      "requirement": "libgcc-s1-arm64-cross >= 3.3",
+      "to": "libgcc-s1-arm64-cross"
+    },
+    {
+      "from": "liblsan0:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "liblsan0:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "liblsan0:amd64",
+      "requirement": "libgcc-s1 >= 3.3",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "liblz4-1:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "liblzma-dev:arm64",
+      "requirement": "liblzma5 = 5.6.1+really5.4.5-1ubuntu0.3",
+      "to": "liblzma5:arm64"
+    },
+    {
+      "from": "liblzma5:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "liblzma5:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libmd0:amd64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libmd0:arm64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libmount-dev:arm64",
+      "requirement": "libblkid-dev",
+      "to": "libblkid-dev:arm64"
+    },
+    {
+      "from": "libmount-dev:arm64",
+      "requirement": "libc6-dev | libc-dev",
+      "to": "libc6-dev:arm64"
+    },
+    {
+      "from": "libmount-dev:arm64",
+      "requirement": "libmount1 = 2.39.3-9ubuntu6.6",
+      "to": "libmount1:arm64"
+    },
+    {
+      "from": "libmount-dev:arm64",
+      "requirement": "libselinux1-dev",
+      "to": "libselinux1-dev:arm64"
+    },
+    {
+      "from": "libmount1:amd64",
+      "requirement": "libblkid1 >= 2.17.2",
+      "to": "libblkid1:amd64"
+    },
+    {
+      "from": "libmount1:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libmount1:amd64",
+      "requirement": "libselinux1 >= 3.1~",
+      "to": "libselinux1:amd64"
+    },
+    {
+      "from": "libmount1:arm64",
+      "requirement": "libblkid1 >= 2.17.2",
+      "to": "libblkid1:arm64"
+    },
+    {
+      "from": "libmount1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libmount1:arm64",
+      "requirement": "libselinux1 >= 3.1~",
+      "to": "libselinux1:arm64"
+    },
+    {
+      "from": "libmpc3:amd64",
+      "requirement": "libc6 >= 2.4",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libmpc3:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "libmpc3:amd64",
+      "requirement": "libmpfr6 >= 4.0.0",
+      "to": "libmpfr6:amd64"
+    },
+    {
+      "from": "libmpfr6:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libmpfr6:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "libncursesw6:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libncursesw6:amd64",
+      "requirement": "libtinfo6 = 6.4+20240113-1ubuntu2.2",
+      "to": "libtinfo6:amd64"
+    },
+    {
+      "from": "libnettle8t64:amd64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libnettle8t64:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libnghttp2-14:amd64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "liborc-0.4-0t64:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "liborc-0.4-0t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "liborc-0.4-dev-bin:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "liborc-0.4-dev-bin:amd64",
+      "requirement": "liborc-0.4-0t64 >= 1:0.4.34",
+      "to": "liborc-0.4-0t64:amd64"
+    },
+    {
+      "from": "liborc-0.4-dev:arm64",
+      "requirement": "liborc-0.4-0t64 = 1:0.4.38-1ubuntu0.1",
+      "to": "liborc-0.4-0t64:arm64"
+    },
+    {
+      "from": "liborc-0.4-dev:arm64",
+      "requirement": "liborc-0.4-dev-bin:any = 1:0.4.38-1ubuntu0.1",
+      "to": "liborc-0.4-dev-bin:amd64"
+    },
+    {
+      "from": "libp11-kit-dev:arm64",
+      "requirement": "libp11-kit0 = 0.25.3-4ubuntu2.2",
+      "to": "libp11-kit0:arm64"
+    },
+    {
+      "from": "libp11-kit0:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libp11-kit0:amd64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:amd64"
+    },
+    {
+      "from": "libp11-kit0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libp11-kit0:arm64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:arm64"
+    },
+    {
+      "from": "libpciaccess-dev:arm64",
+      "requirement": "libpciaccess0 = 0.17-3ubuntu0.24.04.2",
+      "to": "libpciaccess0:arm64"
+    },
+    {
+      "from": "libpciaccess0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libpciaccess0:arm64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "libpcre2-16-0:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libpcre2-32-0:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libpcre2-8-0:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libpcre2-8-0:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libpcre2-dev:arm64",
+      "requirement": "libc-dev",
+      "to": "libc6-dev:arm64"
+    },
+    {
+      "from": "libpcre2-dev:arm64",
+      "requirement": "libpcre2-16-0 = 10.42-4ubuntu2.1",
+      "to": "libpcre2-16-0:arm64"
+    },
+    {
+      "from": "libpcre2-dev:arm64",
+      "requirement": "libpcre2-32-0 = 10.42-4ubuntu2.1",
+      "to": "libpcre2-32-0:arm64"
+    },
+    {
+      "from": "libpcre2-dev:arm64",
+      "requirement": "libpcre2-8-0 = 10.42-4ubuntu2.1",
+      "to": "libpcre2-8-0:arm64"
+    },
+    {
+      "from": "libpcre2-dev:arm64",
+      "requirement": "libpcre2-posix3 = 10.42-4ubuntu2.1",
+      "to": "libpcre2-posix3:arm64"
+    },
+    {
+      "from": "libpcre2-posix3:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libpcre2-posix3:arm64",
+      "requirement": "libpcre2-8-0 >= 10.22",
+      "to": "libpcre2-8-0:arm64"
+    },
+    {
+      "from": "libperl5.38t64:amd64",
+      "requirement": "libbz2-1.0",
+      "to": "libbz2-1.0:amd64"
+    },
+    {
+      "from": "libperl5.38t64:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libperl5.38t64:amd64",
+      "requirement": "libcrypt1 >= 1:4.1.0",
+      "to": "libcrypt1:amd64"
+    },
+    {
+      "from": "libperl5.38t64:amd64",
+      "requirement": "libdb5.3t64",
+      "to": "libdb5.3t64:amd64"
+    },
+    {
+      "from": "libperl5.38t64:amd64",
+      "requirement": "libgdbm-compat4t64 >= 1.18-3",
+      "to": "libgdbm-compat4t64:amd64"
+    },
+    {
+      "from": "libperl5.38t64:amd64",
+      "requirement": "libgdbm6t64 >= 1.21",
+      "to": "libgdbm6t64:amd64"
+    },
+    {
+      "from": "libperl5.38t64:amd64",
+      "requirement": "perl-modules-5.38 >= 5.38.2-3.2ubuntu0.4",
+      "to": "perl-modules-5.38"
+    },
+    {
+      "from": "libperl5.38t64:amd64",
+      "requirement": "zlib1g >= 1:1.2.3.3",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libpkgconf3:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libpopt0:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libpsl5t64:amd64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libpsl5t64:amd64",
+      "requirement": "libidn2-0 >= 0.16",
+      "to": "libidn2-0:amd64"
+    },
+    {
+      "from": "libpsl5t64:amd64",
+      "requirement": "libunistring5 >= 1.1",
+      "to": "libunistring5:amd64"
+    },
+    {
+      "from": "libpython3-stdlib:amd64",
+      "requirement": "libpython3.12-stdlib >= 3.12.3-0~",
+      "to": "libpython3.12-stdlib:amd64"
+    },
+    {
+      "from": "libpython3.12-minimal:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libpython3.12-minimal:amd64",
+      "requirement": "libssl3t64 >= 3.0.0",
+      "to": "libssl3t64:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libbz2-1.0",
+      "to": "libbz2-1.0:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libcrypt1 >= 1:4.1.0",
+      "to": "libcrypt1:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libdb5.3t64",
+      "to": "libdb5.3t64:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "liblzma5 >= 5.1.1alpha+20120614",
+      "to": "liblzma5:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libncursesw6 >= 6.1",
+      "to": "libncursesw6:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libpython3.12-minimal = 3.12.3-1ubuntu0.17",
+      "to": "libpython3.12-minimal:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libreadline8t64 >= 7.0~beta",
+      "to": "libreadline8t64:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libsqlite3-0 >= 3.36.0",
+      "to": "libsqlite3-0:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "libtinfo6 >= 6",
+      "to": "libtinfo6:amd64"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "media-types | mime-support",
+      "to": "media-types"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "netbase",
+      "to": "netbase"
+    },
+    {
+      "from": "libpython3.12-stdlib:amd64",
+      "requirement": "tzdata",
+      "to": "tzdata"
+    },
+    {
+      "from": "libquadmath0:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libquadmath0:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libreadline8t64:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libreadline8t64:amd64",
+      "requirement": "libtinfo6 >= 6",
+      "to": "libtinfo6:amd64"
+    },
+    {
+      "from": "libreadline8t64:amd64",
+      "requirement": "readline-common",
+      "to": "readline-common"
+    },
+    {
+      "from": "librtmp1:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "librtmp1:amd64",
+      "requirement": "libgmp10 >= 2:6.3.0+dfsg",
+      "to": "libgmp10:amd64"
+    },
+    {
+      "from": "librtmp1:amd64",
+      "requirement": "libgnutls30 >= 3.8.1",
+      "to": "libgnutls30t64:amd64"
+    },
+    {
+      "from": "librtmp1:amd64",
+      "requirement": "libhogweed6",
+      "to": "libhogweed6t64:amd64"
+    },
+    {
+      "from": "librtmp1:amd64",
+      "requirement": "libnettle8",
+      "to": "libnettle8t64:amd64"
+    },
+    {
+      "from": "librtmp1:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libsasl2-2:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libsasl2-2:amd64",
+      "requirement": "libsasl2-modules-db >= 2.1.28+dfsg1-5ubuntu3.1",
+      "to": "libsasl2-modules-db:amd64"
+    },
+    {
+      "from": "libsasl2-2:amd64",
+      "requirement": "libssl3t64 >= 3.0.0",
+      "to": "libssl3t64:amd64"
+    },
+    {
+      "from": "libsasl2-modules-db:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libsasl2-modules-db:amd64",
+      "requirement": "libdb5.3t64",
+      "to": "libdb5.3t64:amd64"
+    },
+    {
+      "from": "libselinux1-dev:arm64",
+      "requirement": "libpcre2-dev",
+      "to": "libpcre2-dev:arm64"
+    },
+    {
+      "from": "libselinux1-dev:arm64",
+      "requirement": "libselinux1 = 3.5-2ubuntu2.1",
+      "to": "libselinux1:arm64"
+    },
+    {
+      "from": "libselinux1-dev:arm64",
+      "requirement": "libsepol-dev >= 3.5",
+      "to": "libsepol-dev:arm64"
+    },
+    {
+      "from": "libselinux1:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libselinux1:amd64",
+      "requirement": "libpcre2-8-0 >= 10.22",
+      "to": "libpcre2-8-0:amd64"
+    },
+    {
+      "from": "libselinux1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libselinux1:arm64",
+      "requirement": "libpcre2-8-0 >= 10.22",
+      "to": "libpcre2-8-0:arm64"
+    },
+    {
+      "from": "libsensors5:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libsensors5:arm64",
+      "requirement": "libsensors-config",
+      "to": "libsensors-config"
+    },
+    {
+      "from": "libsepol-dev:arm64",
+      "requirement": "libsepol2 = 3.5-2build1",
+      "to": "libsepol2:arm64"
+    },
+    {
+      "from": "libsepol2:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libsframe1:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libsigsegv2:amd64",
+      "requirement": "libc6 >= 2.4",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libsqlite3-0:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libssh-4:amd64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libssh-4:amd64",
+      "requirement": "libgssapi-krb5-2 >= 1.17",
+      "to": "libgssapi-krb5-2:amd64"
+    },
+    {
+      "from": "libssh-4:amd64",
+      "requirement": "libssl3t64 >= 3.0.0",
+      "to": "libssl3t64:amd64"
+    },
+    {
+      "from": "libssh-4:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libssl3t64:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libssl3t64:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libstdc++-13-dev-arm64-cross",
+      "requirement": "gcc-13-cross-base >= 13.3.0-6ubuntu2~24.04",
+      "to": "gcc-13-cross-base"
+    },
+    {
+      "from": "libstdc++-13-dev-arm64-cross",
+      "requirement": "libc6-dev-arm64-cross >= 2.13-0ubuntu6",
+      "to": "libc6-dev-arm64-cross"
+    },
+    {
+      "from": "libstdc++-13-dev-arm64-cross",
+      "requirement": "libgcc-13-dev-arm64-cross = 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libgcc-13-dev-arm64-cross"
+    },
+    {
+      "from": "libstdc++-13-dev-arm64-cross",
+      "requirement": "libstdc++6-arm64-cross >= 13.3.0-6ubuntu2~24.04cross1",
+      "to": "libstdc++6-arm64-cross"
+    },
+    {
+      "from": "libstdc++-13-dev:amd64",
+      "requirement": "gcc-13-base = 13.3.0-6ubuntu2~24.04.1",
+      "to": "gcc-13-base:amd64"
+    },
+    {
+      "from": "libstdc++-13-dev:amd64",
+      "requirement": "libc6-dev >= 2.13-0ubuntu6",
+      "to": "libc6-dev:amd64"
+    },
+    {
+      "from": "libstdc++-13-dev:amd64",
+      "requirement": "libgcc-13-dev = 13.3.0-6ubuntu2~24.04.1",
+      "to": "libgcc-13-dev:amd64"
+    },
+    {
+      "from": "libstdc++-13-dev:amd64",
+      "requirement": "libstdc++6 >= 13.3.0-6ubuntu2~24.04.1",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "libstdc++6-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libstdc++6-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libstdc++6-arm64-cross",
+      "requirement": "libgcc-s1-arm64-cross >= 4.5",
+      "to": "libgcc-s1-arm64-cross"
+    },
+    {
+      "from": "libstdc++6:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libstdc++6:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libstdc++6:amd64",
+      "requirement": "libgcc-s1 >= 4.3",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libstdc++6:arm64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:arm64"
+    },
+    {
+      "from": "libstdc++6:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libstdc++6:arm64",
+      "requirement": "libgcc-s1 >= 4.5",
+      "to": "libgcc-s1:arm64"
+    },
+    {
+      "from": "libtasn1-6-dev:arm64",
+      "requirement": "libtasn1-6 = 4.19.0-3ubuntu0.24.04.2",
+      "to": "libtasn1-6:arm64"
+    },
+    {
+      "from": "libtasn1-6:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libtasn1-6:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libtinfo6:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libtinfo6:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libtsan2-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libtsan2-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libtsan2-arm64-cross",
+      "requirement": "libgcc-s1-arm64-cross >= 3.3",
+      "to": "libgcc-s1-arm64-cross"
+    },
+    {
+      "from": "libtsan2:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libtsan2:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libtsan2:amd64",
+      "requirement": "libgcc-s1 >= 3.4",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libubsan1-arm64-cross",
+      "requirement": "gcc-14-cross-base >= 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-cross-base"
+    },
+    {
+      "from": "libubsan1-arm64-cross",
+      "requirement": "libc6-arm64-cross >= 2.39",
+      "to": "libc6-arm64-cross"
+    },
+    {
+      "from": "libubsan1-arm64-cross",
+      "requirement": "libgcc-s1-arm64-cross >= 3.3",
+      "to": "libgcc-s1-arm64-cross"
+    },
+    {
+      "from": "libubsan1-arm64-cross",
+      "requirement": "libstdc++6-arm64-cross",
+      "to": "libstdc++6-arm64-cross"
+    },
+    {
+      "from": "libubsan1:amd64",
+      "requirement": "gcc-14-base = 14.2.0-4ubuntu2~24.04.1",
+      "to": "gcc-14-base:amd64"
+    },
+    {
+      "from": "libubsan1:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libubsan1:amd64",
+      "requirement": "libgcc-s1 >= 3.3",
+      "to": "libgcc-s1:amd64"
+    },
+    {
+      "from": "libubsan1:amd64",
+      "requirement": "libstdc++6 >= 4.1.1",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "libudev-dev:arm64",
+      "requirement": "libudev1 = 255.4-1ubuntu8.17",
+      "to": "libudev1:arm64"
+    },
+    {
+      "from": "libudev1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libudev1:arm64",
+      "requirement": "libcap2 >= 1:2.10",
+      "to": "libcap2:arm64"
+    },
+    {
+      "from": "libunbound8:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libunbound8:arm64",
+      "requirement": "libevent-2.1-7t64 >= 2.1.8-stable",
+      "to": "libevent-2.1-7t64:arm64"
+    },
+    {
+      "from": "libunbound8:arm64",
+      "requirement": "libssl3t64 >= 3.0.0",
+      "to": "libssl3t64:arm64"
+    },
+    {
+      "from": "libunistring5:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libunistring5:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libunwind-dev:arm64",
+      "requirement": "liblzma-dev",
+      "to": "liblzma-dev:arm64"
+    },
+    {
+      "from": "libunwind-dev:arm64",
+      "requirement": "libunwind8 = 1.6.2-3build1.1",
+      "to": "libunwind8:arm64"
+    },
+    {
+      "from": "libunwind8:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libunwind8:arm64",
+      "requirement": "liblzma5 >= 5.1.1alpha+20110809",
+      "to": "liblzma5:arm64"
+    },
+    {
+      "from": "libuuid1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libvulkan1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libwayland-bin:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libwayland-bin:amd64",
+      "requirement": "libexpat1 >= 2.0.1",
+      "to": "libexpat1:amd64"
+    },
+    {
+      "from": "libwayland-bin:amd64",
+      "requirement": "libxml2 >= 2.7.4",
+      "to": "libxml2:amd64"
+    },
+    {
+      "from": "libwayland-client0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libwayland-client0:arm64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:arm64"
+    },
+    {
+      "from": "libwayland-cursor0:arm64",
+      "requirement": "libc6 >= 2.28",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libwayland-cursor0:arm64",
+      "requirement": "libwayland-client0 >= 1.20.0",
+      "to": "libwayland-client0:arm64"
+    },
+    {
+      "from": "libwayland-dev:arm64",
+      "requirement": "libffi-dev",
+      "to": "libffi-dev:arm64"
+    },
+    {
+      "from": "libwayland-dev:arm64",
+      "requirement": "libwayland-bin = 1.22.0-2.1build1",
+      "to": "libwayland-bin:amd64"
+    },
+    {
+      "from": "libwayland-dev:arm64",
+      "requirement": "libwayland-client0 = 1.22.0-2.1build1",
+      "to": "libwayland-client0:arm64"
+    },
+    {
+      "from": "libwayland-dev:arm64",
+      "requirement": "libwayland-cursor0 = 1.22.0-2.1build1",
+      "to": "libwayland-cursor0:arm64"
+    },
+    {
+      "from": "libwayland-dev:arm64",
+      "requirement": "libwayland-egl1 = 1.22.0-2.1build1",
+      "to": "libwayland-egl1:arm64"
+    },
+    {
+      "from": "libwayland-dev:arm64",
+      "requirement": "libwayland-server0 = 1.22.0-2.1build1",
+      "to": "libwayland-server0:arm64"
+    },
+    {
+      "from": "libwayland-egl1:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libwayland-server0:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libwayland-server0:arm64",
+      "requirement": "libffi8 >= 3.4",
+      "to": "libffi8:arm64"
+    },
+    {
+      "from": "libx11-6:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libx11-6:arm64",
+      "requirement": "libx11-data",
+      "to": "libx11-data"
+    },
+    {
+      "from": "libx11-6:arm64",
+      "requirement": "libxcb1 >= 1.11.1",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libx11-dev:arm64",
+      "requirement": "libx11-6 = 2:1.8.7-1build1",
+      "to": "libx11-6:arm64"
+    },
+    {
+      "from": "libx11-dev:arm64",
+      "requirement": "libxau-dev",
+      "to": "libxau-dev:arm64"
+    },
+    {
+      "from": "libx11-dev:arm64",
+      "requirement": "libxcb1-dev",
+      "to": "libxcb1-dev:arm64"
+    },
+    {
+      "from": "libx11-dev:arm64",
+      "requirement": "libxdmcp-dev",
+      "to": "libxdmcp-dev:arm64"
+    },
+    {
+      "from": "libx11-dev:arm64",
+      "requirement": "x11proto-dev >= 2019.2-1",
+      "to": "x11proto-dev"
+    },
+    {
+      "from": "libx11-dev:arm64",
+      "requirement": "xtrans-dev",
+      "to": "xtrans-dev"
+    },
+    {
+      "from": "libx11-xcb-dev:arm64",
+      "requirement": "libx11-dev",
+      "to": "libx11-dev:arm64"
+    },
+    {
+      "from": "libx11-xcb-dev:arm64",
+      "requirement": "libx11-xcb1 = 2:1.8.7-1build1",
+      "to": "libx11-xcb1:arm64"
+    },
+    {
+      "from": "libx11-xcb-dev:arm64",
+      "requirement": "libxcb1-dev",
+      "to": "libxcb1-dev:arm64"
+    },
+    {
+      "from": "libx11-xcb1:arm64",
+      "requirement": "libx11-6 = 2:1.8.7-1build1",
+      "to": "libx11-6:arm64"
+    },
+    {
+      "from": "libxau-dev:arm64",
+      "requirement": "libxau6 = 1:1.0.9-1build6",
+      "to": "libxau6:arm64"
+    },
+    {
+      "from": "libxau-dev:arm64",
+      "requirement": "x11proto-dev",
+      "to": "x11proto-dev"
+    },
+    {
+      "from": "libxau6:arm64",
+      "requirement": "libc6 >= 2.33",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb-dri3-0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb-dri3-0:arm64",
+      "requirement": "libxcb1 >= 1.12",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libxcb-glx0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb-glx0:arm64",
+      "requirement": "libxcb1",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libxcb-present0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb-present0:arm64",
+      "requirement": "libxcb1",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libxcb-randr0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb-randr0:arm64",
+      "requirement": "libxcb1 >= 1.9.2",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libxcb-shm0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb-shm0:arm64",
+      "requirement": "libxcb1 >= 1.12",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libxcb-sync1:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb-sync1:arm64",
+      "requirement": "libxcb1",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libxcb-xfixes0:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb-xfixes0:arm64",
+      "requirement": "libxcb1",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libxcb1-dev:arm64",
+      "requirement": "libpthread-stubs0-dev",
+      "to": "libpthread-stubs0-dev:arm64"
+    },
+    {
+      "from": "libxcb1-dev:arm64",
+      "requirement": "libxau-dev >= 1:1.0.0-1",
+      "to": "libxau-dev:arm64"
+    },
+    {
+      "from": "libxcb1-dev:arm64",
+      "requirement": "libxcb1 = 1.15-1ubuntu2",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "libxcb1-dev:arm64",
+      "requirement": "libxdmcp-dev >= 1:1.0.0-1",
+      "to": "libxdmcp-dev:arm64"
+    },
+    {
+      "from": "libxcb1:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxcb1:arm64",
+      "requirement": "libxau6 >= 1:1.0.9",
+      "to": "libxau6:arm64"
+    },
+    {
+      "from": "libxcb1:arm64",
+      "requirement": "libxdmcp6",
+      "to": "libxdmcp6:arm64"
+    },
+    {
+      "from": "libxdmcp-dev:arm64",
+      "requirement": "libxdmcp6 = 1:1.1.3-0ubuntu6",
+      "to": "libxdmcp6:arm64"
+    },
+    {
+      "from": "libxdmcp-dev:arm64",
+      "requirement": "x11proto-core-dev",
+      "to": "x11proto-dev"
+    },
+    {
+      "from": "libxdmcp6:arm64",
+      "requirement": "libbsd0 >= 0.2.0",
+      "to": "libbsd0:arm64"
+    },
+    {
+      "from": "libxdmcp6:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxext6:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxext6:arm64",
+      "requirement": "libx11-6 >= 2:1.6.0",
+      "to": "libx11-6:arm64"
+    },
+    {
+      "from": "libxml2:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libxml2:amd64",
+      "requirement": "libicu74 >= 74.1-1~",
+      "to": "libicu74:amd64"
+    },
+    {
+      "from": "libxml2:amd64",
+      "requirement": "liblzma5 >= 5.1.1alpha+20120614",
+      "to": "liblzma5:amd64"
+    },
+    {
+      "from": "libxml2:amd64",
+      "requirement": "zlib1g >= 1:1.2.3.3",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "libxml2:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxml2:arm64",
+      "requirement": "libicu74 >= 74.1-1~",
+      "to": "libicu74:arm64"
+    },
+    {
+      "from": "libxml2:arm64",
+      "requirement": "liblzma5 >= 5.1.1alpha+20120614",
+      "to": "liblzma5:arm64"
+    },
+    {
+      "from": "libxml2:arm64",
+      "requirement": "zlib1g >= 1:1.2.3.3",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "libxshmfence1:arm64",
+      "requirement": "libc6 >= 2.27",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxxf86vm1:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libxxf86vm1:arm64",
+      "requirement": "libx11-6 >= 2:1.6.0",
+      "to": "libx11-6:arm64"
+    },
+    {
+      "from": "libxxf86vm1:arm64",
+      "requirement": "libxext6",
+      "to": "libxext6:arm64"
+    },
+    {
+      "from": "libxxhash0:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libyaml-0-2:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libyaml-0-2:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "libyaml-dev:arm64",
+      "requirement": "libyaml-0-2 = 0.2.5-1build1",
+      "to": "libyaml-0-2:arm64"
+    },
+    {
+      "from": "libzstd-dev:arm64",
+      "requirement": "libzstd1 = 1.5.5+dfsg2-2build1.1",
+      "to": "libzstd1:arm64"
+    },
+    {
+      "from": "libzstd1:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "libzstd1:arm64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libdrm-amdgpu1 >= 2.4.125-1",
+      "to": "libdrm-amdgpu1:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libdrm2 >= 2.4.125-1",
+      "to": "libdrm2:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libelf1t64 >= 0.142",
+      "to": "libelf1t64:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libexpat1 >= 2.0.1",
+      "to": "libexpat1:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libgcc-s1 >= 3.0",
+      "to": "libgcc-s1:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libllvm20",
+      "to": "libllvm20:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libsensors5 >= 1:3.5.0",
+      "to": "libsensors5:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libstdc++6 >= 11",
+      "to": "libstdc++6:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libx11-xcb1 >= 2:1.8.7",
+      "to": "libx11-xcb1:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libxcb-dri3-0 >= 1.13",
+      "to": "libxcb-dri3-0:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libxcb-present0",
+      "to": "libxcb-present0:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libxcb-randr0",
+      "to": "libxcb-randr0:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libxcb-sync1",
+      "to": "libxcb-sync1:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libxcb-xfixes0",
+      "to": "libxcb-xfixes0:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libxcb1 >= 1.9.2",
+      "to": "libxcb1:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libxshmfence1",
+      "to": "libxshmfence1:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:arm64"
+    },
+    {
+      "from": "mesa-libgallium:arm64",
+      "requirement": "zlib1g >= 1:1.2.3.3",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "meson",
+      "requirement": "ninja-build >= 1.6",
+      "to": "ninja-build:amd64"
+    },
+    {
+      "from": "meson",
+      "requirement": "python3-pkg-resources",
+      "to": "python3-pkg-resources"
+    },
+    {
+      "from": "meson",
+      "requirement": "python3-setuptools",
+      "to": "python3-setuptools"
+    },
+    {
+      "from": "meson",
+      "requirement": "python3:any >= 3.7~",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "nettle-dev:arm64",
+      "requirement": "libgmp-dev",
+      "to": "libgmp-dev:arm64"
+    },
+    {
+      "from": "nettle-dev:arm64",
+      "requirement": "libhogweed6t64 = 3.9.1-2.2build1.1",
+      "to": "libhogweed6t64:arm64"
+    },
+    {
+      "from": "nettle-dev:arm64",
+      "requirement": "libnettle8t64 = 3.9.1-2.2build1.1",
+      "to": "libnettle8t64:arm64"
+    },
+    {
+      "from": "ninja-build:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "ninja-build:amd64",
+      "requirement": "libstdc++6 >= 13.1",
+      "to": "libstdc++6:amd64"
+    },
+    {
+      "from": "openssl:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "openssl:amd64",
+      "requirement": "libssl3t64 >= 3.0.9",
+      "to": "libssl3t64:amd64"
+    },
+    {
+      "from": "perl-base:amd64",
+      "requirement": "dpkg >= 1.17.17",
+      "to": "dpkg:amd64"
+    },
+    {
+      "from": "perl-base:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "perl-base:amd64",
+      "requirement": "libcrypt1 >= 1:4.1.0",
+      "to": "libcrypt1:amd64"
+    },
+    {
+      "from": "perl-modules-5.38",
+      "requirement": "dpkg >= 1.17.17",
+      "to": "dpkg:amd64"
+    },
+    {
+      "from": "perl-modules-5.38",
+      "requirement": "perl-base >= 5.38.2-1",
+      "to": "perl-base:amd64"
+    },
+    {
+      "from": "perl:amd64",
+      "requirement": "dpkg >= 1.17.17",
+      "to": "dpkg:amd64"
+    },
+    {
+      "from": "perl:amd64",
+      "requirement": "libperl5.38t64 = 5.38.2-3.2ubuntu0.4",
+      "to": "libperl5.38t64:amd64"
+    },
+    {
+      "from": "perl:amd64",
+      "requirement": "perl-base = 5.38.2-3.2ubuntu0.4",
+      "to": "perl-base:amd64"
+    },
+    {
+      "from": "perl:amd64",
+      "requirement": "perl-modules-5.38 >= 5.38.2-3.2ubuntu0.4",
+      "to": "perl-modules-5.38"
+    },
+    {
+      "from": "pkgconf-bin:amd64",
+      "requirement": "libc6 >= 2.34",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "pkgconf-bin:amd64",
+      "requirement": "libpkgconf3 >= 1.8.0",
+      "to": "libpkgconf3:amd64"
+    },
+    {
+      "from": "pkgconf:amd64",
+      "requirement": "pkgconf-bin",
+      "to": "pkgconf-bin:amd64"
+    },
+    {
+      "from": "pkgconf:arm64",
+      "requirement": "pkgconf-bin",
+      "to": "pkgconf-bin:amd64"
+    },
+    {
+      "from": "python3-jinja2",
+      "requirement": "python3-markupsafe >= 2.0",
+      "to": "python3-markupsafe:amd64"
+    },
+    {
+      "from": "python3-jinja2",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-markupsafe:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "python3-markupsafe:amd64",
+      "requirement": "python3 << 3.13",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-markupsafe:amd64",
+      "requirement": "python3 >= 3.12~",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-markupsafe:amd64",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-minimal:amd64",
+      "requirement": "dpkg >= 1.13.20",
+      "to": "dpkg:amd64"
+    },
+    {
+      "from": "python3-minimal:amd64",
+      "requirement": "python3.12-minimal >= 3.12.3-0~",
+      "to": "python3.12-minimal:amd64"
+    },
+    {
+      "from": "python3-packaging",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-pkg-resources",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-ply",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-setuptools",
+      "requirement": "python3-pkg-resources = 68.1.2-2ubuntu1.2",
+      "to": "python3-pkg-resources"
+    },
+    {
+      "from": "python3-setuptools",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-yaml:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "python3-yaml:amd64",
+      "requirement": "libyaml-0-2",
+      "to": "libyaml-0-2:amd64"
+    },
+    {
+      "from": "python3-yaml:amd64",
+      "requirement": "python3 << 3.13",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-yaml:amd64",
+      "requirement": "python3 >= 3.12~",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3-yaml:amd64",
+      "requirement": "python3:any",
+      "to": "python3:amd64"
+    },
+    {
+      "from": "python3.12-minimal:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "python3.12-minimal:amd64",
+      "requirement": "libexpat1 >= 2.6.0",
+      "to": "libexpat1:amd64"
+    },
+    {
+      "from": "python3.12-minimal:amd64",
+      "requirement": "libpython3.12-minimal = 3.12.3-1ubuntu0.17",
+      "to": "libpython3.12-minimal:amd64"
+    },
+    {
+      "from": "python3.12-minimal:amd64",
+      "requirement": "zlib1g >= 1:1.2.0",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "python3.12:amd64",
+      "requirement": "libpython3.12-stdlib = 3.12.3-1ubuntu0.17",
+      "to": "libpython3.12-stdlib:amd64"
+    },
+    {
+      "from": "python3.12:amd64",
+      "requirement": "media-types | mime-support",
+      "to": "media-types"
+    },
+    {
+      "from": "python3.12:amd64",
+      "requirement": "python3.12-minimal = 3.12.3-1ubuntu0.17",
+      "to": "python3.12-minimal:amd64"
+    },
+    {
+      "from": "python3.12:amd64",
+      "requirement": "tzdata",
+      "to": "tzdata"
+    },
+    {
+      "from": "python3:amd64",
+      "requirement": "libpython3-stdlib = 3.12.3-0ubuntu2.1",
+      "to": "libpython3-stdlib:amd64"
+    },
+    {
+      "from": "python3:amd64",
+      "requirement": "python3-minimal = 3.12.3-0ubuntu2.1",
+      "to": "python3-minimal:amd64"
+    },
+    {
+      "from": "python3:amd64",
+      "requirement": "python3.12 >= 3.12.3-0~",
+      "to": "python3.12:amd64"
+    },
+    {
+      "from": "rpcsvc-proto:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "init-system-helpers >= 1.54~",
+      "to": "init-system-helpers"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "libacl1 >= 2.2.23",
+      "to": "libacl1:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "liblz4-1 >= 0.0~r130",
+      "to": "liblz4-1:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "libpopt0 >= 1.14",
+      "to": "libpopt0:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "libssl3t64 >= 3.0.0",
+      "to": "libssl3t64:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "libxxhash0 >= 0.8.0",
+      "to": "libxxhash0:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "libzstd1 >= 1.5.5",
+      "to": "libzstd1:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "lsb-base",
+      "to": "sysvinit-utils:amd64"
+    },
+    {
+      "from": "rsync:amd64",
+      "requirement": "zlib1g >= 1:1.1.4",
+      "to": "zlib1g:amd64"
+    },
+    {
+      "from": "sysvinit-utils:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "tar:amd64",
+      "requirement": "libacl1 >= 2.2.23",
+      "to": "libacl1:amd64"
+    },
+    {
+      "from": "tar:amd64",
+      "requirement": "libc6 >= 2.38",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "tar:amd64",
+      "requirement": "libselinux1 >= 3.1~",
+      "to": "libselinux1:amd64"
+    },
+    {
+      "from": "tzdata",
+      "requirement": "debconf >= 0.5 | debconf-2.0",
+      "to": "debconf"
+    },
+    {
+      "from": "uuid-dev:arm64",
+      "requirement": "libc6-dev | libc-dev",
+      "to": "libc6-dev:arm64"
+    },
+    {
+      "from": "uuid-dev:arm64",
+      "requirement": "libuuid1 = 2.39.3-9ubuntu6.6",
+      "to": "libuuid1:arm64"
+    },
+    {
+      "from": "x11proto-dev",
+      "requirement": "xorg-sgml-doctools >= 1:1.5",
+      "to": "xorg-sgml-doctools"
+    },
+    {
+      "from": "zlib1g-dev:arm64",
+      "requirement": "libc6-dev | libc-dev",
+      "to": "libc6-dev:arm64"
+    },
+    {
+      "from": "zlib1g-dev:arm64",
+      "requirement": "zlib1g = 1:1.3.dfsg-3.1ubuntu2.2",
+      "to": "zlib1g:arm64"
+    },
+    {
+      "from": "zlib1g:amd64",
+      "requirement": "libc6 >= 2.14",
+      "to": "libc6:amd64"
+    },
+    {
+      "from": "zlib1g:arm64",
+      "requirement": "libc6 >= 2.17",
+      "to": "libc6:arm64"
+    }
+  ],
+  "host_architecture": "amd64",
+  "packages": [
+    {
+      "architecture": "amd64",
+      "name": "base-files:amd64",
+      "version": "13ubuntu10.2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "bash:amd64",
+      "version": "5.2.21-2ubuntu4"
+    },
+    {
+      "architecture": "amd64",
+      "name": "binutils-aarch64-linux-gnu:amd64",
+      "version": "2.42-4ubuntu2.10"
+    },
+    {
+      "architecture": "amd64",
+      "name": "binutils-common:amd64",
+      "version": "2.42-4ubuntu2.10"
+    },
+    {
+      "architecture": "amd64",
+      "name": "binutils-x86-64-linux-gnu:amd64",
+      "version": "2.42-4ubuntu2.10"
+    },
+    {
+      "architecture": "amd64",
+      "name": "coreutils:amd64",
+      "version": "9.4-3ubuntu6.3"
+    },
+    {
+      "architecture": "amd64",
+      "name": "cpp-13-aarch64-linux-gnu:amd64",
+      "version": "13.3.0-6ubuntu2~24.04cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "cpp-13-x86-64-linux-gnu:amd64",
+      "version": "13.3.0-6ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "dash:amd64",
+      "version": "0.5.12-6ubuntu5"
+    },
+    {
+      "architecture": "all",
+      "name": "debconf",
+      "version": "1.5.86ubuntu1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "debianutils:amd64",
+      "version": "5.17build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "dpkg:amd64",
+      "version": "1.22.6ubuntu6.6"
+    },
+    {
+      "architecture": "amd64",
+      "name": "g++-13-aarch64-linux-gnu:amd64",
+      "version": "13.3.0-6ubuntu2~24.04cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "g++-13-x86-64-linux-gnu:amd64",
+      "version": "13.3.0-6ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "gawk:amd64",
+      "version": "1:5.2.1-2ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "gcc-13-aarch64-linux-gnu-base:amd64",
+      "version": "13.3.0-6ubuntu2~24.04cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "gcc-13-aarch64-linux-gnu:amd64",
+      "version": "13.3.0-6ubuntu2~24.04cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "gcc-13-base:amd64",
+      "version": "13.3.0-6ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "all",
+      "name": "gcc-13-cross-base",
+      "version": "13.3.0-6ubuntu2~24.04cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "gcc-13-x86-64-linux-gnu:amd64",
+      "version": "13.3.0-6ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "gcc-14-base:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "gcc-14-base:arm64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "all",
+      "name": "gcc-14-cross-base",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "gir1.2-glib-2.0:arm64",
+      "version": "2.80.0-6ubuntu3.8"
+    },
+    {
+      "architecture": "arm64",
+      "name": "gir1.2-gst-plugins-base-1.0:arm64",
+      "version": "1.24.2-1ubuntu0.4"
+    },
+    {
+      "architecture": "arm64",
+      "name": "gir1.2-gstreamer-1.0:arm64",
+      "version": "1.24.2-1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "gir1.2-gudev-1.0:arm64",
+      "version": "1:238-5ubuntu1"
+    },
+    {
+      "architecture": "all",
+      "name": "git-man",
+      "version": "1:2.43.0-1ubuntu7.3"
+    },
+    {
+      "architecture": "amd64",
+      "name": "git:amd64",
+      "version": "1:2.43.0-1ubuntu7.3"
+    },
+    {
+      "architecture": "all",
+      "name": "init-system-helpers",
+      "version": "1.66ubuntu1"
+    },
+    {
+      "architecture": "all",
+      "name": "iso-codes",
+      "version": "4.16.0-1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libacl1:amd64",
+      "version": "2.3.2-1build1.1"
+    },
+    {
+      "architecture": "all",
+      "name": "libasan8-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libasan8:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "all",
+      "name": "libatomic1-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libatomic1:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libattr1:amd64",
+      "version": "1:2.5.2-1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libbinutils:amd64",
+      "version": "2.42-4ubuntu2.10"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libblkid-dev:arm64",
+      "version": "2.39.3-9ubuntu6.6"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libblkid1:amd64",
+      "version": "2.39.3-9ubuntu6.6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libblkid1:arm64",
+      "version": "2.39.3-9ubuntu6.6"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libbrotli1:amd64",
+      "version": "1.1.0-2build2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libbsd0:arm64",
+      "version": "0.12.1-1build1.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libbz2-1.0:amd64",
+      "version": "1.0.8-5.1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libbz2-1.0:arm64",
+      "version": "1.0.8-5.1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libc-dev-bin:amd64",
+      "version": "2.39-0ubuntu8.9"
+    },
+    {
+      "architecture": "all",
+      "name": "libc6-arm64-cross",
+      "version": "2.39-0ubuntu8cross1"
+    },
+    {
+      "architecture": "all",
+      "name": "libc6-dev-arm64-cross",
+      "version": "2.39-0ubuntu8cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libc6-dev:amd64",
+      "version": "2.39-0ubuntu8.9"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libc6-dev:arm64",
+      "version": "2.39-0ubuntu8.9"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libc6:amd64",
+      "version": "2.39-0ubuntu8.9"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libc6:arm64",
+      "version": "2.39-0ubuntu8.9"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libcap2-bin:amd64",
+      "version": "1:2.66-5ubuntu2.4"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libcap2:amd64",
+      "version": "1:2.66-5ubuntu2.4"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libcap2:arm64",
+      "version": "1:2.66-5ubuntu2.4"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libcc1-0:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libcom-err2:amd64",
+      "version": "1.47.0-2.4~exp1ubuntu4.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libcrypt-dev:amd64",
+      "version": "1:4.4.36-4build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libcrypt-dev:arm64",
+      "version": "1:4.4.36-4build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libcrypt1:amd64",
+      "version": "1:4.4.36-4build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libcrypt1:arm64",
+      "version": "1:4.4.36-4build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libctf-nobfd0:amd64",
+      "version": "2.42-4ubuntu2.10"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libctf0:amd64",
+      "version": "2.42-4ubuntu2.10"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libcurl3t64-gnutls:amd64",
+      "version": "8.5.0-2ubuntu10.13"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libdb5.3t64:amd64",
+      "version": "5.3.28+dfsg2-7"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdrm-amdgpu1:arm64",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "all",
+      "name": "libdrm-common",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdrm-dev:arm64",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdrm-etnaviv1:arm64",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdrm-freedreno1:arm64",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdrm-nouveau2:arm64",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdrm-radeon1:arm64",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdrm-tegra0:arm64",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdrm2:arm64",
+      "version": "2.4.125-1ubuntu0.1~24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdw-dev:arm64",
+      "version": "0.190-1.1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libdw1t64:arm64",
+      "version": "0.190-1.1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libedit2:arm64",
+      "version": "3.1-20230828-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libegl-dev:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libegl-mesa0:arm64",
+      "version": "25.2.8-0ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libegl1:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libelf-dev:arm64",
+      "version": "0.190-1.1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libelf1t64:amd64",
+      "version": "0.190-1.1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libelf1t64:arm64",
+      "version": "0.190-1.1ubuntu0.1"
+    },
+    {
+      "architecture": "all",
+      "name": "liberror-perl",
+      "version": "0.17029-2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libevent-2.1-7t64:arm64",
+      "version": "2.1.12-stable-9ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libevent-core-2.1-7t64:arm64",
+      "version": "2.1.12-stable-9ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libevent-dev:arm64",
+      "version": "2.1.12-stable-9ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libevent-extra-2.1-7t64:arm64",
+      "version": "2.1.12-stable-9ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libevent-openssl-2.1-7t64:arm64",
+      "version": "2.1.12-stable-9ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libevent-pthreads-2.1-7t64:arm64",
+      "version": "2.1.12-stable-9ubuntu2.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libexpat1:amd64",
+      "version": "2.6.1-2ubuntu0.4"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libexpat1:arm64",
+      "version": "2.6.1-2ubuntu0.4"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libffi-dev:arm64",
+      "version": "3.4.6-1build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libffi8:amd64",
+      "version": "3.4.6-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libffi8:arm64",
+      "version": "3.4.6-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgbm-dev:arm64",
+      "version": "25.2.8-0ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgbm1:arm64",
+      "version": "25.2.8-0ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "all",
+      "name": "libgcc-13-dev-arm64-cross",
+      "version": "13.3.0-6ubuntu2~24.04cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgcc-13-dev:amd64",
+      "version": "13.3.0-6ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "all",
+      "name": "libgcc-s1-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgcc-s1:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgcc-s1:arm64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgdbm-compat4t64:amd64",
+      "version": "1.23-5.1build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgdbm6t64:amd64",
+      "version": "1.23-5.1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgirepository-2.0-0:arm64",
+      "version": "2.80.0-6ubuntu3.8"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgl-dev:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgl1-mesa-dri:arm64",
+      "version": "25.2.8-0ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgl1:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgles-dev:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgles1:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgles2:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libglib2.0-0t64:amd64",
+      "version": "2.80.0-6ubuntu3.8"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libglib2.0-0t64:arm64",
+      "version": "2.80.0-6ubuntu3.8"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libglib2.0-bin:amd64",
+      "version": "2.80.0-6ubuntu3.8"
+    },
+    {
+      "architecture": "all",
+      "name": "libglib2.0-data",
+      "version": "2.80.0-6ubuntu3.8"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libglib2.0-dev-bin:amd64",
+      "version": "2.80.0-6ubuntu3.8"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libglib2.0-dev:arm64",
+      "version": "2.80.0-6ubuntu3.8"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libglvnd0:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libglx-dev:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libglx-mesa0:arm64",
+      "version": "25.2.8-0ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libglx0:arm64",
+      "version": "1.7.0-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgmp-dev:arm64",
+      "version": "2:6.3.0+dfsg-2ubuntu6.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgmp10:amd64",
+      "version": "2:6.3.0+dfsg-2ubuntu6.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgmp10:arm64",
+      "version": "2:6.3.0+dfsg-2ubuntu6.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgmpxx4ldbl:arm64",
+      "version": "2:6.3.0+dfsg-2ubuntu6.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgnutls-dane0t64:arm64",
+      "version": "3.8.3-1.1ubuntu3.6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgnutls-openssl27t64:arm64",
+      "version": "3.8.3-1.1ubuntu3.6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgnutls28-dev:arm64",
+      "version": "3.8.3-1.1ubuntu3.6"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgnutls30t64:amd64",
+      "version": "3.8.3-1.1ubuntu3.6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgnutls30t64:arm64",
+      "version": "3.8.3-1.1ubuntu3.6"
+    },
+    {
+      "architecture": "all",
+      "name": "libgomp1-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgomp1:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgprofng0:amd64",
+      "version": "2.42-4ubuntu2.10"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libgssapi-krb5-2:amd64",
+      "version": "1.20.1-6ubuntu2.7"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgstreamer-gl1.0-0:arm64",
+      "version": "1.24.2-1ubuntu0.4"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgstreamer-plugins-base1.0-0:arm64",
+      "version": "1.24.2-1ubuntu0.4"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgstreamer-plugins-base1.0-dev:arm64",
+      "version": "1.24.2-1ubuntu0.4"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgstreamer1.0-0:arm64",
+      "version": "1.24.2-1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgstreamer1.0-dev:arm64",
+      "version": "1.24.2-1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgudev-1.0-0:arm64",
+      "version": "1:238-5ubuntu1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libgudev-1.0-dev:arm64",
+      "version": "1:238-5ubuntu1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libhogweed6t64:amd64",
+      "version": "3.9.1-2.2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libhogweed6t64:arm64",
+      "version": "3.9.1-2.2build1.1"
+    },
+    {
+      "architecture": "all",
+      "name": "libhwasan0-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libhwasan0:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libicu74:amd64",
+      "version": "74.2-1ubuntu3.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libicu74:arm64",
+      "version": "74.2-1ubuntu3.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libidn2-0:amd64",
+      "version": "2.3.7-2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libidn2-0:arm64",
+      "version": "2.3.7-2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libidn2-dev:arm64",
+      "version": "2.3.7-2build1.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libisl23:amd64",
+      "version": "0.26-3build1.1"
+    },
+    {
+      "architecture": "all",
+      "name": "libitm1-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libitm1:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libjansson4:amd64",
+      "version": "2.14-2build2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libk5crypto3:amd64",
+      "version": "1.20.1-6ubuntu2.7"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libkeyutils1:amd64",
+      "version": "1.6.3-3build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libkrb5-3:amd64",
+      "version": "1.20.1-6ubuntu2.7"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libkrb5support0:amd64",
+      "version": "1.20.1-6ubuntu2.7"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libldap2:amd64",
+      "version": "2.6.7+dfsg-1~exp1ubuntu8.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libllvm20:arm64",
+      "version": "1:20.1.2-0ubuntu1~24.04.3"
+    },
+    {
+      "architecture": "all",
+      "name": "liblsan0-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "liblsan0:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "liblz4-1:amd64",
+      "version": "1.9.4-1build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "liblzma-dev:arm64",
+      "version": "5.6.1+really5.4.5-1ubuntu0.3"
+    },
+    {
+      "architecture": "amd64",
+      "name": "liblzma5:amd64",
+      "version": "5.6.1+really5.4.5-1ubuntu0.3"
+    },
+    {
+      "architecture": "arm64",
+      "name": "liblzma5:arm64",
+      "version": "5.6.1+really5.4.5-1ubuntu0.3"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libmd0:amd64",
+      "version": "1.1.0-2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libmd0:arm64",
+      "version": "1.1.0-2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libmount-dev:arm64",
+      "version": "2.39.3-9ubuntu6.6"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libmount1:amd64",
+      "version": "2.39.3-9ubuntu6.6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libmount1:arm64",
+      "version": "2.39.3-9ubuntu6.6"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libmpc3:amd64",
+      "version": "1.3.1-1build1.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libmpfr6:amd64",
+      "version": "4.2.1-1build1.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libncursesw6:amd64",
+      "version": "6.4+20240113-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libnettle8t64:amd64",
+      "version": "3.9.1-2.2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libnettle8t64:arm64",
+      "version": "3.9.1-2.2build1.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libnghttp2-14:amd64",
+      "version": "1.59.0-1ubuntu0.4"
+    },
+    {
+      "architecture": "amd64",
+      "name": "liborc-0.4-0t64:amd64",
+      "version": "1:0.4.38-1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "liborc-0.4-0t64:arm64",
+      "version": "1:0.4.38-1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "liborc-0.4-dev-bin:amd64",
+      "version": "1:0.4.38-1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "liborc-0.4-dev:arm64",
+      "version": "1:0.4.38-1ubuntu0.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libp11-kit-dev:arm64",
+      "version": "0.25.3-4ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libp11-kit0:amd64",
+      "version": "0.25.3-4ubuntu2.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libp11-kit0:arm64",
+      "version": "0.25.3-4ubuntu2.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libpciaccess-dev:arm64",
+      "version": "0.17-3ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libpciaccess0:arm64",
+      "version": "0.17-3ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libpcre2-16-0:arm64",
+      "version": "10.42-4ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libpcre2-32-0:arm64",
+      "version": "10.42-4ubuntu2.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libpcre2-8-0:amd64",
+      "version": "10.42-4ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libpcre2-8-0:arm64",
+      "version": "10.42-4ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libpcre2-dev:arm64",
+      "version": "10.42-4ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libpcre2-posix3:arm64",
+      "version": "10.42-4ubuntu2.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libperl5.38t64:amd64",
+      "version": "5.38.2-3.2ubuntu0.4"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libpkgconf3:amd64",
+      "version": "1.8.1-2build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libpopt0:amd64",
+      "version": "1.19+dfsg-1build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libpsl5t64:amd64",
+      "version": "0.21.2-1.1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libpthread-stubs0-dev:arm64",
+      "version": "0.4-1build3"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libpython3-stdlib:amd64",
+      "version": "3.12.3-0ubuntu2.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libpython3.12-minimal:amd64",
+      "version": "3.12.3-1ubuntu0.17"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libpython3.12-stdlib:amd64",
+      "version": "3.12.3-1ubuntu0.17"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libquadmath0:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libreadline8t64:amd64",
+      "version": "8.2-4build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "librtmp1:amd64",
+      "version": "2.4+20151223.gitfa8646d.1-2build7"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libsasl2-2:amd64",
+      "version": "2.1.28+dfsg1-5ubuntu3.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libsasl2-modules-db:amd64",
+      "version": "2.1.28+dfsg1-5ubuntu3.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libselinux1-dev:arm64",
+      "version": "3.5-2ubuntu2.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libselinux1:amd64",
+      "version": "3.5-2ubuntu2.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libselinux1:arm64",
+      "version": "3.5-2ubuntu2.1"
+    },
+    {
+      "architecture": "all",
+      "name": "libsensors-config",
+      "version": "1:3.6.0-9build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libsensors5:arm64",
+      "version": "1:3.6.0-9build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libsepol-dev:arm64",
+      "version": "3.5-2build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libsepol2:arm64",
+      "version": "3.5-2build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libsframe1:amd64",
+      "version": "2.42-4ubuntu2.10"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libsigsegv2:amd64",
+      "version": "2.14-1ubuntu2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libsqlite3-0:amd64",
+      "version": "3.45.1-1ubuntu2.7"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libssh-4:amd64",
+      "version": "0.10.6-2ubuntu0.5"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libssl3t64:amd64",
+      "version": "3.0.13-0ubuntu3.15"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libssl3t64:arm64",
+      "version": "3.0.13-0ubuntu3.15"
+    },
+    {
+      "architecture": "all",
+      "name": "libstdc++-13-dev-arm64-cross",
+      "version": "13.3.0-6ubuntu2~24.04cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libstdc++-13-dev:amd64",
+      "version": "13.3.0-6ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "all",
+      "name": "libstdc++6-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libstdc++6:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libstdc++6:arm64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libtasn1-6-dev:arm64",
+      "version": "4.19.0-3ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libtasn1-6:amd64",
+      "version": "4.19.0-3ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libtasn1-6:arm64",
+      "version": "4.19.0-3ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libtinfo6:amd64",
+      "version": "6.4+20240113-1ubuntu2.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libtinfo6:arm64",
+      "version": "6.4+20240113-1ubuntu2.2"
+    },
+    {
+      "architecture": "all",
+      "name": "libtsan2-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libtsan2:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "all",
+      "name": "libubsan1-arm64-cross",
+      "version": "14.2.0-4ubuntu2~24.04.1cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libubsan1:amd64",
+      "version": "14.2.0-4ubuntu2~24.04.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libudev-dev:arm64",
+      "version": "255.4-1ubuntu8.17"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libudev1:arm64",
+      "version": "255.4-1ubuntu8.17"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libunbound8:arm64",
+      "version": "1.19.2-1ubuntu3.8"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libunistring5:amd64",
+      "version": "1.1-2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libunistring5:arm64",
+      "version": "1.1-2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libunwind-dev:arm64",
+      "version": "1.6.2-3build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libunwind8:arm64",
+      "version": "1.6.2-3build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libuuid1:arm64",
+      "version": "2.39.3-9ubuntu6.6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libvulkan1:arm64",
+      "version": "1.3.275.0-1build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libwayland-bin:amd64",
+      "version": "1.22.0-2.1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libwayland-client0:arm64",
+      "version": "1.22.0-2.1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libwayland-cursor0:arm64",
+      "version": "1.22.0-2.1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libwayland-dev:arm64",
+      "version": "1.22.0-2.1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libwayland-egl1:arm64",
+      "version": "1.22.0-2.1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libwayland-server0:arm64",
+      "version": "1.22.0-2.1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libx11-6:arm64",
+      "version": "2:1.8.7-1build1"
+    },
+    {
+      "architecture": "all",
+      "name": "libx11-data",
+      "version": "2:1.8.7-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libx11-dev:arm64",
+      "version": "2:1.8.7-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libx11-xcb-dev:arm64",
+      "version": "2:1.8.7-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libx11-xcb1:arm64",
+      "version": "2:1.8.7-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxau-dev:arm64",
+      "version": "1:1.0.9-1build6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxau6:arm64",
+      "version": "1:1.0.9-1build6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb-dri3-0:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb-glx0:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb-present0:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb-randr0:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb-shm0:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb-sync1:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb-xfixes0:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb1-dev:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxcb1:arm64",
+      "version": "1.15-1ubuntu2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxdmcp-dev:arm64",
+      "version": "1:1.1.3-0ubuntu6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxdmcp6:arm64",
+      "version": "1:1.1.3-0ubuntu6"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxext6:arm64",
+      "version": "2:1.3.4-1build2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libxml2:amd64",
+      "version": "2.9.14+dfsg-1.3ubuntu3.8"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxml2:arm64",
+      "version": "2.9.14+dfsg-1.3ubuntu3.8"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxshmfence1:arm64",
+      "version": "1.3-1build5"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libxxf86vm1:arm64",
+      "version": "1:1.1.4-1build4"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libxxhash0:amd64",
+      "version": "0.8.2-2build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libyaml-0-2:amd64",
+      "version": "0.2.5-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libyaml-0-2:arm64",
+      "version": "0.2.5-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libyaml-dev:arm64",
+      "version": "0.2.5-1build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libzstd-dev:arm64",
+      "version": "1.5.5+dfsg2-2build1.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "libzstd1:amd64",
+      "version": "1.5.5+dfsg2-2build1.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "libzstd1:arm64",
+      "version": "1.5.5+dfsg2-2build1.1"
+    },
+    {
+      "architecture": "all",
+      "name": "linux-libc-dev-arm64-cross",
+      "version": "6.8.0-25.25cross1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "linux-libc-dev:amd64",
+      "version": "6.8.0-139.139"
+    },
+    {
+      "architecture": "arm64",
+      "name": "linux-libc-dev:arm64",
+      "version": "6.8.0-139.139"
+    },
+    {
+      "architecture": "all",
+      "name": "media-types",
+      "version": "10.1.0"
+    },
+    {
+      "architecture": "arm64",
+      "name": "mesa-libgallium:arm64",
+      "version": "25.2.8-0ubuntu0.24.04.2"
+    },
+    {
+      "architecture": "all",
+      "name": "meson",
+      "version": "1.3.2-1ubuntu1"
+    },
+    {
+      "architecture": "all",
+      "name": "netbase",
+      "version": "6.4"
+    },
+    {
+      "architecture": "arm64",
+      "name": "nettle-dev:arm64",
+      "version": "3.9.1-2.2build1.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "ninja-build:amd64",
+      "version": "1.11.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "openssl:amd64",
+      "version": "3.0.13-0ubuntu3.15"
+    },
+    {
+      "architecture": "amd64",
+      "name": "perl-base:amd64",
+      "version": "5.38.2-3.2ubuntu0.4"
+    },
+    {
+      "architecture": "all",
+      "name": "perl-modules-5.38",
+      "version": "5.38.2-3.2ubuntu0.4"
+    },
+    {
+      "architecture": "amd64",
+      "name": "perl:amd64",
+      "version": "5.38.2-3.2ubuntu0.4"
+    },
+    {
+      "architecture": "amd64",
+      "name": "pkgconf-bin:amd64",
+      "version": "1.8.1-2build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "pkgconf:amd64",
+      "version": "1.8.1-2build1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "pkgconf:arm64",
+      "version": "1.8.1-2build1"
+    },
+    {
+      "architecture": "all",
+      "name": "python3-jinja2",
+      "version": "3.1.2-1ubuntu1.3"
+    },
+    {
+      "architecture": "amd64",
+      "name": "python3-markupsafe:amd64",
+      "version": "2.1.5-1build2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "python3-minimal:amd64",
+      "version": "3.12.3-0ubuntu2.1"
+    },
+    {
+      "architecture": "all",
+      "name": "python3-packaging",
+      "version": "24.0-1"
+    },
+    {
+      "architecture": "all",
+      "name": "python3-pkg-resources",
+      "version": "68.1.2-2ubuntu1.2"
+    },
+    {
+      "architecture": "all",
+      "name": "python3-ply",
+      "version": "3.11-6"
+    },
+    {
+      "architecture": "all",
+      "name": "python3-setuptools",
+      "version": "68.1.2-2ubuntu1.2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "python3-yaml:amd64",
+      "version": "6.0.1-2build2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "python3.12-minimal:amd64",
+      "version": "3.12.3-1ubuntu0.17"
+    },
+    {
+      "architecture": "amd64",
+      "name": "python3.12:amd64",
+      "version": "3.12.3-1ubuntu0.17"
+    },
+    {
+      "architecture": "amd64",
+      "name": "python3:amd64",
+      "version": "3.12.3-0ubuntu2.1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "qemu-user-static:amd64",
+      "version": "1:8.2.2+ds-0ubuntu1.16"
+    },
+    {
+      "architecture": "all",
+      "name": "readline-common",
+      "version": "8.2-4build1"
+    },
+    {
+      "architecture": "amd64",
+      "name": "rpcsvc-proto:amd64",
+      "version": "1.4.2-0ubuntu7"
+    },
+    {
+      "architecture": "amd64",
+      "name": "rsync:amd64",
+      "version": "3.2.7-1ubuntu1.5"
+    },
+    {
+      "architecture": "amd64",
+      "name": "sysvinit-utils:amd64",
+      "version": "3.08-6ubuntu3"
+    },
+    {
+      "architecture": "amd64",
+      "name": "tar:amd64",
+      "version": "1.35+dfsg-3ubuntu0.4"
+    },
+    {
+      "architecture": "all",
+      "name": "tzdata",
+      "version": "2026c-0ubuntu0.24.04.1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "uuid-dev:arm64",
+      "version": "2.39.3-9ubuntu6.6"
+    },
+    {
+      "architecture": "all",
+      "name": "x11proto-dev",
+      "version": "2023.2-1"
+    },
+    {
+      "architecture": "all",
+      "name": "xorg-sgml-doctools",
+      "version": "1:1.11-1.1"
+    },
+    {
+      "architecture": "all",
+      "name": "xtrans-dev",
+      "version": "1.4.0-1"
+    },
+    {
+      "architecture": "arm64",
+      "name": "zlib1g-dev:arm64",
+      "version": "1:1.3.dfsg-3.1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "name": "zlib1g:amd64",
+      "version": "1:1.3.dfsg-3.1ubuntu2.2"
+    },
+    {
+      "architecture": "arm64",
+      "name": "zlib1g:arm64",
+      "version": "1:1.3.dfsg-3.1ubuntu2.2"
+    }
+  ],
+  "pkg_config": [
+    {
+      "name": "libdw",
+      "package_owners": [
+        "libdw-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/libdw.pc",
+      "sha256": "41b61d4c16eedf60ca4460cf0de2eb933c7895de8ebd07884730b643262235c9",
+      "version": "0.190"
+    },
+    {
+      "name": "libunwind",
+      "package_owners": [
+        "libunwind-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/libunwind.pc",
+      "sha256": "0d83d13841c66172457399250bdc29cb8d1855a9e03b26e8b34d3acf582204db",
+      "version": "1.6.2"
+    },
+    {
+      "name": "egl",
+      "package_owners": [
+        "libegl-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/egl.pc",
+      "sha256": "65108e5d6376d012e89ce8709460e9386ca92eb67c96b40dc6155e528e3cb20b",
+      "version": "1.5"
+    },
+    {
+      "name": "glesv2",
+      "package_owners": [
+        "libgles-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/glesv2.pc",
+      "sha256": "07f6a52b13efd8cf683f529c212bdffca53f85f4daafd021d9b79da46bdac22c",
+      "version": "3.2"
+    },
+    {
+      "name": "libudev",
+      "package_owners": [
+        "libudev-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/libudev.pc",
+      "sha256": "f0a00dc1885dfb4c4ab820084d23f0ebb484e939001e77ea3356a9db51a1616b",
+      "version": "255"
+    },
+    {
+      "name": "yaml-0.1",
+      "package_owners": [
+        "libyaml-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/yaml-0.1.pc",
+      "sha256": "212cbec4e2674e6c5676ae203febe9e4c1d2177e8796b7a0225f6e70dc67635f",
+      "version": "0.2.5"
+    },
+    {
+      "name": "gnutls",
+      "package_owners": [
+        "libgnutls28-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/gnutls.pc",
+      "sha256": "fad2563cd1a2d810d8da8cbdc4dab0975cecf4b4f91cf9a37090a249b1608e6e",
+      "version": "3.8.3"
+    },
+    {
+      "name": "libevent_pthreads",
+      "package_owners": [
+        "libevent-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/libevent_pthreads.pc",
+      "sha256": "e0c6d0d2a04eeb47c6d02fb02c01cb5cb61f378052871b51a9837718696add9b",
+      "version": "2.1.12-stable"
+    },
+    {
+      "name": "glib-2.0",
+      "package_owners": [
+        "libglib2.0-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/glib-2.0.pc",
+      "sha256": "38daadc8686d92f1db757b9661fb551638bfb367fe5870ed6787d2de92a722f5",
+      "version": "2.80.0"
+    },
+    {
+      "name": "gstreamer-video-1.0",
+      "package_owners": [
+        "libgstreamer-plugins-base1.0-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-video-1.0.pc",
+      "sha256": "fb77b4cd62eef902c8361dedd570b02ff3fe3a4f3d11dafa28c412bfc5f691fc",
+      "version": "1.24.2"
+    },
+    {
+      "name": "gstreamer-allocators-1.0",
+      "package_owners": [
+        "libgstreamer-plugins-base1.0-dev:arm64"
+      ],
+      "path": "/usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-allocators-1.0.pc",
+      "sha256": "dce2b5ec23030a968f1e2388f0e3b9a345e8a124417451e3070c562d1095171b",
+      "version": "1.24.2"
+    }
+  ],
+  "roots": [
+    "bash:amd64",
+    "binutils-aarch64-linux-gnu:amd64",
+    "coreutils:amd64",
+    "dash:amd64",
+    "dpkg:amd64",
+    "g++-13-aarch64-linux-gnu:amd64",
+    "g++-13-x86-64-linux-gnu:amd64",
+    "gawk:amd64",
+    "gcc-13-aarch64-linux-gnu:amd64",
+    "gcc-13-x86-64-linux-gnu:amd64",
+    "git:amd64",
+    "libc6-dev-arm64-cross",
+    "libc6-dev:amd64",
+    "libdw-dev:arm64",
+    "libegl-dev:arm64",
+    "libevent-dev:arm64",
+    "libgles-dev:arm64",
+    "libglib2.0-dev:arm64",
+    "libgnutls28-dev:arm64",
+    "libgstreamer-plugins-base1.0-dev:arm64",
+    "libstdc++-13-dev-arm64-cross",
+    "libudev-dev:arm64",
+    "libunwind-dev:arm64",
+    "libyaml-dev:arm64",
+    "meson",
+    "ninja-build:amd64",
+    "openssl:amd64",
+    "pkgconf-bin:amd64",
+    "pkgconf:amd64",
+    "pkgconf:arm64",
+    "python3-jinja2",
+    "python3-minimal:amd64",
+    "python3-ply",
+    "python3-yaml:amd64",
+    "python3.12-minimal:amd64",
+    "qemu-user-static:amd64",
+    "rsync:amd64"
+  ],
+  "schema": "tb321fu-libcamera-build-environment-v1",
+  "reference_policy": "exact installed package versions, command bytes and ARM64 pkg-config inputs; not a release approval"
+}

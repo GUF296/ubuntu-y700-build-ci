@@ -330,7 +330,13 @@ def validate_sdk_path(path: str, source: pathlib.Path) -> None:
 def parse_sdk_manifest(path: pathlib.Path) -> tuple[dict[str, str], bytes]:
     raw, text = read_ascii_regular(path, "SDK manifest", MAX_SDK_MANIFEST_BYTES)
     lines = text.splitlines()
-    if not lines or lines[0] != "schema\ttb321fu.kernel-sdk-manifest/v1":
+    if not lines or not lines[0].startswith("schema\t"):
+        raise BundleError(f"invalid SDK manifest header: {path}")
+    schema = lines[0].removeprefix("schema\t")
+    if schema not in {
+        "tb321fu.kernel-sdk-manifest/v1",
+        "tb321fu.kernel-sdk-manifest/v2",
+    }:
         raise BundleError(f"invalid SDK manifest header: {path}")
     if len(lines) == 1:
         raise BundleError(f"SDK manifest has no entries: {path}")
@@ -339,12 +345,17 @@ def parse_sdk_manifest(path: pathlib.Path) -> tuple[dict[str, str], bytes]:
 
     previous_path = ""
     files: dict[str, str] = {}
+    records: dict[str, str] = {}
+    empty_sha256 = hashlib.sha256(b"").hexdigest()
     for index, line in enumerate(lines[1:], start=2):
         fields = line.split("\t")
         if len(fields) != 4:
             raise BundleError(f"malformed SDK manifest record at line {index}: {path}")
         kind, digest, mode, entry_path = fields
-        if kind not in {"file", "symlink"}:
+        allowed_kinds = {"file", "symlink"}
+        if schema == "tb321fu.kernel-sdk-manifest/v2":
+            allowed_kinds.add("directory")
+        if kind not in allowed_kinds:
             raise BundleError(f"invalid SDK manifest record type at line {index}: {path}")
         if HEX64.fullmatch(digest) is None or MODE.fullmatch(mode) is None:
             raise BundleError(f"invalid SDK manifest record at line {index}: {path}")
@@ -354,8 +365,27 @@ def parse_sdk_manifest(path: pathlib.Path) -> tuple[dict[str, str], bytes]:
         if previous_path and entry_path <= previous_path:
             raise BundleError(f"SDK manifest paths are not strictly ordered: {path}")
         previous_path = entry_path
+        records[entry_path] = kind
         if kind == "file":
+            if mode not in {"600", "644", "755"}:
+                raise BundleError(f"invalid SDK manifest file mode at line {index}: {path}")
             files[entry_path] = digest
+        elif kind == "symlink":
+            if mode != "777":
+                raise BundleError(f"invalid SDK manifest symlink mode at line {index}: {path}")
+        elif digest != empty_sha256 or mode != "755":
+            raise BundleError(f"invalid SDK manifest directory record at line {index}: {path}")
+
+    if schema == "tb321fu.kernel-sdk-manifest/v2":
+        for entry_path in records:
+            components = entry_path[2:].split("/")
+            for depth in range(1, len(components)):
+                parent = "./" + "/".join(components[:depth])
+                if records.get(parent) != "directory":
+                    raise BundleError(
+                        "SDK v2 manifest path lacks an explicit directory parent: "
+                        f"{entry_path}: {path}"
+                    )
 
     required = {
         "./.config",

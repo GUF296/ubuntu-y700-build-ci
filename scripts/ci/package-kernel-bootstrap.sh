@@ -989,9 +989,12 @@ validate_sdk_relative_path() {
 }
 
 write_kernel_sdk_manifest() {
-  local root=$1 destination=$2 entry relative digest mode target special size
+  local root=$1 destination=$2 entry relative digest mode target special size path_list
   local mode_value normalized_mode expected_mode
+  local component
+  local -a sdk_link_components=()
   local record_count=0 total_regular_bytes=0
+  local empty_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
   [ -d "$root" ] || ci_die 'kernel SDK root is not a directory'
   special=$(find "$root" -xdev ! -type d ! -type f ! -type l -print -quit)
@@ -1009,8 +1012,14 @@ write_kernel_sdk_manifest() {
     [ -L "$root/source" ] || ci_die 'kernel SDK source path must be a symlink when present'
   fi
 
+  path_list="$work/kernel-sdk-manifest-paths.list"
+  if ! "$FIND_BIN" "$root" -xdev -mindepth 1 \
+      \( -type d -o -type f -o -type l \) -print0 | \
+      LC_ALL=C "$SORT_BIN" -z > "$path_list"; then
+    ci_die 'cannot enumerate the kernel SDK manifest namespace'
+  fi
   {
-    printf 'schema\ttb321fu.kernel-sdk-manifest/v1\n'
+    printf 'schema\ttb321fu.kernel-sdk-manifest/v2\n'
     while IFS= read -r -d '' entry; do
       relative=${entry#"$root"/}
       validate_sdk_relative_path "$relative"
@@ -1026,10 +1035,24 @@ write_kernel_sdk_manifest() {
           ci_die 'kernel SDK symlink target must be bounded printable ASCII'
         [[ $target != /* && $target != *\\* && ${target%%/*} != *:* ]] ||
           ci_die 'kernel SDK symlink target has an unsafe lexical form'
+        case "/$target/" in
+          */../*) ci_die 'kernel SDK symlink target contains parent traversal' ;;
+        esac
+        IFS=/ read -r -a sdk_link_components <<< "$target"
+        [ "${#sdk_link_components[@]}" -le 128 ] ||
+          ci_die 'kernel SDK symlink target has too many path components'
+        for component in "${sdk_link_components[@]}"; do
+          [ "${#component}" -le 255 ] ||
+            ci_die 'kernel SDK symlink target has an oversized path component'
+        done
         [ "$mode" = 777 ] ||
           ci_die 'kernel SDK symlink mode differs from the consumer contract'
         digest=$(printf '%s' "$target" | sha256sum | awk '{print $1}')
         printf 'symlink\t%s\t%s\t./%s\n' "$digest" "$mode" "$relative"
+      elif [ -d "$entry" ]; then
+        [ "$mode" = 755 ] ||
+          ci_die 'kernel SDK directory mode differs from the consumer contract'
+        printf 'directory\t%s\t%s\t./%s\n' "$empty_sha256" "$mode" "$relative"
       else
         mode_value=$((8#$mode))
         normalized_mode=$(( (mode_value & 0755) | 0600 ))
@@ -1050,7 +1073,7 @@ write_kernel_sdk_manifest() {
       fi
       record_count=$((record_count + 1))
       [ "$record_count" -le 200000 ] || ci_die 'kernel SDK manifest has too many records'
-    done < <(find "$root" -xdev \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
+    done < "$path_list"
   } > "$destination"
   [ "$record_count" -gt 0 ] || ci_die 'kernel SDK manifest is empty'
   [ "$(stat -c '%s' "$destination")" -le 16777216 ] ||
@@ -1058,10 +1081,15 @@ write_kernel_sdk_manifest() {
 }
 
 write_kernel_sdk_archive() {
-  local root=$1 destination=$2 file_list member_list size_file entry relative resolved size
+  local root=$1 destination=$2 file_list member_list size_file source_list symlink_list
+  local entry relative resolved size
   local archive_entry_count=0 source_regular_bytes=0 archive_bytes
 
   [ -d "$root" ] || ci_die 'kernel SDK root is not a directory'
+  symlink_list="$work/kernel-sdk-symlinks.list"
+  if ! "$FIND_BIN" "$root" -xdev -type l -print0 > "$symlink_list"; then
+    ci_die 'cannot enumerate kernel SDK symlinks'
+  fi
   while IFS= read -r -d '' entry; do
     [ "$entry" = "$root/source" ] && continue
     resolved=$(realpath -e -- "$entry") ||
@@ -1070,13 +1098,19 @@ write_kernel_sdk_archive() {
       "$root"|"$root"/*) ;;
       *) ci_die "kernel SDK root contains an external symlink: $entry" ;;
     esac
-  done < <("$FIND_BIN" "$root" -xdev -type l -print0)
+  done < "$symlink_list"
 
   file_list="$work/kernel-sdk-files.list"
   member_list="$work/kernel-sdk-members.list"
   size_file="$work/kernel-sdk-uncompressed-size"
+  source_list="$work/kernel-sdk-source-paths.list"
   (
     cd "$root"
+    if ! "$FIND_BIN" . -xdev -mindepth 1 \
+        ! -path ./source ! -path './source/*' -print0 | \
+        LC_ALL=C "$SORT_BIN" -z > "$source_list"; then
+      ci_die 'cannot enumerate kernel SDK archive sources'
+    fi
     : > "$file_list"
     while IFS= read -r -d '' entry; do
       relative=${entry#./}
@@ -1091,10 +1125,7 @@ write_kernel_sdk_archive() {
       archive_entry_count=$((archive_entry_count + 1))
       [ "$archive_entry_count" -le 200000 ] ||
         ci_die 'kernel SDK archive contains too many source entries'
-    done < <(
-      "$FIND_BIN" . -xdev -mindepth 1 ! -path ./source ! -path './source/*' -print0 |
-        LC_ALL=C "$SORT_BIN" -z
-    )
+    done < "$source_list"
     [ "$archive_entry_count" -gt 0 ] || ci_die 'kernel SDK archive source list is empty'
     printf '%s\n' "$source_regular_bytes" > "$size_file"
     "$TAR_BIN" --format=gnu --hard-dereference --null --no-recursion --sort=name \
@@ -1106,6 +1137,8 @@ write_kernel_sdk_archive() {
   [[ $source_regular_bytes =~ ^[0-9]+$ ]] ||
     ci_die 'kernel SDK archive logical size record is invalid'
   archive_bytes=$(stat -c '%s' -- "$destination")
+  [ "$archive_bytes" -le 2147483648 ] ||
+    ci_die 'kernel SDK archive exceeds the 2 GiB consumer limit'
   [ "$source_regular_bytes" -le $((archive_bytes * 1000)) ] ||
     ci_die 'kernel SDK archive compression ratio exceeds the consumer limit'
   "$TAR_BIN" -tzf "$destination" > "$member_list" ||
