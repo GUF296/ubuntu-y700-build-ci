@@ -162,6 +162,7 @@ jobs:
           compression-level: 0
 
   build:
+    if: ${{ false }}
     needs: camera-producer
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -864,7 +865,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: ${{ inputs.release_tag != '' }}
+    if: ${{ false }}
     needs: build
     runs-on: ubuntu-24.04-arm
     permissions:
