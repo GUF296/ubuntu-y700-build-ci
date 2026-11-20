@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    timeout-minutes: 45
+    timeout-minutes: 65
     outputs:
       artifact_id: ${{ steps.upload_camera.outputs.artifact-id }}
       artifact_digest: ${{ steps.upload_camera.outputs.artifact-digest }}
@@ -96,8 +96,7 @@ jobs:
       - name: Install locked camera producer dependencies
         run: |
           set -euo pipefail
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_OS,RUNNER_ARCH \
-            bash scripts/ci/install-libcamera-build-environment.sh --install
+          bash scripts/ci/camera-producer-container.sh prepare
 
       - name: Validate camera producer contracts
         run: |
@@ -132,7 +131,7 @@ jobs:
               CAMERA_STACK_ARCHIVE="${CAMERA_STACK_ARCHIVE:-}" \
               CAMERA_STACK_ARCHIVE_SHA256="${CAMERA_STACK_ARCHIVE_SHA256:-}" \
               CAMERA_STACK_DIR="${CAMERA_STACK_DIR:-}" \
-              bash scripts/ci/build-tb321fu-camera-stack-deb.sh
+              bash scripts/ci/camera-producer-container.sh build
           fi
           handoff_args=(
             --enabled="$BUILD_TB321FU_CAMERA_STACK"
@@ -150,6 +149,10 @@ jobs:
             out/tb321fu-camera-stack-debs "${handoff_args[@]}"
           python3 -B scripts/ci/camera-artifact-handoff.py verify \
             out/tb321fu-camera-stack-debs "${handoff_args[@]}"
+
+      - name: Stop isolated camera producer
+        if: always()
+        run: bash scripts/ci/camera-producer-container.sh stop
 
       - name: Upload camera artifact handoff
         id: upload_camera
