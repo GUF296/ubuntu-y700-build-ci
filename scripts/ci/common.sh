@@ -784,7 +784,7 @@ ci_validate_https_apt_sources_list() {
             option=${option%]}
             [ -n "$option" ] || ci_die 'empty APT source option block'
             options+=("$option")
-            if [[ "${fields[index]}" = *] ]]; then
+            if [ "${fields[index]: -1}" = ']' ]; then
               closed=1
               index=$((index + 1))
               break

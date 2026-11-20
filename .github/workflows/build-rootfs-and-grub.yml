@@ -185,7 +185,7 @@ jobs:
           sudo apt-get update
           # The extracted production data-loop regression runs a native C++17
           # fixture; its compiler is a test dependency, not the camera producer.
-          sudo apt-get install -y python3-yaml g++ git openssl
+          sudo apt-get install -y python3-yaml g++ git openssl shellcheck
 
       - name: Validate workflow input boundaries
         run: |
@@ -478,10 +478,10 @@ jobs:
             echo 'Y700_GRUB_BUILD_DIR=' >> "$GITHUB_ENV"
             echo 'Using prebuilt QCOMRAMP_EFI_URL; skipping grub-mkstandalone input.'
           elif [ -n "${QCOMRAMP_EFI:-}" ]; then
-            [ -f "$QCOMRAMP_EFI" ] && [ ! -L "$QCOMRAMP_EFI" ] || {
+            if [ ! -f "$QCOMRAMP_EFI" ] || [ -L "$QCOMRAMP_EFI" ]; then
               echo 'QCOMRAMP_EFI must be a regular non-symlink file.' >&2
               exit 1
-            }
+            fi
             echo 'Y700_GRUB_BUILD_DIR=' >> "$GITHUB_ENV"
             echo 'Using prebuilt local QCOMRAMP_EFI; skipping grub-mkstandalone input.'
           elif [ -n "${BOOT_TEMPLATE_IMAGE:-}" ] || [ -n "${BOOT_TEMPLATE_IMAGE_URL:-}" ]; then
@@ -829,7 +829,10 @@ jobs:
             echo "- Generated: \`$(date -u -Iseconds)\`"
             echo
             echo 'Password hashes are supplied only through step-scoped secrets and are never serialized into build configuration or release notes.'
+            # Markdown code spans are literal characters in the generated notes.
+            # shellcheck disable=SC2016
             printf 'Release image streams: `%s` and `%s`; large streams may have contiguous `.NNN` parts.\n' "$rootfs_stream_name" "$grub_stream_name"
+            # shellcheck disable=SC2016
             echo 'Assets ending in `.NNN` are split only to satisfy the GitHub Release 2GB per-asset limit. Recombine each stream in lexical order before extraction.'
             echo
             echo '## rootfs_config'
@@ -899,7 +902,7 @@ jobs:
           }
           release_stage=$(pwd -P)/release-staging
           assert_no_symlink_component() {
-            local path=$1 current=$1
+            local current=$1
             while :; do
               [ ! -L "$current" ] || {
                 echo "downloaded release staging path contains a symlink component: $current" >&2
