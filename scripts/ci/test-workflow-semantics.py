@@ -567,8 +567,7 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         fail("camera dependency step has no shell body")
     expected_provisioning = chr(10).join((
         "set -euo pipefail",
-        "sudo --preserve-env=GITHUB_ACTIONS,RUNNER_OS,RUNNER_ARCH " + chr(92),
-        "  bash scripts/ci/install-libcamera-build-environment.sh --install",
+        "bash scripts/ci/camera-producer-container.sh prepare",
     ))
     if camera_dependency_run.strip() != expected_provisioning:
         fail("camera dependency step must use the exact locked full-runtime installer")
@@ -622,7 +621,7 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
     if not isinstance(camera_build_run, str):
         fail("camera producer build step has no shell body")
     for token in (
-        "bash scripts/ci/build-tb321fu-camera-stack-deb.sh",
+        "bash scripts/ci/camera-producer-container.sh build",
         "scripts/ci/camera-artifact-handoff.py create",
         "scripts/ci/camera-artifact-handoff.py verify",
         '--repository="$GITHUB_REPOSITORY"',
@@ -649,8 +648,11 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         "compression-level": 0,
     }:
         fail("camera handoff upload does not have the exact bounded artifact contract")
-    if camera_build_index >= upload_index:
-        fail("camera handoff is uploaded before it is built and verified")
+    stop = camera_named.get("Stop isolated camera producer")
+    if (stop is None or not camera_build_index < stop[0] < upload_index
+            or stop[1].get("if") != "always()"
+            or stop[1].get("run") != "bash scripts/ci/camera-producer-container.sh stop"):
+        fail("camera container must stop after the build before artifact upload")
 
     build_named = {
         step.get("name"): (index, step)

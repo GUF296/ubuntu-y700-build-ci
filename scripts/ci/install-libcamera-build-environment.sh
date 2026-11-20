@@ -1,64 +1,61 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This is an ephemeral CI provisioning step, never a workstation repair tool.
-[ "${1:-}" = --install ] && [ "$#" = 1 ] || {
-  echo 'usage: install-libcamera-build-environment.sh --install (CI only)' >&2
+# Only provision the throwaway camera container, never the Actions host or WSL.
+[ "$#" = 1 ] && [ "$1" = --install ] || {
+  echo 'usage: install-libcamera-build-environment.sh --install (CI container only)' >&2
   exit 2
 }
-[ "$EUID" = 0 ] && [ "${GITHUB_ACTIONS:-}" = true ] &&
-  [ "${RUNNER_OS:-}" = Linux ] && [ "${RUNNER_ARCH:-}" = X64 ] || {
-  echo 'refusing dependency installation outside explicit root Linux X64 Actions runner' >&2
+inputs=/run/tb321fu-camera-inputs
+[ "$EUID" = 0 ] && [ -f /.dockerenv ] && [ -r "$inputs/packages" ] &&
+  [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_OS:-}" = Linux ] &&
+  [ "${RUNNER_ARCH:-}" = X64 ] || {
+  echo 'refusing dependency installation outside the dedicated Linux X64 Actions container' >&2
   exit 1
 }
 . /etc/os-release
-[ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ] &&
-  [ "$(dpkg --print-architecture)" = amd64 ] || {
-  echo 'camera producer requires an Ubuntu 24.04 amd64 host' >&2
-  exit 1
-}
-script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-umask 022
+[ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ] && [ "$(dpkg --print-architecture)" = amd64 ]
+cd -- "$inputs"
+sha256sum --strict -c <<'DIGESTS'
+61e29c7504f020539b7d6112302b66e8ea5b6da00eb8b685dace384715fb11eb  base-files.deb
+17000967a1fae30c8dbb92b2183ec6e245c6d802aacf2c2945a20ee89298b8e9  libldap2.deb
+DIGESTS
+mapfile -t packages <packages
+[ "${#packages[@]}" -gt 0 ]
+historical=0
+for i in "${!packages[@]}"; do
+  case "${packages[$i]}" in
+    base-files:amd64=13ubuntu10.2) packages[$i]="$inputs/base-files.deb"; ((historical+=1)) ;;
+    libldap2:amd64=2.6.7+dfsg-1~exp1ubuntu8.2) packages[$i]="$inputs/libldap2.deb"; ((historical+=1)) ;;
+  esac
+done
+[ "$historical" = 2 ]
+
 work=$(mktemp -d /tmp/tb321fu-camera-apt.XXXXXXXX)
-cleanup() {
-  case "$work" in /tmp/tb321fu-camera-apt.*) ;; *) return 1 ;; esac
-  [ -d "$work" ] && [ ! -L "$work" ] || return 1
-  rm -rf -- "$work"
-}
-trap cleanup EXIT
+trap 'rm -rf -- "$work"' EXIT
 chmod 0755 "$work"
 mkdir -m 0755 "$work/sources" "$work/lists"
-python3 -I -B "$script_dir/prepare-libcamera-build-environment.py" >"$work/packages"
-mapfile -t packages <"$work/packages"
-[ "${#packages[@]}" -gt 0 ]
 cat >"$work/sources/camera.sources" <<'SOURCES'
 Types: deb
-URIs: https://archive.ubuntu.com/ubuntu/
-Suites: noble noble-updates noble-backports
-Components: main universe restricted multiverse
-Architectures: amd64
+URIs: https://snapshot.ubuntu.com/ubuntu/20260913T000000Z/
+Suites: noble noble-updates noble-security
+Components: main universe
+Architectures: amd64 arm64
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-
-Types: deb
-URIs: https://security.ubuntu.com/ubuntu/
-Suites: noble-security
-Components: main universe restricted multiverse
-Architectures: amd64
-Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-
-Types: deb
-URIs: https://ports.ubuntu.com/ubuntu-ports/
-Suites: noble noble-updates noble-backports noble-security
-Components: main universe restricted multiverse
-Architectures: arm64
-Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+Check-Valid-Until: no
 SOURCES
 export DEBIAN_FRONTEND=noninteractive
 dpkg --add-architecture arm64
 apt=(apt-get -o Dir::Etc::sourcelist=/dev/null
   -o "Dir::Etc::sourceparts=$work/sources" -o "Dir::State::lists=$work/lists"
-  -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
-timeout --signal=KILL 20m "${apt[@]}" update
-# Version drift must fail instead of removing packages or silently downgrading.
-timeout --signal=KILL 20m "${apt[@]}" install -y --no-remove --no-install-recommends -- "${packages[@]}"
+  -o Acquire::https::CaInfo=/run/tb321fu-camera-ca.crt -o Acquire::Languages=none
+  -o APT::Update::Error-Mode=any -o Acquire::Retries=2 -o Acquire::https::Timeout=30)
+timeout --signal=KILL 15m "${apt[@]}" update
+# Generic compiler/binutils links, curl for optional HTTPS input, and dpkg-deb
+# compression helpers come from the same signed snapshot as the locked payload.
+timeout --signal=KILL 25m "${apt[@]}" install -y --no-remove --no-install-recommends -- \
+  "${packages[@]}" gcc g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+  binutils curl ca-certificates xz-utils zstd
+script_dir="$GITHUB_WORKSPACE/scripts/ci"
+python3 -I -B "$script_dir/prepare-libcamera-build-environment.py" | cmp - "$inputs/packages"
 python3 -I -B "$script_dir/verify-libcamera-build-environment.py"

@@ -55,5 +55,24 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn('--allow-unauthenticated', source)
         self.assertNotIn('apt-key', source)
 
+    def test_snapshot_and_container_boundaries(self):
+        installer = (HERE / 'install-libcamera-build-environment.sh').read_text()
+        runner = (HERE / 'camera-producer-container.sh').read_text()
+        for token in ('https://snapshot.ubuntu.com/ubuntu/20260913T000000Z/',
+                      'Architectures: amd64 arm64', 'Check-Valid-Until: no',
+                      'APT::Update::Error-Mode=any', 'sha256sum --strict -c',
+                      '61e29c7504f020539b7d6112302b66e8ea5b6da00eb8b685dace384715fb11eb',
+                      '17000967a1fae30c8dbb92b2183ec6e245c6d802aacf2c2945a20ee89298b8e9'):
+            self.assertIn(token, installer)
+        self.assertNotIn('trusted=yes', installer)
+        self.assertRegex(runner, r"image='ubuntu@sha256:[0-9a-f]{64}'")
+        for token in ('--platform linux/amd64', 'target=$workspace,readonly',
+                      'target=/run/tb321fu-camera-inputs,readonly', '--user "$(id -u):$(id -g)"',
+                      'bash scripts/ci/install-libcamera-build-environment.sh --install',
+                      'bash scripts/ci/build-tb321fu-camera-stack-deb.sh'):
+            self.assertIn(token, runner)
+        for token in ('--privileged', '/var/run/docker.sock', '--env-file', '--env GITHUB_TOKEN'):
+            self.assertNotIn(token, runner)
+
 if __name__ == '__main__':
     unittest.main()
