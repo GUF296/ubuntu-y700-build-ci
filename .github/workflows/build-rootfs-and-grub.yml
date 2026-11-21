@@ -185,7 +185,7 @@ jobs:
           sudo apt-get update
           # The extracted production data-loop regression runs a native C++17
           # fixture; its compiler is a test dependency, not the camera producer.
-          sudo apt-get install -y python3-yaml g++ git openssl shellcheck
+          sudo apt-get install -y python3-yaml g++ git openssl shellcheck openssh-client
 
       - name: Validate workflow input boundaries
         run: |
@@ -224,6 +224,9 @@ jobs:
           bash scripts/ci/test-camera-overlay-installer.sh
           bash scripts/ci/test-input-and-path-boundaries.sh
           bash scripts/ci/test-system-payload-policy.sh
+          python3 -IB scripts/ci/test-ssh-host-identity.py
+          python3 -IB scripts/ci/test-ssh-image-evidence.py
+          python3 -IB scripts/ci/test-ssh-policy-probe.py
           bash scripts/ci/test-audio-route-lifecycle.sh
           bash scripts/ci/test-qcom-sns-lifecycle.sh
           bash scripts/ci/test-gpu-deb-lifecycle.sh
@@ -233,6 +236,7 @@ jobs:
           bash scripts/ci/test-grub-template-policy.sh
           bash scripts/ci/test-release-publication.sh
           bash scripts/ci/test-release-manifest.sh
+          python3 -IB scripts/ci/test-stage-large-image.py
           bash scripts/ci/test-release-input-provenance.sh
 
       - name: Install dependencies
@@ -731,7 +735,16 @@ jobs:
             esac
 
             dest="$release_dir/${release_name}${suffix}"
-            stage_release_file "$src" "$dest"
+            if [ "$compress" = 7z ] && [ "$(stat -c %s -- "$src")" -gt 1992294400 ]; then
+              # Split the verified archive itself: no second full staged
+              # copy while the numbered parts are being produced.
+              assert_no_symlink_component "$src"
+              assert_no_symlink_component "$dest"
+              python3 -IB scripts/ci/stage-large-image.py "$src" "$dest" \
+                "$source_dir/${source_prefix%.img}.SHA256SUMS"
+            else
+              stage_release_file "$src" "$dest"
+            fi
           }
 
           select_release_asset "$OUTPUT_DIR_ROOTFS" "${OUTPUT_PREFIX}-rootfs.img" rootfs "${COMPRESS:-7z}" "${CHUNK_SIZE:-}"
@@ -848,6 +861,14 @@ jobs:
             echo '## source_config'
             echo '```text'
             cat "$source_notes"
+            echo '```'
+            echo
+            echo '## SSH host identity evidence'
+            echo '```json'
+            python3 -IB scripts/ci/ssh-image-evidence.py bind \
+              "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.ssh-identity.json" \
+              "$OUTPUT_DIR_ROOTFS/${OUTPUT_PREFIX}-rootfs.SHA256SUMS" \
+              "${OUTPUT_PREFIX}-$rootfs_stream_name"
             echo '```'
             echo
             echo '## Verified bootstrap inputs'

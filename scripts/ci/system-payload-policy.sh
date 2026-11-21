@@ -184,7 +184,7 @@ ci_assert_no_tb321fu_legacy_payload() {
 ci_assert_unique_deb_payload_paths() {
   local payload_dir=$1 scratch=$2 deb package stage path relative kind parent
   local existing_kind existing_owner descendant
-  declare -A path_kind=() path_owner=()
+  declare -A path_kind=() path_owner=() first_descendant=()
 
   [ -d "$payload_dir" ] || return 0
   install -d -m 0700 "$scratch"
@@ -217,22 +217,20 @@ ci_assert_unique_deb_payload_paths() {
         fi
         ci_die "local DEB payload collision at /$relative: $existing_owner ($existing_kind) and $package ($kind)"
       fi
-      parent=$(dirname -- "$relative")
-      while [ "$parent" != . ]; do
+      parent=$relative
+      while [[ $parent == */* ]]; do
+        parent=${parent%/*}
         existing_kind=${path_kind[$parent]-}
         if [ -n "$existing_kind" ] && [ "$existing_kind" != directory ]; then
           ci_die "local DEB payload type collision at /$parent: ${path_owner[$parent]} ($existing_kind) blocks $package /$relative"
         fi
-        parent=$(dirname -- "$parent")
+        if [ -z "${first_descendant[$parent]+x}" ]; then
+          first_descendant[$parent]=$relative
+        fi
       done
-      if [ "$kind" != directory ]; then
-        for descendant in "${!path_kind[@]}"; do
-          case "$descendant" in
-            "$relative"/*)
-              ci_die "local DEB payload type collision at /$relative: $package ($kind) conflicts with ${path_owner[$descendant]} /$descendant"
-              ;;
-          esac
-        done
+      if [ "$kind" != directory ] && [ -n "${first_descendant[$relative]+x}" ]; then
+        descendant=${first_descendant[$relative]}
+        ci_die "local DEB payload type collision at /$relative: $package ($kind) conflicts with ${path_owner[$descendant]} /$descendant"
       fi
       path_kind[$relative]=$kind
       path_owner[$relative]=$package

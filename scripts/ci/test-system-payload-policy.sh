@@ -193,6 +193,34 @@ if (ci_assert_unique_deb_packages "$symlink_package_dir" >/dev/null 2>&1); then
   exit 1
 fi
 
+# A nested legacy archive and a separately supplied DEB must never permit
+# dpkg-deb --build to overwrite an input (including a dangling symlink).
+sed -n '/^prepare_tb321fu_compat_firmware_deb() {$/,/^}$/p' \
+  "$SCRIPT_DIR/build-rootfs-image.sh" > "$tmp/compat-helper.sh"
+# shellcheck disable=SC1090
+. "$tmp/compat-helper.sh"
+for kind in regular symlink; do
+  collision="$tmp/generated-$kind"
+  mkdir "$collision"
+  : > "$collision/fixture.tar"
+  target="$collision/tb321fu-compat-firmware_1_arm64.deb"
+  if [ "$kind" = regular ]; then
+    printf '%s\n' kept > "$target"
+  else
+    ln -s missing "$target"
+  fi
+  if (work_dir=$tmp ARCH=arm64 TB321FU_COMPAT_PACKAGE_VERSION=1 \
+      prepare_tb321fu_compat_firmware_deb "$collision") > "$tmp/compat-error" 2>&1; then
+    echo 'generated compat DEB overwrote an existing input' >&2; exit 1
+  fi
+  grep -Fq 'generated compat DEB basename collision:' "$tmp/compat-error"
+  if [ "$kind" = regular ]; then
+    [ "$(cat "$target")" = kept ]
+  else
+    [ "$(readlink "$target")" = missing ] && [ ! -e "$collision/missing" ]
+  fi
+done
+
 # A symlink whose target happens to be a directory must still be treated as a
 # symlink. Otherwise another package can claim a child path below it and the
 # ownership check misses a late dpkg filesystem collision.
@@ -700,6 +728,10 @@ assert 'ci_seed_default_user_keyboard_config "$rootfs_dir" "$DEFAULT_USER_NAME"'
 assert text.index('ci_seed_default_user_keyboard_config "$rootfs_dir" "$DEFAULT_USER_NAME"') > text.index('applying validated overlay directory')
 assert 'ci_snapshot_local_deb_payload' in text
 assert 'ci_verify_local_deb_payload_snapshot' in text
+generated = text.index('\nprepare_tb321fu_compat_firmware_deb "$rootfs_dir/var/tmp/ci-debs"')
+identities = text.index('\nci_assert_unique_deb_packages "$rootfs_dir/var/tmp/ci-debs"', generated)
+owners = text.index('\nci_prepare_y700_daily_payload_deb ')
+assert generated < identities < owners < text.index('ci_log "provisioning rootfs"')
 assert 'rm -rf -- "$rootfs_dir/var/tmp/ci-debs"' in text
 assert 'ci_seed_default_user_keyboard_config()' in policy
 assert '[ "$seeded" -eq 1 ]' in policy

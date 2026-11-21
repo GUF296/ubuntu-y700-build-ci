@@ -184,7 +184,7 @@ TB321FU_COMPAT_ARCHIVE_NAME=${TB321FU_COMPAT_ARCHIVE_NAME:-y700-compat1-extra-ro
 TB321FU_COMPAT_ARCHIVE_SHA256=${TB321FU_COMPAT_ARCHIVE_SHA256:-a3f55ddee04aac465465c2ff8fcddebc1b65b7e7d3af82e5e5c8ce0a4766c414}
 TB321FU_COMPAT_PACKAGE_VERSION=${TB321FU_COMPAT_PACKAGE_VERSION:-20260624.1}
 
-default_packages="systemd systemd-sysv dbus sudo locales tzdata ca-certificates gnupg curl wget network-manager openssh-server nano vim rsync kmod initramfs-tools"
+default_packages="systemd systemd-sysv dbus sudo locales tzdata ca-certificates gnupg curl wget network-manager openssh-server python3 nano vim rsync kmod initramfs-tools"
 PACKAGE_LIST=${PACKAGE_LIST:-$default_packages}
 if [ -n "${DESKTOP_ENV:-}" ]; then
   PACKAGE_LIST="$PACKAGE_LIST $DESKTOP_ENV"
@@ -449,6 +449,8 @@ prepare_tb321fu_compat_firmware_deb() {
 
   [ "${#archives[@]}" -gt 0 ] || return 0
   [ "${#archives[@]}" -eq 1 ] || ci_die "expected one TB321FU compat overlay, found ${#archives[@]}"
+  [ ! -e "$output" ] && [ ! -L "$output" ] ||
+    ci_die "generated compat DEB basename collision: $(basename -- "$output")"
   archive=${archives[0]}
   [ "$(basename "$archive")" = "$TB321FU_COMPAT_ARCHIVE_NAME" ] || \
     ci_die "unexpected nested device overlay: $(basename "$archive")"
@@ -865,6 +867,9 @@ mkfs.ext4 "${mkfs_args[@]}" "$rootfs_img"
 mkdir -p "$rootfs_dir"
 mount -o loop "$rootfs_img" "$rootfs_dir"
 mounted=1
+# Reserve private-key pathnames before any maintainer script can write key bytes
+# to the ext4 image, including its journal and otherwise-unallocated extents.
+ssh_placeholders=$(python3 -IB "$SCRIPT_DIR/ssh-host-identity.py" prepare "$rootfs_dir")
 
 ci_log "debootstrap $DISTRO/$ARCH from $MIRROR"
 debootstrap_args=(--arch="$ARCH")
@@ -1424,9 +1429,12 @@ if [ -n "${CAMERA_STACK_DEB_DIR:-}" ]; then
   done < <(find "$CAMERA_STACK_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
 fi
 
+prepare_tb321fu_compat_firmware_deb "$rootfs_dir/var/tmp/ci-debs"
+# Include generated firmware in the same pre-install ownership pass as input
+# DEBs. Check package identities before using them as scratch directory names.
+ci_assert_unique_deb_packages "$rootfs_dir/var/tmp/ci-debs"
 ci_prepare_y700_daily_payload_deb \
   "$rootfs_dir/var/tmp/ci-debs" "$work_dir/device-deb-policy"
-prepare_tb321fu_compat_firmware_deb "$rootfs_dir/var/tmp/ci-debs"
 ci_assert_unique_deb_packages "$rootfs_dir/var/tmp/ci-debs"
 
 if ci_bool "$INSTALL_FIREFOX"; then
@@ -1601,20 +1609,15 @@ apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO
 
-# OpenSSH's config-dump mode evaluates Include and Match without starting sshd
-# or generating host keys. Capture the two accounts under the same connection
-# context, using documentation-only addresses and reporting only policy fields.
-for ssh_policy_user in "$DEFAULT_USER_NAME" root; do
-  LC_ALL=C chroot "$rootfs_dir" /usr/sbin/sshd -G \
-    -C "user=$ssh_policy_user,host=client.invalid,addr=192.0.2.2,laddr=192.0.2.1,lport=22" |
-    LC_ALL=C awk -v user="$ssh_policy_user" '
-      $1 ~ /^(passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication|permitrootlogin|authenticationmethods)$/ {
-        if (++seen[$1] != 1) exit 1
-        print "ssh_policy[" user "]." $1 "=" substr($0, index($0, " ") + 1)
-      }
-      END { if (length(seen) != 5) exit 1 }
-    ' | tee -a "$build_info"
-done
+python3 -IB "$SCRIPT_DIR/ssh-host-identity.py" seal "$rootfs_dir" "$ssh_placeholders"
+# Verify the installed interpreter/dependencies and the empty SSH key namespace.
+LC_ALL=C chroot "$rootfs_dir" /usr/bin/python3 -IB /usr/libexec/tb321fu-ssh-host-identity.py existing
+printf '%s\n' 'ssh_host_identity=generated-on-device' >> "$build_info"
+
+# -G is global only. Sample Match with -T -C, using only a private tmpfs
+# key. Do not append partial policy rows if either account fails validation.
+ssh_policy=$(bash "$SCRIPT_DIR/ssh-policy-probe.sh" "$rootfs_dir" "$DEFAULT_USER_NAME")
+printf '%s\n' "$ssh_policy" | tee -a "$build_info"
 
 rm -f \
   "$rootfs_dir/BUILD-INFO.txt" \
@@ -1640,6 +1643,9 @@ ci_log "checksumming rootfs image"
 raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
 (cd "$OUTPUT_DIR" && sha256sum "$(basename "$rootfs_img")" > "$(basename "$raw_sha_file")")
 
+ssh_evidence="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.ssh-identity.json"
+python3 -IB "$SCRIPT_DIR/ssh-image-evidence.py" capture "$rootfs_img" "$manifest" "$build_info" "$raw_sha_file" > "$ssh_evidence"
+
 checksum_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.SHA256SUMS"
 rm -f "$checksum_file"
 (cd "$OUTPUT_DIR" && sha256sum \
@@ -1649,6 +1655,7 @@ rm -f "$checksum_file"
   "$(basename "$apt_provenance")" \
   "$(basename "$apt_sources")" \
   "$(basename "$apt_bootstrap")" \
+  "$(basename "$ssh_evidence")" \
   "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
 
 case "$COMPRESS" in

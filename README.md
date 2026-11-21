@@ -81,6 +81,10 @@ KEEP_RAW_IMAGE=0
 
 The November test branch reads the default user hash from the repository secret `TB321FU_NOV2026_TEST_USER_PASSWORD_HASH` in the rootfs build step. The runtime variable remains `DEFAULT_USER_PASSWORD_HASH`. The root password hash uses `ROOT_PASSWORD_HASH`. The config parser rejects password assignments. The rootfs build log and BUILD-INFO record OpenSSH authentication settings for the image user and root under a sample connection context.
 
+The public test image enables SSH and uses a shared initial local test credential. On first boot keep it on an isolated network (or offline), change the test user's password locally with `passwd`, and only then join a trusted LAN. Do not expose it to the internet or port-forward SSH. A locked root account and password-required sudo do not protect an unchanged user password. BUILD-INFO describes one sample SSH connection context, not all networks or hardware behavior.
+
+The new image contains no SSH host keys. Each installation generates persistent keys before either OpenSSH activation route may start. A reinstall of a sealed image has a new identity; compare its public host-key fingerprint at the device console before accepting a changed client host-key entry. Cloning an already-booted filesystem also clones its identity; redistribute only the sealed image. The rootfs profile must provide OpenSSH server/client and Python 3.
+
 ## Boot Config
 
 Optional override example:

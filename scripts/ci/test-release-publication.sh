@@ -202,7 +202,9 @@ if [ "${1:-}" = api ]; then
         [ "$draft" = true ]
         [ "$prerelease" = true ]
         tag_target=${GH_CREATE_TAG_TARGET:-$target}
-        : > "$GH_STATE/tag-exists"
+        if [ "${GH_DRAFT_DEFER_TAG:-1}" != 1 ]; then
+          : > "$GH_STATE/tag-exists"
+        fi
         printf '%s\n' "$tag" > "$GH_STATE/tag"
         if [ "${GH_ANNOTATED_TAG:-0}" = 1 ]; then
           printf 'tag\n' > "$GH_STATE/tag-type"
@@ -251,6 +253,8 @@ if [ "${1:-}" = api ]; then
       ;;
     repos/owner/repository/git/matching-refs/tags/*)
       [ "${GH_FAIL_REF_LIST:-0}" != 1 ] || exit 71
+      [ "${GH_FAIL_DRAFT_REF_LIST:-0}" != 1 ] || [ ! -f "$GH_STATE/exists" ] || exit 72
+      [ "${GH_PREFIX_TAG:-0}" != 1 ] || printf 'refs/tags/%s\n' test-20260715-other
       [ ! -f "$GH_STATE/tag-exists" ] || printf 'refs/tags/%s\n' test-20260715
       exit
       ;;
@@ -636,12 +640,30 @@ fi
 [ "$before" -eq "$(wc -l < "$state_prerelease/events.log")" ]
 printf 'PASS prerelease draft is verified, private, and immutable on rerun\n'
 
-state_unused_target=$scratch/state-unused-target
-run_publish "$state_unused_target" env PRERELEASE=1 \
-  GH_RELEASE_TARGET_RESPONSE=main >/dev/null
-[ "$(cat "$state_unused_target/target")" = main ]
-[ "$(cat "$state_unused_target/tag-object")" = 0123456789abcdef0123456789abcdef01234567 ]
-[ "$(cat "$state_unused_target/prerelease")" = true ]
+state_deferred=$scratch/state-deferred
+run_publish "$state_deferred" env PRERELEASE=1 GH_DRAFT_DEFER_TAG=1 GH_PREFIX_TAG=1 >/dev/null
+[ -s "$state_deferred/assets.tsv" ] && [ ! -f "$state_deferred/tag-exists" ]
+[ "$(cat "$state_deferred/draft")" = true ]
+if grep -Fq '/git/ref/tags/' "$state_deferred/calls.log" || grep -Fq '/releases/tags/' "$state_deferred/calls.log"; then
+  printf 'unexpected tag endpoint for a deferred draft\n' >&2
+  exit 1
+fi
+state_ref_error=$scratch/state-ref-error
+if run_publish "$state_ref_error" env PRERELEASE=1 GH_DRAFT_DEFER_TAG=1 GH_FAIL_DRAFT_REF_LIST=1 >/dev/null 2>&1; then
+  printf 'draft tag listing error treated as legitimate absence\n' >&2
+  exit 1
+fi
+[ ! -s "$state_ref_error/assets.tsv" ]
+
+for defer in 0 1; do
+  state_wrong_target=$scratch/state-wrong-target-$defer
+  if run_publish "$state_wrong_target" env PRERELEASE=1 GH_DRAFT_DEFER_TAG="$defer" GH_RELEASE_TARGET_RESPONSE=main >/dev/null 2>&1; then
+    printf 'draft target branch substituted for exact SHA\n' >&2
+    exit 1
+  fi
+  [ ! -s "$state_wrong_target/assets.tsv" ]
+done
+printf 'PASS deferred draft tag, exact target SHA, prefix and API-failure boundaries\n'
 
 state_create_api_fail=$scratch/state-create-api-fail
 if run_publish "$state_create_api_fail" env PRERELEASE=1 \
@@ -662,7 +684,7 @@ fi
 [ -f "$state_create_tag_mismatch/exists" ]
 [ "$(cat "$state_create_tag_mismatch/draft")" = true ]
 [ ! -f "$state_create_tag_mismatch/patch-fields.log" ]
-printf 'PASS create API binds release id/tag while release-created Git ref owns commit identity\n'
+printf 'PASS create API binds release id/tag and exact target commit\n'
 
 for field in name body; do
   state=$scratch/state-create-$field-mismatch
@@ -721,7 +743,7 @@ fi
 
 state_tag_race=$scratch/state-tag-race
 if run_publish "$state_tag_race" env PRERELEASE=1 \
-    GH_CREATE_TAG_TARGET=ffffffffffffffffffffffffffffffffffffffff >/dev/null 2>&1; then
+    GH_DRAFT_DEFER_TAG=0 GH_CREATE_TAG_TARGET=ffffffffffffffffffffffffffffffffffffffff >/dev/null 2>&1; then
   printf 'racing mismatched tag target was accepted\n' >&2
   exit 1
 fi
@@ -732,9 +754,16 @@ fi
 [ ! -f "$state_tag_race/patch-fields.log" ]
 
 state_annotated=$scratch/state-annotated
-run_publish "$state_annotated" env PRERELEASE=1 GH_ANNOTATED_TAG=1 >/dev/null
-[ "$(cat "$state_annotated/prerelease")" = true ]
-printf 'PASS existing tags fail closed and annotated tags are peeled to the exact commit\n'
+for kind in 0 1; do
+  state_same_sha=$state_annotated-$kind
+  if run_publish "$state_same_sha" env PRERELEASE=1 GH_DRAFT_DEFER_TAG=0 GH_ANNOTATED_TAG="$kind" >/dev/null 2>&1; then
+    printf 'public tag at requested commit was incorrectly attributed to our private draft\n' >&2
+    exit 1
+  fi
+  [ ! -s "$state_same_sha/assets.tsv" ]
+  [ "$(cat "$state_same_sha/draft")" = true ]
+done
+printf 'PASS preexisting or concurrent public tags fail closed including same-SHA annotated tags\n'
 
 for mutation in id draft tag target prerelease name body extra digest; do
   state=$scratch/state-mutation-$mutation

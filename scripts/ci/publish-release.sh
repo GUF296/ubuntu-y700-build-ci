@@ -282,44 +282,22 @@ verify_release_snapshot() {
   done <<< "$local_asset_records"
 }
 
-resolve_tag_commit() {
-  local object_type object_sha record
-  local depth
-
-  record=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag" --jq \
-    '[.object.type, .object.sha] | @tsv') || return 1
-  for depth in $(seq 1 8); do
-    IFS=$'\t' read -r object_type object_sha <<< "$record"
-    [[ $object_sha =~ ^[0-9a-f]{40}$ ]] || return 1
-    case "$object_type" in
-      commit)
-        printf '%s\n' "$object_sha"
-        return 0
-        ;;
-      tag)
-        record=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" --jq \
-          '[.object.type, .object.sha] | @tsv') || return 1
-        ;;
-      *)
-        return 1
-        ;;
-    esac
-  done
-  return 1
+list_matching_tags() {
+  gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$release_tag" \
+    --paginate --jq '.[].ref'
 }
 
-verify_tag_target() {
-  local resolved
-
-  resolved=$(resolve_tag_commit) || {
-    printf 'release tag cannot be resolved to a commit: %s\n' "$release_tag" >&2
+verify_draft_ref() {
+  local matching
+  # A new private draft can legitimately have no public Git tag until PATCH
+  # draft=false. A failed list is *not* absence. An already visible exact
+  # tag cannot be attributed to our draft, even if it points to our commit.
+  matching=$(list_matching_tags) || return 1
+  if grep -Fxq -- "refs/tags/$release_tag" <<< "$matching"; then
+    printf 'unexpected public tag appeared while our release is private: %s\n' "$release_tag" >&2
     return 1
-  }
-  [ "$resolved" = "$GITHUB_SHA" ] || {
-    printf 'release tag target differs from this workflow commit: %s != %s\n' \
-      "$resolved" "$GITHUB_SHA" >&2
-    return 1
-  }
+  fi
+  return 0
 }
 
 existing_release_tags=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
@@ -331,9 +309,7 @@ if grep -Fxq -- "$release_tag" <<< "$existing_release_tags"; then
   printf 'refusing to modify an existing release or draft: %s\n' "$release_tag" >&2
   exit 1
 fi
-matching_tag_refs=$(gh api \
-  "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$release_tag" \
-  --jq '.[].ref') || {
+matching_tag_refs=$(list_matching_tags) || {
   printf 'cannot establish the existing tag set\n' >&2
   exit 1
 }
@@ -342,8 +318,8 @@ if grep -Fxq -- "refs/tags/$release_tag" <<< "$matching_tag_refs"; then
   exit 1
 fi
 
-# The release API creates the new tag and release as one server-side operation.
-# Creating the ref first could leave an orphan tag if release creation failed.
+# Let the release API own eventual tag creation. Do not create an orphan ref.
+# Until publication, the numeric draft ID and exact target SHA own its identity.
 release_record=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
   -f "tag_name=$release_tag" \
   -f "target_commitish=$GITHUB_SHA" \
@@ -380,11 +356,11 @@ IFS=$'\t' read -r release_id created_tag created_draft \
   printf 'release API returned an unexpected release body\n' >&2
   exit 1
 }
-[ -n "$release_target_commitish" ] || {
-  printf 'release API returned an empty target_commitish\n' >&2
+[ "$release_target_commitish" = "$GITHUB_SHA" ] || {
+  printf 'draft release target is not the requested exact commit\n' >&2
   exit 1
 }
-verify_tag_target || exit 1
+verify_draft_ref || exit 1
 initial_snapshot=$(fetch_release_snapshot "$release_id")
 verify_release_snapshot "$initial_snapshot" "$release_id" true \
   "$release_target_commitish" "$publish_prerelease" "$release_title" "$notes_body_b64" 0 || {
@@ -435,8 +411,8 @@ verify_release_snapshot "$final_snapshot" "$release_id" true \
   printf '%s\n' "$final_snapshot" >&2
   exit 1
 }
-verify_tag_target || {
-  printf 'release tag changed after draft verification; release remains draft\n' >&2
+verify_draft_ref || {
+  printf 'cannot confirm draft ref state after upload; release remains private\n' >&2
   exit 1
 }
 printf 'Created verified %s %s with %d assets; draft remains private for manual publication.\n' \
