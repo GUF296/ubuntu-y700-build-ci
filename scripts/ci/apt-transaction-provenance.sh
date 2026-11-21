@@ -225,8 +225,8 @@ collect_indexes() {
     die 'APT lists directory contains a symlink'
   : > "$output"
   while IFS= read -r -d '' path; do
-    basename=$(basename -- "$path")
-    [[ $basename =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,255}$ ]] ||
+    basename=${path##*/}
+    ci_is_apt_index_basename "$basename" ||
       die 'unsafe APT index filename'
     size=$(stat -c '%s' -- "$path")
     [[ $size =~ ^[0-9]+$ ]] && [ "$size" -le "$MAX_APT_INDEX_FILE_BYTES" ] ||

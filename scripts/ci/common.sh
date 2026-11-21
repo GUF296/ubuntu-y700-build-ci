@@ -630,6 +630,15 @@ ci_validate_dns_authority() {
     ci_die "$label has an invalid DNS host"
 }
 
+# APT's local list filenames encode the '@' in AppStream's two HiDPI icon
+# targets as literal %40. Never URL-decode this filename or allow general '%'.
+ci_is_apt_index_basename() {
+  local LC_ALL=C name=$1
+  [[ ${#name} -le 255 ]] || return 1
+  [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ||
+     $name =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*_dep11_icons-(64x64|128x128)%402\.tar\.gz$ ]]
+}
+
 ci_validate_apt_proxy() {
   local value=${1-} authority port
 

@@ -50,6 +50,21 @@ printf 'signed release metadata\n' \
   > "$root/var/lib/apt/lists/ports.ubuntu.com_ubuntu-ports_dists_resolute_InRelease"
 printf 'package index\n' \
   > "$root/var/lib/apt/lists/ports.ubuntu.com_ubuntu-ports_dists_resolute_main_binary-arm64_Packages"
+# Ordinary libapt/AppStream names from a desktop's later APT update. Use small
+# fixture bytes; all four recording/validation sites must keep the actual hash.
+index_prefix=ports.ubuntu.com_ubuntu-ports_dists_resolute_main_dep11_icons-
+for icon_size in 64x64 128x128; do
+  printf 'fixture %s icons\n' "$icon_size" > "$root/var/lib/apt/lists/${index_prefix}${icon_size}%402.tar.gz"
+done
+(
+  # shellcheck source=/dev/null
+  . "$SCRIPT_DIR/common.sh"
+  # Plain package lists keep their grammar; no general encoded names, URL or
+  # checksum-policy change is needed for the single official special form.
+  ci_is_apt_index_basename ports.ubuntu.com_ubuntu-ports_dists_resolute_InRelease
+  ! ci_is_apt_index_basename 'unrelated%40list' || exit 1
+  ! ci_is_apt_index_basename "${index_prefix}64x64@2.tar.gz" || exit 1
+)
 printf 'ii \tbase-system\t1.0\tarm64\n' > "$state/packages"
 printf 'base-system\n' > "$state/auto-packages"
 
@@ -218,6 +233,14 @@ PATH="$fake_bin:$PATH" \
 grep -Fx $'schema\ttb321fu.apt-provenance/v3' "$provenance" >/dev/null
 grep -Fx $'bootstrap-provenance-sha256\t'"$(sha256sum "$bootstrap" | awk '{print $1}')" "$provenance" >/dev/null
 grep -Fx $'transaction-count\t8' "$provenance" >/dev/null
+for icon_size in 64x64 128x128; do
+  name=${index_prefix}${icon_size}%402.tar.gz
+  path=$root/var/lib/apt/lists/$name
+  row=$(printf '%s\t%s\t%s' "$name" "$(stat -c %s -- "$path")" "$(sha256sum -- "$path" | awk '{print $1}')")
+  grep -Fx $'bootstrap-index\t'"$row" "$bootstrap" >/dev/null
+  grep -Fx $'index\t'"$row" "$records_dir/0003-gpu-build-update.tsv" >/dev/null
+  [ "$(grep -Fxc $'index\t'"$row" "$provenance")" = 8 ]
+done
 [ "$(grep -Fc $'transaction\t' "$provenance")" -eq 8 ]
 [ "$(grep -Fc $'timestamp\t123456789' "$provenance")" -eq 8 ]
 [ "$(grep -Fc $'operation\t' "$provenance")" -eq 8 ]

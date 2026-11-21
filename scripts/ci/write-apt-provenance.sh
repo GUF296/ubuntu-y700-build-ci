@@ -382,8 +382,8 @@ collect_bootstrap_indexes() {
   [ -z "$(find -P "$lists_dir" -mindepth 1 -maxdepth 1 -type l -print -quit)" ] ||
     ci_die 'bootstrap APT lists directory contains a symlink'
   while IFS= read -r -d '' path; do
-    basename=$(basename -- "$path")
-    [[ $basename =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,255}$ ]] ||
+    basename=${path##*/}
+    ci_is_apt_index_basename "$basename" ||
       ci_die 'unsafe bootstrap APT index filename'
     size=$(stat -c '%s' -- "$path")
     [[ $size =~ ^[0-9]+$ ]] && [ "$size" -le "$MAX_APT_INDEX_FILE_BYTES" ] ||
@@ -635,7 +635,7 @@ validate_bootstrap_file() {
       bootstrap-index)
         [ -z "$d" ] && [ -z "$e" ] && [ -z "$extra" ] ||
           ci_die 'malformed bootstrap APT index record'
-        [[ $a =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,255}$ ]] ||
+        ci_is_apt_index_basename "$a" ||
           ci_die 'invalid bootstrap APT index filename'
         [[ $b =~ ^[0-9]+$ ]] || ci_die 'invalid bootstrap APT index size'
         validate_hash "$c"
@@ -872,7 +872,7 @@ validate_transaction_file() {
       index)
         [ -z "${d:-}" ] && [ -z "${e:-}" ] && [ -z "${extra:-}" ] ||
           ci_die 'malformed APT index record'
-        [[ $a =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,255}$ ]] ||
+        ci_is_apt_index_basename "$a" ||
           ci_die 'invalid APT index filename'
         [[ $b =~ ^[0-9]+$ ]] || ci_die 'invalid APT index size'
         validate_hash "$c"
