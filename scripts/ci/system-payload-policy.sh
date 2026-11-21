@@ -752,6 +752,36 @@ EOF_PREINST
   chmod 0755 "$package_root/DEBIAN/preinst"
 }
 
+# Fix the two package-owned files as a pair before generating the daily DEB's
+# checksums. June's helper suppresses UCM failure: changing only its unit's
+# Restart= setting cannot implement independent audio recovery.
+ci_migrate_tb321fu_audio_card_guard() {
+  local root=$1 payload="$SCRIPT_DIR/payloads" unit=etc/systemd/system/y700-audio-card-guard.service
+  local helper=usr/local/sbin/y700-audio-card-guard.sh actual relative digest
+  for relative in "$unit" "$helper"; do
+    [ -f "$root/$relative" ] && [ ! -L "$root/$relative" ] ||
+      ci_die "tested audio recovery input is missing or not a regular file: /$relative"
+    case "$relative" in
+      "$unit") digest=d5e9f3bc181fd643f72374c8d8269da7484fe7fbaf959a6a9f5a98604516b7df ;;
+      "$helper") digest=c038bcad99ad827ce2bbf0d4e035c2de3b2ac9e86a1ef451e9b59f94870307db ;;
+    esac
+    actual=$(sha256sum -- "$root/$relative")
+    [ "${actual%% *}" = "$digest" ] || ci_die "unrecognized June audio recovery input: /$relative"
+  done
+  install -m 0644 "$payload/tb321fu-audio-card-guard.service" "$root/$unit"
+  install -m 0755 "$payload/tb321fu-audio-card-guard.sh" "$root/$helper"
+}
+
+ci_assert_tb321fu_audio_card_guard() {
+  local root=$1 unit=etc/systemd/system/y700-audio-card-guard.service helper=usr/local/sbin/y700-audio-card-guard.sh
+  [ -f "$root/$unit" ] && [ ! -L "$root/$unit" ] && [ "$(stat -c %a -- "$root/$unit")" = 644 ] &&
+    cmp -s -- "$SCRIPT_DIR/payloads/tb321fu-audio-card-guard.service" "$root/$unit" ||
+    ci_die 'audio recovery unit differs from the reviewed oneshot retry policy'
+  [ -f "$root/$helper" ] && [ ! -L "$root/$helper" ] && [ "$(stat -c %a -- "$root/$helper")" = 755 ] &&
+    cmp -s -- "$SCRIPT_DIR/payloads/tb321fu-audio-card-guard.sh" "$root/$helper" ||
+    ci_die 'audio recovery helper differs from the reviewed nonblocking implementation'
+}
+
 ci_migrate_tb321fu_audio_route_policy() {
   local package_root=$1
   local old_conf=etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf
@@ -909,6 +939,8 @@ ci_prepare_y700_daily_payload_deb() {
     rm -f -- "$daily_stage/$relative"
   done
 
+  ci_migrate_tb321fu_audio_card_guard "$daily_stage"
+  ci_assert_tb321fu_audio_card_guard "$daily_stage"
   ci_migrate_tb321fu_audio_route_policy "$daily_stage"
   if [ -n "$camera_deb" ]; then
     ci_migrate_tb321fu_camera_payload "$daily_stage" "$camera_stage" "$historical"

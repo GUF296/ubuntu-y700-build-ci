@@ -232,6 +232,7 @@ jobs:
           bash scripts/ci/test-audio-route-lifecycle.sh
           bash scripts/ci/test-qcom-sns-lifecycle.sh
           bash scripts/ci/test-gpu-deb-lifecycle.sh
+          bash scripts/ci/test-gpu-provider.sh
           bash scripts/ci/test-openpgp-pin.sh
           bash scripts/ci/test-rootfs-overlay-boundary.sh
           bash scripts/ci/test-apt-provenance.sh

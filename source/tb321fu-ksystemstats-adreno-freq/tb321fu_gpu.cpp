@@ -4,6 +4,8 @@
     SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 */
 
+#include "tb321fu_frequency_range.h"
+
 #include <KLocalizedString>
 #include <KPluginFactory>
 
@@ -141,7 +143,7 @@ public:
         const QString previousDeviceDirectory = m_deviceDirectory;
         const double mhz = readGpuFrequencyMhz(m_deviceDirectory, ok);
         if (!ok) {
-            m_maxFrequencyMhz = 0.0;
+            m_frequencyRange.reset();
             m_device->setValue(QVariant());
             m_frequency->setValue(QVariant());
             m_frequencyPercent->setValue(QVariant());
@@ -149,37 +151,29 @@ public:
         }
 
         if (m_deviceDirectory != previousDeviceDirectory) {
-            m_maxFrequencyMhz = 0.0;
+            m_frequencyRange.reset();
         }
         m_device->setValue(QFileInfo(m_deviceDirectory).fileName());
-        refreshFrequencyRange(mhz);
+        const auto range = readGpuFrequencyRangeMhz(m_deviceDirectory);
+        const auto reading = m_frequencyRange.sample(mhz, range.second);
+        if (reading.chartMaximumMhz > 0.0) {
+            m_frequency->setMax(reading.chartMaximumMhz);
+        }
         m_frequency->setValue(mhz);
-        if (m_maxFrequencyMhz > 0.0) {
-            m_frequencyPercent->setValue(std::clamp((mhz / m_maxFrequencyMhz) * 100.0, 0.0, 100.0));
+        if (reading.percentage) {
+            m_frequencyPercent->setValue(*reading.percentage);
         } else {
             m_frequencyPercent->setValue(QVariant());
         }
     }
 
 private:
-    void refreshFrequencyRange(double observedMhz)
-    {
-        const auto range = readGpuFrequencyRangeMhz(m_deviceDirectory);
-        if (range.second > 0.0) {
-            m_maxFrequencyMhz = range.second;
-        }
-        m_maxFrequencyMhz = std::max(m_maxFrequencyMhz, observedMhz);
-        if (m_maxFrequencyMhz > 0.0) {
-            m_frequency->setMax(m_maxFrequencyMhz);
-        }
-    }
-
     KSysGuard::SensorProperty *m_name = nullptr;
     KSysGuard::SensorProperty *m_device = nullptr;
     KSysGuard::SensorProperty *m_frequency = nullptr;
     KSysGuard::SensorProperty *m_frequencyPercent = nullptr;
     QString m_deviceDirectory;
-    double m_maxFrequencyMhz = 0.0;
+    Tb321fu::FrequencyRange m_frequencyRange;
 };
 
 class Tb321fuGpuPlugin : public KSysGuard::SensorPlugin

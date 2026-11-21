@@ -1,0 +1,15 @@
+[Unit]
+Description=Lenovo TB321FU internal audio card recovery
+After=systemd-udev-trigger.service systemd-modules-load.service
+Wants=systemd-udev-trigger.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/y700-audio-card-guard.sh
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=15s
+
+[Install]
+WantedBy=multi-user.target

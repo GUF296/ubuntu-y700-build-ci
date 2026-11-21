@@ -109,4 +109,53 @@ remaining = [item for item in all_nodes if item[0] not in reconcile(
 assert not reconcile("HiFi", ["[Out] Speaker", "[In] Mic1"], remaining, 42)
 PY
 
+# Run the accepted helper itself for both outcomes with an already-present
+# card. For absence/bind cases only, map the single absolute sysfs directory
+# to a temporary ordinary directory; no test reads or writes a real driver.
+python3 - "$SCRIPT_DIR/payloads" <<'PY'
+from pathlib import Path
+import hashlib
+import os
+import subprocess
+import sys
+import tempfile
+
+payload = Path(sys.argv[1])
+helper = payload / 'tb321fu-audio-card-guard.sh'
+unit = payload / 'tb321fu-audio-card-guard.service'
+assert hashlib.sha256(unit.read_bytes()).hexdigest() == 'e0c6034915659fc8465b1a106ffcb48e4e90e4d02a9e84921bc9782b0f126301'
+assert hashlib.sha256(helper.read_bytes()).hexdigest() == '29fe2db28a7e049e58f9d0fcd6c2487c92bb1c758c09fa3733990f7b9bc33f67'
+for line in ['Type=oneshot','Restart=on-failure','RestartSec=10s','TimeoutStartSec=15s',
+             'WantedBy=multi-user.target','ExecStart=/usr/local/sbin/y700-audio-card-guard.sh']:
+    assert unit.read_text().splitlines().count(line) == 1
+shell = '''
+grep() { [ "$*" = '-q LenovoY700TB321 /proc/asound/cards' ] && [ "$CARD" = present ]; }
+alsaucm() {
+  [ "$*" = '-c LenovoY700TB321 set _verb HiFi set _enadev Speaker set _enadev Mic1' ] || exit 31
+  printf 'fixture UCM result %s\\n' "$UCM"; return "$UCM"
+}
+logger() { :; }
+sleep() { [ "$1" = 1 ] || exit 32; }
+. "$1"
+'''
+with tempfile.TemporaryDirectory() as td:
+    base = Path(td)
+    def run(script, card, ucm, rc, text):
+        env = dict(PATH='/usr/bin:/bin', LC_ALL='C', CARD=card, UCM=str(ucm), Y700_AUDIO_UCM_LOG=str(base/'ucm.log'))
+        out = subprocess.run(['/bin/sh','-c',shell,'isolated-fixture',str(script)], cwd=base, env=env,
+                             capture_output=True, text=True, timeout=5, check=False)
+        assert out.returncode == rc and text in out.stdout, (out.returncode, out.stdout, out.stderr)
+    run(helper, 'present', 0, 0, 'audio UCM initialized: HiFi Speaker Mic1')
+    run(helper, 'present', 7, 7, 'audio UCM init failed ret=7 err=fixture UCM result 7')
+    original = 'driver_dir="/sys/bus/platform/drivers/snd-sc8280xp"'
+    assert helper.read_text().count(original) == 1
+    mapped = base / 'mapped-guard.sh'
+    mapped.write_text(helper.read_text().replace(original, 'driver_dir="./driver"'))
+    run(mapped, 'absent', 0, 1, 'audio card is not ready; systemd will retry')
+    driver = base / 'driver'
+    driver.mkdir(); (driver/'bind').touch()
+    run(mapped, 'absent', 0, 1, 'audio card missing; requested platform bind')
+    assert (driver/'bind').read_text() == 'sound\n'
+PY
+
 printf 'AUDIO_ROUTE_LIFECYCLE=PASS\n'

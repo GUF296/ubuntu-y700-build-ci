@@ -1,0 +1,11 @@
+[Unit]
+Description=Lenovo Y700 internal audio card boot guard
+After=systemd-udev-trigger.service systemd-modules-load.service
+Wants=systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/y700-audio-card-guard.sh
+
+[Install]
+WantedBy=multi-user.target

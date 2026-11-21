@@ -27,7 +27,7 @@ Section: utils
 Priority: optional
 Architecture: $architecture
 Maintainer: TB321FU Linux maintainers <noreply@example.invalid>
-Depends: $dependencies
+Depends: ksystemstats, $dependencies
 Provides: tb321fu-adreno-frequency-provider
 Conflicts: y700-ksystemstats-gpu
 Replaces: y700-ksystemstats-gpu

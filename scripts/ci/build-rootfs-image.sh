@@ -529,9 +529,13 @@ apply_tb321fu_legacy_cleanup() {
     ln -sfn /usr/lib/systemd/system/tb321fu-haptics.service \
       "$root/etc/systemd/system/multi-user.target.wants/tb321fu-haptics.service"
   fi
-  if [ -f "$root/etc/systemd/system/y700-audio-card-guard.service" ]; then
-    grep -q '^Restart=on-failure$' "$root/etc/systemd/system/y700-audio-card-guard.service" || \
-      ci_die "audio card guard does not retry asynchronously"
+  # A generic rootfs may omit the daily device package. When either member
+  # is supplied, verify the *installed* pair before enabling it at boot.
+  if [ -e "$root/etc/systemd/system/y700-audio-card-guard.service" ] ||
+     [ -L "$root/etc/systemd/system/y700-audio-card-guard.service" ] ||
+     [ -e "$root/usr/local/sbin/y700-audio-card-guard.sh" ] ||
+     [ -L "$root/usr/local/sbin/y700-audio-card-guard.sh" ]; then
+    ci_assert_tb321fu_audio_card_guard "$root"
     install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
     ln -sfn /etc/systemd/system/y700-audio-card-guard.service \
       "$root/etc/systemd/system/multi-user.target.wants/y700-audio-card-guard.service"

@@ -64,6 +64,10 @@ install -m 0644 "$SCRIPT_DIR/test-fixtures/tested-headset-cleanup.conf" \
   "$daily_root/etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf"
 install -m 0644 "$SCRIPT_DIR/test-fixtures/tested-headset-cleanup.lua" \
   "$daily_root/usr/share/wireplumber/scripts/y700/headset-cleanup.lua"
+install -m 0644 "$SCRIPT_DIR/test-fixtures/tested-audio-card-guard.service" \
+  "$daily_root/etc/systemd/system/y700-audio-card-guard.service"
+install -m 0755 "$SCRIPT_DIR/test-fixtures/tested-audio-card-guard.sh" \
+  "$daily_root/usr/local/sbin/y700-audio-card-guard.sh"
 printf 'unit\n' > "$daily_root/etc/systemd/system/fixture.service"
 printf 'library\n' > "$daily_root/usr/lib/aarch64-linux-gnu/libfixture.so"
 printf '#!/bin/sh\nexit 0\n' > "$daily_root/usr/bin/fixture-helper"
@@ -324,6 +328,8 @@ dpkg-deb -x "$payload/daily.deb" "$tmp/before"
 dpkg-deb -x "$payload/haptics.deb" "$tmp/before"
 dpkg-deb -x "$payload/camera.deb" "$tmp/before"
 (cd "$tmp/before" && find . -type f \
+  ! -path './etc/systemd/system/y700-audio-card-guard.service' \
+  ! -path './usr/local/sbin/y700-audio-card-guard.sh' \
   ! -path './etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf' \
   ! -path './etc/wireplumber/wireplumber.conf.d/52-tb321fu-headset-route-reconcile.conf' \
   ! -path './usr/share/wireplumber/scripts/y700/headset-cleanup.lua' \
@@ -633,6 +639,8 @@ cmp "$keyboard_root/etc/skel/.config/plasmakeyboardrc" \
   "$keyboard_root/home/fixture/.config/plasmakeyboardrc"
 
 (cd "$tmp/after" && find . -type f \
+  ! -path './etc/systemd/system/y700-audio-card-guard.service' \
+  ! -path './usr/local/sbin/y700-audio-card-guard.sh' \
   ! -path './etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf' \
   ! -path './etc/wireplumber/wireplumber.conf.d/52-tb321fu-headset-route-reconcile.conf' \
   ! -path './usr/share/wireplumber/scripts/y700/headset-cleanup.lua' \
@@ -650,6 +658,9 @@ cmp "$keyboard_root/etc/skel/.config/plasmakeyboardrc" \
   ! -path './usr/local/share/y700-sns/*' \
   -print0 | sort -z | xargs -0 sha256sum) > "$tmp/after.sha256"
 cmp "$tmp/before.sha256" "$tmp/after.sha256"
+cmp "$SCRIPT_DIR/test-fixtures/tested-audio-card-guard.service" "$tmp/before/etc/systemd/system/y700-audio-card-guard.service"
+cmp "$SCRIPT_DIR/test-fixtures/tested-audio-card-guard.sh" "$tmp/before/usr/local/sbin/y700-audio-card-guard.sh"
+ci_assert_tb321fu_audio_card_guard "$tmp/after"
 [ ! -e "$tmp/after/etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf" ]
 [ ! -e "$tmp/after/usr/share/wireplumber/scripts/y700/headset-cleanup.lua" ]
 for forbidden in \
