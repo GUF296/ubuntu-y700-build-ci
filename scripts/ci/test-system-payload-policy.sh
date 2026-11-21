@@ -4,6 +4,80 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/common.sh"
 . "$SCRIPT_DIR/system-payload-policy.sh"
+
+test_native_local_directories() (
+  set -euo pipefail
+  [ "$EUID" = 0 ] || { echo 'native directory ownership fixture requires root' >&2; exit 1; }
+  local temp root fonts ppd
+  temp=$(mktemp -d /tmp/tb321fu-native-dir-test.XXXXXX)
+  trap 'rm -rf -- "$temp"' EXIT
+  root="$temp/target [1] * ?"
+  fonts="$root/usr/local/share/fonts"
+  ppd="$root/usr/share/ppd/custom"
+  install -d -m 0755 "$root/etc" "$fonts" "$ppd" "$root/usr/lib/firmware"
+  printf 'root:x:0:\nstaff:x:50:\nlpadmin:x:41237:\n' > "$root/etc/group"
+  chown 0:50 -- "$fonts"
+  chown 0:41237 -- "$ppd"
+  chmod 2775 -- "$fonts"
+  chmod 3775 -- "$ppd"
+  printf 'ordinary print descriptor\n' > "$ppd/fixture.ppd"
+  chmod 0644 -- "$ppd/fixture.ppd"
+  ci_assert_privileged_payload_security "$root"
+  fail_native() {
+    if ci_assert_privileged_payload_security "$root" >"$temp/diagnostic" 2>&1; then
+      echo "unexpectedly accepted: $1" >&2; exit 1
+    fi
+    grep -Fq -- "$1" "$temp/diagnostic"
+  }
+  chmod 0664 -- "$ppd/fixture.ppd"
+  fail_native 'group/world-writable privileged payload member:'
+  chmod 0644 -- "$ppd/fixture.ppd"
+  chmod 2777 -- "$fonts"
+  fail_native 'stock local directory has unexpected write permissions or ownership'
+  chmod 2775 -- "$fonts"
+  chown 0:50 -- "$ppd"; chmod 3775 -- "$ppd"
+  fail_native 'stock local directory has unexpected write permissions or ownership'
+  chown 0:41237 -- "$ppd"; chmod 3775 -- "$ppd"
+  printf 'lpadmin:x:41238:\n' >> "$root/etc/group"
+  fail_native 'ambiguous target stock group'
+  sed -i '$d' "$root/etc/group"
+  printf 'other:x:41237:\n' >> "$root/etc/group"
+  fail_native 'ambiguous target stock group'
+  sed -i '$d' "$root/etc/group"
+  printf 'bad:x:not-a-gid:\n' >> "$root/etc/group"
+  fail_native 'invalid target group entry'
+  sed -i '$d' "$root/etc/group"
+  mv -- "$root/etc/group" "$root/regular-group"; ln -s ../regular-group "$root/etc/group"
+  fail_native 'nonphysical target group database'
+  unlink -- "$root/etc/group"; mv -- "$root/regular-group" "$root/etc/group"
+  chown 12345:50 -- "$fonts"; chmod 2775 -- "$fonts"
+  fail_native 'stock local directory has unexpected write permissions or ownership'
+  chown 0:50 -- "$fonts"; chmod 2775 -- "$fonts"
+  mv -- "$fonts" "$root/regular-fonts"; ln -s ../../../../regular-fonts "$fonts"
+  fail_native 'stock local directory has a nonphysical path'
+  unlink -- "$fonts"; mv -- "$root/regular-fonts" "$fonts"
+  mv -- "$root/usr/share/ppd" "$root/regular-ppd"; ln -s ../../regular-ppd "$root/usr/share/ppd"
+  fail_native 'stock local directory has a nonphysical path'
+  unlink -- "$root/usr/share/ppd"; mv -- "$root/regular-ppd" "$root/usr/share/ppd"
+  chmod 0755 -- "$fonts" "$ppd"
+  ci_assert_privileged_payload_security "$root"  # stricter local modes need no exemption
+  printf 'firmware test fixture\n' > "$root/usr/lib/firmware/tb321fu-fixture.bin"
+  chmod 0664 "$root/usr/lib/firmware/tb321fu-fixture.bin"
+  fail_native 'group/world-writable privileged payload member:'
+  printf '%s\n' 'NATIVE_LOCAL_DIRECTORY_POLICY=PASS'
+)
+if [ "${1:-}" = --private-native-dir-fixture ]; then
+  [ "$#" -eq 1 ] || exit 2
+  test_native_local_directories
+  exit
+fi
+if [ "$EUID" = 0 ]; then
+  test_native_local_directories
+elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+  # The hosted runner already uses passwordless sudo for the rootfs. Only the
+  # self-contained local fixture runs as root: no caller-supplied path/uid/gid.
+  sudo -n -- /bin/bash "$SCRIPT_DIR/test-system-payload-policy.sh" --private-native-dir-fixture
+fi
 python3 -B "$SCRIPT_DIR/test-june-camera-transition.py"
 python3 -IB "$SCRIPT_DIR/test-seal-machine-id.py"
 

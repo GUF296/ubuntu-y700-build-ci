@@ -54,15 +54,109 @@ ci_assert_normalized_system_payload_modes() {
 }
 
 ci_assert_privileged_payload_security() {
-  local root=$1 required path writable
+  local root=$1 required
   shift
 
   [ -d "$root" ] || ci_die "rootfs tree not found: $root"
-  for path in "$root/etc" "$root/usr" "$root/opt" "$root/bin" "$root/sbin" "$root/lib"; do
-    [ -e "$path" ] || continue
-    writable=$(find "$path" -xdev \( -type f -o -type d \) -perm /0022 -print -quit)
-    [ -z "$writable" ] || ci_die "group/world-writable privileged payload member: $writable"
-  done
+  # fontconfig-config and cups create these two local administration directories.
+  # Audit the directory inodes, not a subtree, an archive-name pattern or host NSS.
+  python3 -IB - "$root" <<'PY_NATIVE_DIRS' || return 1
+from contextlib import ExitStack
+import os
+import stat
+import subprocess
+import sys
+
+root = os.path.abspath(os.fsencode(sys.argv[1]))
+def require(ok, message):
+    if not ok:
+        raise SystemExit("error: " + message)
+
+require(root != b"/" and os.path.realpath(root) == root, "invalid physical target root for payload audit")
+flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+specs = ((b"usr/local/share/fonts", b"staff", 0o2775), (b"usr/share/ppd/custom", b"lpadmin", 0o3775))
+
+with ExitStack() as resources:
+    def keep(fd):
+        resources.callback(os.close, fd)
+        return fd
+
+    base = keep(os.open(root, flags))
+    def directories(relative):
+        fd = base
+        chain = [os.fstat(fd)]
+        for component in relative.split(b"/"):
+            try:
+                fd = keep(os.open(component, flags, dir_fd=fd))
+            except FileNotFoundError:
+                return None, []
+            except OSError:
+                raise SystemExit("error: stock local directory has a nonphysical path: " + os.fsdecode(relative))
+            chain.append(os.fstat(fd))
+        return fd, chain
+
+    def trusted(s):
+        return s.st_uid == 0 and not (s.st_mode & 0o022)
+
+    def group_id(name):
+        etc, chain = directories(b"etc")
+        require(etc is not None and all(map(trusted,chain)), "unsafe target group database parent")
+        try:
+            fd = keep(os.open(b"group", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=etc))
+        except OSError:
+            raise SystemExit("error: missing or nonphysical target group database")
+        s = os.fstat(fd)
+        require(stat.S_ISREG(s.st_mode) and trusted(s) and 0 < s.st_size <= 1024**2, "unsafe target group database")
+        with os.fdopen(fd,"rb",closefd=False) as group:
+            data = group.read(1024**2+1)
+        require(len(data) == s.st_size and b"\0" not in data, "invalid target group database")
+        entries = []
+        for line in data.split(b"\n"):
+            if not line or line.startswith(b"#"):
+                continue
+            fields = line.split(b":")
+            require(len(fields)==4 and fields[0] and fields[2].isdigit() and len(fields[2])<=10,
+                    "invalid target group entry")
+            gid = int(fields[2])
+            require(gid < 2**32-1 and str(gid).encode()==fields[2], "invalid target group id")
+            entries.append((fields[0],gid))
+        found = [gid for n,gid in entries if n==name]
+        require(len(found)==1 and found[0]>0 and sum(gid==found[0] for _,gid in entries)==1,
+                "missing or ambiguous target stock group: "+os.fsdecode(name))
+        return found[0]
+
+    allowed = {}
+    for path, name, mode in specs:
+        fd, chain = directories(path)
+        if fd is None or not (chain[-1].st_mode & 0o022):
+            continue  # absent or nonwritable: no exception
+        s = chain[-1]
+        require(all(map(trusted,chain[:-1])) and stat.S_IMODE(s.st_mode)==mode and s.st_uid==0 and s.st_gid==group_id(name),
+                "stock local directory has unexpected write permissions or ownership: "+os.fsdecode(path))
+        allowed[os.path.join(root,path)] = s
+
+    scopes = [os.path.join(root,p) for p in (b"etc",b"usr",b"opt",b"bin",b"sbin",b"lib")]
+    scopes = [p for p in scopes if os.path.exists(p)]
+    if scopes:
+        # NUL-delimited exact names; no glob expansion and no pruning children of
+        # the allowed directories. GNU find still checks every regular file/dir.
+        cmd = [b"/usr/bin/find",b"-P",*scopes,b"-xdev",b"(",b"-type",b"f",b"-o",b"-type",b"d",b")",b"-perm",b"/0022",b"-print0"]
+        with subprocess.Popen(cmd,stdout=subprocess.PIPE) as proc:
+            try:
+                tail = b""
+                while block := proc.stdout.read1(65536):
+                    *names, tail = (tail+block).split(b"\0")
+                    for name in names:
+                        previous = allowed.get(name)
+                        require(previous is not None, "group/world-writable privileged payload member: "+os.fsdecode(name))
+                        now = os.lstat(name)
+                        require(os.path.samestat(now,previous) and (now.st_mode,now.st_uid,now.st_gid)==
+                                (previous.st_mode,previous.st_uid,previous.st_gid), "stock local directory changed during payload audit")
+                require(not tail and proc.wait()==0, "incomplete privileged payload traversal")
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+PY_NATIVE_DIRS
 
   for required in "$@"; do
     required=${required#/}
