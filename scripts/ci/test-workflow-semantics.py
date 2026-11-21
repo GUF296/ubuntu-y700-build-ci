@@ -24,6 +24,16 @@ class WorkflowLoader(yaml.SafeLoader):
     pass
 
 
+def has_validation_tools(script: str) -> bool:
+    required = set("python3-yaml g++ git openssl shellcheck openssh-client gnupg rsync e2fsprogs dosfstools mtools".split())
+    # Only the literal package arguments in the early apt install count.
+    return any(words[:4] == ["sudo", "apt-get", "install", "-y"]
+               and all(re.fullmatch(r"[a-z0-9][a-z0-9+.:-]*", pkg) for pkg in words[4:])
+               and required <= set(words[4:])
+               for line in script.replace("\\\n", " ").splitlines()
+               if (words := line.partition("#")[0].split()))
+
+
 # GitHub treats "on" as a string; YAML 1.1 loaders otherwise coerce it to True.
 for first, resolvers in list(WorkflowLoader.yaml_implicit_resolvers.items()):
     WorkflowLoader.yaml_implicit_resolvers[first] = [
@@ -434,10 +444,8 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         steps[dependency_index], "validation dependency step"
     )
     dependency_run = dependency_step.get("run")
-    if not isinstance(dependency_run, str) or "python3-yaml" not in dependency_run:
-        fail("validation dependency step must install python3-yaml")
-    if "sudo apt-get install -y python3-yaml g++" not in dependency_run:
-        fail("validation must install the native C++ camera-regression dependency")
+    if not isinstance(dependency_run, str) or not has_validation_tools(dependency_run):
+        fail("install all validation tools, including ShellCheck and real ext4/FAT tools, before running the fixtures")
     if dependency_index >= validation_index:
         fail("python3-yaml must be installed before workflow validation")
 
@@ -1542,6 +1550,9 @@ def run_local_qcomramp_propagation_fixture(
 
 
 def self_test() -> None:
+    tools = "sudo apt-get install -y python3-yaml g++ git openssl shellcheck openssh-client gnupg rsync e2fsprogs dosfstools mtools"
+    if not has_validation_tools(tools) or has_validation_tools(tools.replace(" mtools", " # mtools")):
+        fail("self-test failed to distinguish an installed FAT reader from a comment")
     if not FORBIDDEN_INPUT.search("default_user_password_hash"):
         fail("self-test did not reject credential dispatch input")
     if FORBIDDEN_INPUT.search("root_password_mode"):

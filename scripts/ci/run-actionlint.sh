@@ -3,6 +3,9 @@ set -euo pipefail
 
 [ "$#" -ge 1 ] || { echo "usage: $0 WORKFLOW..." >&2; exit 2; }
 
+# actionlint silently omits shell diagnostics if this executable is absent.
+command -v shellcheck >/dev/null || { echo 'workflow validation requires shellcheck on PATH' >&2; exit 1; }
+
 version=1.7.7
 
 # GitHub-hosted ARM runners execute this gate natively.  Keep the download

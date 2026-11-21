@@ -185,7 +185,9 @@ jobs:
           sudo apt-get update
           # The extracted production data-loop regression runs a native C++17
           # fixture; its compiler is a test dependency, not the camera producer.
-          sudo apt-get install -y python3-yaml g++ git openssl shellcheck openssh-client
+          # The early checks also invoke GPG, rsync and real ext4/FAT tools,
+          # before the later kernel/rootfs build dependencies are installed.
+          sudo apt-get install -y python3-yaml g++ git openssl shellcheck openssh-client gnupg rsync e2fsprogs dosfstools mtools
 
       - name: Validate workflow input boundaries
         run: |
@@ -531,11 +533,11 @@ jobs:
           )
           verified_camera_deb_sha256=$(python3 -B scripts/ci/camera-artifact-handoff.py verify \
             out/tb321fu-camera-stack-debs "${handoff_args[@]}" --print-deb-sha256)
-          printf 'TB321FU_VERIFIED_CAMERA_DEB_SHA256=%s\n' "$verified_camera_deb_sha256" >> "$GITHUB_ENV"
-          printf 'CAMERA_PRODUCER_ARTIFACT_ID=%s\n' \
-            "$CAMERA_ARTIFACT_ID" >> "$GITHUB_ENV"
-          printf 'CAMERA_PRODUCER_ARTIFACT_DIGEST=%s\n' \
-            "$CAMERA_ARTIFACT_DIGEST" >> "$GITHUB_ENV"
+          {
+            printf 'TB321FU_VERIFIED_CAMERA_DEB_SHA256=%s\n' "$verified_camera_deb_sha256"
+            printf 'CAMERA_PRODUCER_ARTIFACT_ID=%s\n' "$CAMERA_ARTIFACT_ID"
+            printf 'CAMERA_PRODUCER_ARTIFACT_DIGEST=%s\n' "$CAMERA_ARTIFACT_DIGEST"
+          } >> "$GITHUB_ENV"
           if [ "${BUILD_TB321FU_CAMERA_STACK:-}" != 1 ]; then
             echo 'TB321FU_CAMERA_STACK_DEB_DIR=' >> "$GITHUB_ENV"
             exit 0
