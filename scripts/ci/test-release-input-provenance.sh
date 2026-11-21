@@ -31,8 +31,8 @@ approved_sensor_archive=https://github.com/GUF296/tb321fu-sensor-debs/releases/d
 approved_sensor_archive_sha=3829d252d3e15e359cdcbe47fa99e7aa2975b29a98f132c5e04c5dfd936cc5bf
 approved_sensor_producer_commit=7c93f418a2e828fc156e99ac605a9b70bdcbb477
 approved_haptics_archive=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20261120.1/tb321fu-haptics-debs_20261120.1_arm64.tar.gz
-approved_haptics_archive_sha=dd6815d0384823dbe58015aa6c77d71b29065af3b9a49682ed5904ff76db41f9
-approved_haptics_producer_commit=d293ea86308e2427225385373466e2f9f1157309
+approved_haptics_archive_sha=86f9529ca06b7cee6f803c1eded3d8f2f64f749f5db825d3ab5b563a8f219210
+approved_haptics_producer_commit=79ac73d521064fd5192d68e5b0cd778ce385cbe1
 approved_camera_version=$(python3 -I -B "$SCRIPT_DIR/camera-package-policy.py" version)
 wrong_producer_tree_sha=$(printf '3%.0s' {1..64})
 
