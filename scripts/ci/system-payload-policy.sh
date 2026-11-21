@@ -636,10 +636,15 @@ ci_prune_empty_tb321fu_camera_directories() {
 }
 
 ci_migrate_tb321fu_camera_payload() {
-  local daily_root=$1 camera_root=$2 path relative daily_path camera_path migrated=0
+  local daily_root=$1 camera_root=$2 historical=${3:-0} path relative daily_path camera_path
+  local -a removal=()
 
   [ -d "$daily_root" ] || ci_die "daily package tree not found: $daily_root"
   ci_assert_tb321fu_camera_stack_tree "$camera_root"
+  if [ "$historical" = 1 ]; then
+    python3 -B "$SCRIPT_DIR/check-june-camera-transition.py" "$daily_root" "$camera_root" ||
+      ci_die "unrecognized June camera payload transition"
+  fi
 
   while IFS= read -r -d '' path; do
     relative=${path#"$daily_root"/}
@@ -653,19 +658,21 @@ ci_migrate_tb321fu_camera_payload() {
       [ -L "$camera_path" ] && [ "$(readlink -- "$daily_path")" = "$(readlink -- "$camera_path")" ] ||
         ci_die "camera symlink differs between daily and canonical packages: /$relative"
     elif [ -f "$daily_path" ]; then
-      [ -f "$camera_path" ] && cmp -s "$daily_path" "$camera_path" ||
+      [ -f "$camera_path" ] && [ ! -L "$camera_path" ] &&
+        { [ "$historical" = 1 ] || cmp -s "$daily_path" "$camera_path"; } ||
         ci_die "camera payload differs between daily and canonical packages: /$relative"
     else
       ci_die "unsupported camera payload member in daily package: /$relative"
     fi
 
-    rm -f -- "$daily_path"
-    migrated=$((migrated + 1))
-  done < <(find "$daily_root" -xdev -mindepth 1 \( -type f -o -type l \) -print0 | sort -z)
+    removal+=("$daily_path")
+  done < <(find "$daily_root" -xdev -mindepth 1 ! -type d -print0 | sort -z)
+
+  for path in "${removal[@]}"; do rm -f -- "$path"; done
 
   ci_prune_empty_tb321fu_camera_directories "$daily_root"
   ci_assert_no_tb321fu_camera_paths_in_tree "$daily_root"
-  ci_log "migrated $migrated camera payload members from y700-daily-rootfs-overlay"
+  ci_log "migrated ${#removal[@]} camera payload members from y700-daily-rootfs-overlay"
 }
 
 ci_mark_tb321fu_camera_payload_migrated() {
@@ -817,6 +824,7 @@ ci_remove_tb321fu_legacy_sensor_haptics() {
 
 ci_prepare_y700_daily_payload_deb() {
   local payload_dir=$1 scratch=$2 deb package daily_deb= haptics_deb= camera_deb=
+  local expected_camera_sha=${3:-} historical=0
   local daily_stage="$scratch/y700-daily-rootfs-overlay" haptics_stage="$scratch/tb321fu-haptics"
   local camera_stage="$scratch/tb321fu-camera-stack"
   local rebuilt="$scratch/y700-daily-rootfs-overlay.rebuilt.deb"
@@ -849,6 +857,17 @@ ci_prepare_y700_daily_payload_deb() {
     esac
   done < <(find "$payload_dir" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
 
+  if [ -n "$expected_camera_sha" ]; then
+    [[ "$expected_camera_sha" =~ ^[0-9a-f]{64}$ ]] && [ -n "$camera_deb" ] &&
+      [ "$(sha256sum -- "$camera_deb" | cut -d' ' -f1)" = "$expected_camera_sha" ] ||
+      ci_die "camera DEB does not match the verified producer handoff"
+    # Only the exact raw June package may relinquish non-identical camera
+    # files. In all other cases the byte-for-byte migration still applies.
+    if [ -n "$daily_deb" ] &&
+       [ "$(sha256sum -- "$daily_deb" | cut -d' ' -f1)" = 9b45ab04d455cfcc24ed40779e9522930543330151c254e87a2aee7f381db5bc ]; then
+      historical=1
+    fi
+  fi
   if [ -n "$camera_deb" ]; then
     ci_assert_tb321fu_camera_stack_deb "$camera_deb" "$camera_stage"
   fi
@@ -892,7 +911,7 @@ ci_prepare_y700_daily_payload_deb() {
 
   ci_migrate_tb321fu_audio_route_policy "$daily_stage"
   if [ -n "$camera_deb" ]; then
-    ci_migrate_tb321fu_camera_payload "$daily_stage" "$camera_stage"
+    ci_migrate_tb321fu_camera_payload "$daily_stage" "$camera_stage" "$historical"
     ci_mark_tb321fu_camera_payload_migrated "$daily_stage"
   fi
 

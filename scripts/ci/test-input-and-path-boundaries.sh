@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Report silent assertion failures without echoing the command, environment
+# or fixture data; the hosted/local aggregate can then identify the boundary.
+trap 'case $- in *e*) printf "input boundary fixture failed: line=%d status=%d\n" "$LINENO" "$?" >&2 ;; esac' ERR
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/common.sh"
@@ -292,7 +295,7 @@ for invalid_download_setting in \
   fi
 done
 
-deadline_started=$SECONDS
+deadline_started=$(ci_monotonic_millis)
 if (
   CI_DOWNLOAD_DEADLINE_SECONDS=10 \
     CI_DOWNLOAD_MAX_ATTEMPTS=24 \
@@ -307,10 +310,14 @@ if (
   echo 'overall HTTPS download deadline was not enforced' >&2
   exit 1
 fi
-deadline_elapsed=$((SECONDS - deadline_started))
+deadline_elapsed=$(( $(ci_monotonic_millis) - deadline_started ))
 deadline_attempts=$(cat "$download_fixture/deadline.count")
-[ "$deadline_elapsed" -ge 10 ] && [ "$deadline_elapsed" -lt 18 ]
-[ "$deadline_attempts" -ge 3 ] && [ "$deadline_attempts" -le 4 ]
+# The old pair of AND lists silently accepted an elapsed time or an attempt
+# count below its lower bound under Bash errexit. Keep both original bounds.
+if ! (( deadline_elapsed >= 10000 && deadline_elapsed < 18000 && deadline_attempts >= 3 && deadline_attempts <= 4 )); then
+  printf 'overall deadline fixture: elapsed_ms=%s attempts=%s (expected 10-18s, 3-4 attempts)\n' "$deadline_elapsed" "$deadline_attempts" >&2
+  exit 1
+fi
 [ ! -e "$download_fixture/deadline" ]
 if compgen -G "$download_fixture/deadline.part.*" >/dev/null; then
   echo 'deadline-expired HTTPS download left a partial file' >&2

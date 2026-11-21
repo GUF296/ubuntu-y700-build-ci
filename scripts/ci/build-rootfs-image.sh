@@ -1434,7 +1434,7 @@ prepare_tb321fu_compat_firmware_deb "$rootfs_dir/var/tmp/ci-debs"
 # DEBs. Check package identities before using them as scratch directory names.
 ci_assert_unique_deb_packages "$rootfs_dir/var/tmp/ci-debs"
 ci_prepare_y700_daily_payload_deb \
-  "$rootfs_dir/var/tmp/ci-debs" "$work_dir/device-deb-policy"
+  "$rootfs_dir/var/tmp/ci-debs" "$work_dir/device-deb-policy" "${CAMERA_STACK_DEB_EXPECTED_SHA256:-}"
 ci_assert_unique_deb_packages "$rootfs_dir/var/tmp/ci-debs"
 
 if ci_bool "$INSTALL_FIREFOX"; then
@@ -1631,6 +1631,19 @@ LC_ALL=C chroot "$rootfs_dir" dpkg-query -W \
   LC_ALL=C awk -F '\t' '$1 == "ii " { print $2 "\t" $3 "\t" $4 }' |
   LC_ALL=C sort > "$package_inventory"
 [ -s "$package_inventory" ] || ci_die "installed-package inventory is empty"
+# A successful device-DEB transaction can remove previously installed apps.
+# Test the selected camera app after that transaction and autoremove. Inspect
+# its launch paths within the target; do not start a GUI or open any camera.
+if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
+  LC_ALL=C awk -F '\t' -v arch="$ARCH" '
+    ($1 == "gnome-snapshot" || $1 == "gnome-snapshot:" arch) && $2 != "" && $3 == arch { ++n }
+    END { exit n != 1 }
+  ' "$package_inventory" || ci_die "selected GNOME Snapshot package was removed or is not for the target"
+  chroot "$rootfs_dir" /bin/sh -ec '
+    test -f /usr/bin/snapshot && test -x /usr/bin/snapshot &&
+      test -f /usr/share/applications/org.gnome.Snapshot.desktop && test -s /usr/share/applications/org.gnome.Snapshot.desktop
+  ' || ci_die "selected GNOME Snapshot launcher or desktop entry is missing"
+fi
 
 ci_log "writing manifest"
 (cd "$rootfs_dir" && find . -xdev -printf '%y\t%u\t%g\t%m\t%s\t%p\n' | sort) > "$manifest"

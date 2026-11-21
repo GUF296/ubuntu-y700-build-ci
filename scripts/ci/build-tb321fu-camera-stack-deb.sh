@@ -443,7 +443,8 @@ write_control() {
   mkdir -p "$pkgdir/DEBIAN"
   # The daily overlay keeps unrelated device payload. Its rewritten package
   # explicitly provides the migration capability before this package can be
-  # unpacked, while distro-owned camera plugins are replaced as a unit.
+  # unpacked. The two distro plugins are replaced and provided as a unit:
+  # Conflicts/Replaces alone would cause APT to remove dependent camera apps.
   cat > "$pkgdir/DEBIAN/control" <<EOF_CONTROL
 Package: tb321fu-camera-stack
 Version: $CAMERA_STACK_DEB_VERSION
@@ -456,7 +457,7 @@ Recommends: gnome-snapshot
 Pre-Depends: tb321fu-camera-payload-migrated (>= $TB321FU_CAMERA_PAYLOAD_MIGRATION_ABI)
 Replaces: y700-daily-rootfs-overlay, libspa-0.2-libcamera, gstreamer1.0-libcamera
 Conflicts: libspa-0.2-libcamera, gstreamer1.0-libcamera
-Provides: y700-camera-stack
+Provides: y700-camera-stack, gstreamer1.0-libcamera, libspa-0.2-libcamera
 Description: Lenovo TB321FU camera userspace stack
  Source-built libcamera, IPA, GStreamer and PipeWire integration candidate.
  Hardware validation against the historically tested baseline remains required.

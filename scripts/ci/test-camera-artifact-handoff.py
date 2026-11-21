@@ -120,6 +120,9 @@ def main() -> int:
         write_enabled_fixture(good)
         expect_success("create", good)
         expect_success("verify", good)
+        emitted = subprocess.check_output(command("verify", good) + ["--print-deb-sha256"], text=True)
+        if emitted != digest((good / DEB_NAME).read_bytes()) + "\n":
+            raise RuntimeError("handoff did not emit the verified DEB digest")
 
         extra = clone(good, root / "extra")
         (extra / "unexpected.bin").write_bytes(b"extra\n")
@@ -162,6 +165,8 @@ def main() -> int:
         disabled.mkdir(mode=0o755)
         expect_success("create", disabled, enabled="0")
         expect_success("verify", disabled, enabled="0")
+        if subprocess.check_output(command("verify", disabled, enabled="0") + ["--print-deb-sha256"]) != b"\n":
+            raise RuntimeError("disabled handoff emitted a DEB digest")
         (disabled / "unexpected.deb").write_bytes(b"unexpected\n")
         (disabled / "unexpected.deb").chmod(0o644)
         expect_failure("disabled handoff with payload", disabled, enabled="0")

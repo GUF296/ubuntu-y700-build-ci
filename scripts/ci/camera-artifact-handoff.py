@@ -457,7 +457,7 @@ def create(directory: pathlib.Path, context: Context) -> None:
         os.close(root_fd)
 
 
-def verify(directory: pathlib.Path, context: Context) -> None:
+def verify(directory: pathlib.Path, context: Context) -> str:
     _, root_fd, root_info = open_root(directory)
     try:
         before = directory_binding(root_info)
@@ -476,6 +476,9 @@ def verify(directory: pathlib.Path, context: Context) -> None:
             fail("camera handoff directory is not a closed member set")
         if directory_binding(os.fstat(root_fd)) != before:
             fail("camera handoff directory changed during verification")
+        if context.enabled == "1":
+            return next(r[3] for r in expected_rows if r[:2] == ("file", context.deb_name))
+        return ""
     finally:
         os.close(root_fd)
 
@@ -494,6 +497,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--source-archive", default="")
     parser.add_argument("--source-archive-sha256", default="")
     parser.add_argument("--source-directory", default="")
+    parser.add_argument("--print-deb-sha256", action="store_true",
+                        help="verify only: emit the verified DEB digest (empty if disabled)")
     return parser.parse_args()
 
 
@@ -514,11 +519,13 @@ def main() -> int:
     try:
         validate_context(context)
         if options.mode == "create":
+            if options.print_deb_sha256:
+                fail("--print-deb-sha256 requires verify mode")
             create(options.directory, context)
             print("CAMERA_ARTIFACT_HANDOFF_CREATE=PASS")
         else:
-            verify(options.directory, context)
-            print("CAMERA_ARTIFACT_HANDOFF_VERIFY=PASS")
+            digest = verify(options.directory, context)
+            print(digest if options.print_deb_sha256 else "CAMERA_ARTIFACT_HANDOFF_VERIFY=PASS")
     except (HandoffError, OSError) as exc:
         print(f"camera artifact handoff failed: {exc}", file=sys.stderr)
         return 1

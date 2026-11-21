@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/common.sh"
 . "$SCRIPT_DIR/system-payload-policy.sh"
+python3 -B "$SCRIPT_DIR/test-june-camera-transition.py"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/tb321fu-payload-policy-test.XXXXXX")
 cleanup() {

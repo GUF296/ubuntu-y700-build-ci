@@ -53,6 +53,30 @@ def verify_depends(value, required):
     if missing:
         raise RuntimeError('undeclared required camera packages: ' + ', '.join(sorted(missing)))
 
+PLUGIN_ROLES = {'gstreamer1.0-libcamera', 'libspa-0.2-libcamera'}
+GST_SYSTEM = 'usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgstlibcamera.so'
+GST_TARGET = LIB + 'gstreamer-1.0/libgstlibcamera.so'
+SPA_SYSTEM = 'usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so'
+
+
+def verify_plugin_roles(root, fields):
+    # Unversioned Provides matches the plugin contract, not the distro libcamera
+    # release number. Do not advertise an unverified versioned virtual package.
+    for field, required in (('Provides', PLUGIN_ROLES | {'y700-camera-stack'}),
+                            ('Replaces', PLUGIN_ROLES | {'y700-daily-rootfs-overlay'}),
+                            ('Conflicts', PLUGIN_ROLES)):
+        entries = [p.strip() for p in fields[field].split(',')]
+        if len(entries) != len(set(entries)) or not required <= set(entries):
+            raise RuntimeError('camera package has incomplete or duplicate plugin ' + field)
+    link = root / GST_SYSTEM
+    if not link.is_symlink() or str(link.readlink()) != '/' + GST_TARGET:
+        raise RuntimeError('camera package does not supply the system GStreamer plugin link')
+    for name in (GST_TARGET, SPA_SYSTEM):
+        path = root / name
+        if not path.is_file() or path.is_symlink():
+            raise RuntimeError('camera package does not supply the advertised plugin: ' + name)
+
+
 def verify_deb(deb):
     if not deb.is_file() or deb.is_symlink() or deb.stat().st_size > 256 << 20:
         raise RuntimeError('invalid camera DEB input')
@@ -62,6 +86,8 @@ def verify_deb(deb):
         required = required_packages(root)
         depends = subprocess.check_output(['/usr/bin/dpkg-deb', '-f', str(deb), 'Depends'], text=True, timeout=30)
         verify_depends(depends, required)
+        verify_plugin_roles(root, {field: subprocess.check_output(['/usr/bin/dpkg-deb', '-f', str(deb), field],
+                text=True, timeout=30) for field in ('Provides', 'Replaces', 'Conflicts')})
     print('CAMERA_RUNTIME_DEPENDENCIES=PASS packages=' + str(len(required)))
 
 class DependencyTests(unittest.TestCase):
@@ -73,6 +99,23 @@ class DependencyTests(unittest.TestCase):
         self.assertEqual(len(required), 15)
         verify_depends(values[0], required)
         self.assertNotIn('Historically device-tested libcamera payload', source)
+
+    def test_plugin_roles_present_without_reinstalling_conflicting_binaries(self):
+        source = (HERE / 'build-tb321fu-camera-stack-deb.sh').read_text()
+        fields = {k: re.findall('^' + k + ': (.+)$', source, flags=re.M) for k in
+                  ('Provides', 'Replaces', 'Conflicts')}
+        self.assertTrue(all(len(v) == 1 for v in fields.values()))
+        fields = {k:v[0] for k,v in fields.items()}
+        root = REPO / 'source/tb321fu-camera-rootfs-overlay/rootfs-overlay'
+        verify_plugin_roles(root, fields)
+        for key in fields:
+            for role in PLUGIN_ROLES:
+                incomplete = ', '.join(v.strip() for v in fields[key].split(',') if v.strip() != role)
+                with self.subTest(key=key, role=role), self.assertRaisesRegex(RuntimeError, key):
+                    verify_plugin_roles(root, {**fields, key: incomplete})
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, 'GStreamer plugin link'):
+                verify_plugin_roles(pathlib.Path(directory), fields)
 
     def test_missing_ambiguous_and_duplicate_dependencies_fail(self):
         required = {'libdw1t64', 'libgnutls30t64'}
