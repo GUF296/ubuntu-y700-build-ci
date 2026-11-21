@@ -229,6 +229,7 @@ jobs:
           python3 -IB scripts/ci/test-ssh-host-identity.py
           python3 -IB scripts/ci/test-ssh-image-evidence.py
           python3 -IB scripts/ci/test-ssh-policy-probe.py
+          sudo -n python3 -IB scripts/ci/test-stock-tls-identity.py
           bash scripts/ci/test-audio-route-lifecycle.sh
           bash scripts/ci/test-qcom-sns-lifecycle.sh
           bash scripts/ci/test-gpu-deb-lifecycle.sh

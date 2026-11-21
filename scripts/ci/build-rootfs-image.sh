@@ -76,6 +76,7 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 fi
 
 ci_require_cmd debootstrap
+ci_require_cmd dpkg-divert
 ci_require_cmd mkfs.ext4
 ci_require_cmd mount
 ci_require_cmd umount
@@ -875,6 +876,8 @@ mkfs.ext4 "${mkfs_args[@]}" "$rootfs_img"
 mkdir -p "$rootfs_dir"
 mount -o loop "$rootfs_img" "$rootfs_dir"
 mounted=1
+# Keep just the two stock TLS outputs on RAM across all package work.
+stock_tls_guard=$(python3 -IB "$SCRIPT_DIR/stock-tls-identity.py" prepare "$rootfs_dir")
 # Reserve private-key pathnames before any maintainer script can write key bytes
 # to the ext4 image, including its journal and otherwise-unallocated extents.
 ssh_placeholders=$(python3 -IB "$SCRIPT_DIR/ssh-host-identity.py" prepare "$rootfs_dir")
@@ -890,6 +893,7 @@ if [ -n "$DEFAULT_USER_AUTHORIZED_KEYS" ]; then
   debootstrap_args+=(--include=python3)
 fi
 debootstrap "${debootstrap_args[@]}" "$DISTRO" "$rootfs_dir" "$MIRROR"
+python3 -IB "$SCRIPT_DIR/stock-tls-identity.py" intercept "$rootfs_dir" "$stock_tls_guard"
 
 # Record the seed rootfs before replacing its APT sources or installing the
 # transaction recorder. This captures bootstrap provenance without claiming a
@@ -1395,8 +1399,6 @@ if [ "$CLEAN_APT_CACHE" = 1 ]; then
 fi
 rm -f /etc/apt/apt.conf.d/99ci-proxy
 
-rm -f /etc/machine-id
-touch /etc/machine-id
 rm -f /root/.bash_history "/home/${DEFAULT_USER_NAME}/.bash_history"
 rm -rf /tmp/* /root/ci-provision.sh
 PROVISION
@@ -1520,9 +1522,11 @@ if [ -n "${OVERLAY_ARCHIVE:-}" ]; then
   ci_download "$OVERLAY_ARCHIVE" "$tmp_overlay" "$OVERLAY_ARCHIVE_SHA256"
   ci_extract_archive "$tmp_overlay" "$overlay_stage"
   ci_validate_rootfs_overlay_tree "$overlay_stage"
+  python3 -IB "$SCRIPT_DIR/stock-tls-identity.py" overlay "$overlay_stage"
 fi
 if [ -n "${OVERLAY_DIR:-}" ]; then
   ci_validate_rootfs_overlay_tree "$OVERLAY_DIR"
+  python3 -IB "$SCRIPT_DIR/stock-tls-identity.py" overlay "$OVERLAY_DIR"
 fi
 
 unmount_chroot_runtime
@@ -1640,6 +1644,8 @@ rm -f \
   "$rootfs_dir/SHA256SUMS.txt" \
   "$rootfs_dir/Y700-ROOTFS-OVERLAY-MANIFEST.tsv"
 
+python3 -IB "$SCRIPT_DIR/stock-tls-identity.py" seal "$rootfs_dir" "$stock_tls_guard"
+
 ci_log "writing installed-package inventory"
 LC_ALL=C chroot "$rootfs_dir" dpkg-query -W \
   -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\t${Architecture}\n' |
@@ -1660,6 +1666,9 @@ if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
   ' || ci_die "selected GNOME Snapshot launcher or desktop entry is missing"
 fi
 
+# Seal both machine identity paths only after all target package/overlay work.
+python3 -IB "$SCRIPT_DIR/seal-machine-id.py" "$rootfs_dir"
+
 ci_log "writing manifest"
 (cd "$rootfs_dir" && find . -xdev -printf '%y\t%u\t%g\t%m\t%s\t%p\n' | sort) > "$manifest"
 
@@ -1672,6 +1681,7 @@ raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
 (cd "$OUTPUT_DIR" && sha256sum "$(basename "$rootfs_img")" > "$(basename "$raw_sha_file")")
 
 ssh_evidence="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.ssh-identity.json"
+python3 -IB "$SCRIPT_DIR/verify-final-identity-metadata.py" "$rootfs_img" "$package_inventory"
 python3 -IB "$SCRIPT_DIR/ssh-image-evidence.py" capture "$rootfs_img" "$manifest" "$build_info" "$raw_sha_file" > "$ssh_evidence"
 
 checksum_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.SHA256SUMS"
