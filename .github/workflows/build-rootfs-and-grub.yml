@@ -247,7 +247,7 @@ jobs:
           sudo apt-get install -y \
             debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
             gdisk qemu-utils sudo ca-certificates gnupg binutils patch kmod bc \
-            device-tree-compiler flex bison m4 build-essential \
+            device-tree-compiler flex bison m4 build-essential python3-apt \
             meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
             libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64
 
@@ -259,7 +259,8 @@ jobs:
       - name: Validate kernel bootstrap policy
         run: |
           set -euo pipefail
-          bash scripts/ci/test-kernel-bootstrap-policy.sh
+          /usr/bin/python3 -IB scripts/ci/test-hosted-bison-fixture.py
+          /usr/bin/python3 -IB scripts/ci/with-hosted-bison-fixture.py -- bash scripts/ci/test-kernel-bootstrap-policy.sh
 
       - name: Apply workflow configuration
         env:

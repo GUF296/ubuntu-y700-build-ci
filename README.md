@@ -41,7 +41,17 @@ This branch pins the November kernel bootstrap, matching haptics package and Aug
 
 ## Rootfs Config
 
-Optional override example:
+For the November Kubuntu test image, use `ubuntu_mirror=https://ports.ubuntu.com/ubuntu-ports`, `rootfs_image_size=20G`, `rootfs_label=Ubuntu`, and `hostname_name=GUF296`. Leave `source_config` and `boot_config` empty to keep the reviewed input pins. The only rootfs overrides for that image are:
+
+```text
+DEFAULT_USER_NAME=GUF296
+SDDM_AUTOLOGIN=1
+SDDM_AUTOLOGIN_SESSION=plasma
+ROOT_PASSWORD_MODE=locked
+USER_SUDO_MODE=password
+```
+
+The following Noble/14G block illustrates other options; it is **not** the November profile. Do not paste its empty package URLs over the release defaults.
 
 ```text
 DISTRO=noble
@@ -230,6 +240,6 @@ HAPTICS_MODULE_SHA256=<64-lowercase-hex-sha256>
 HAPTICS_HELPER_BINARY_SHA256=<64-lowercase-hex-sha256>
 ```
 
-Leave `boot_config` empty. This preserves the tested template, EFI payload, `PARTLABEL=userdata`, and `drm_client_lib.active=none` handoff. Tagged releases accept only the producer commit/tree/tree digest committed in the release profile; changing those values requires a reviewed source-profile update rather than a dispatch-only trust change. Before any rootfs/GRUB work, the verifier recomputes the bundle ID, requires identical kernel/device metadata, verifies the complete SDK archive against the bound `KERNEL-SDK-MANIFEST.tsv`, verifies Image/DTB/config/modules, checks every kernel and haptics module vermagic, and requires the exact clean haptics producer commit. It rejects any missing, extra, duplicate, or reordered haptics v4 source-lock field; verifies the source lock's toolchain-manifest digest against the selected kernel bundle; verifies the fixed isolated build-environment policy; recomputes the digest over all 69 exact ordered build-tool records; recomputes all five fixed-path source snapshot hashes; and checks the exact firmware, module, and helper paths, modes, and final binary hashes inside the DEB. The module/helper binary digests are trusted dispatcher inputs copied independently from an authenticated producer run (or compared across two producer builds); they prevent archive-internal lock rewriting but are not a claim of bit-identical source-derived reproduction. The sensor verifier separately enforces the exact package set, control relationships, audited maintainer-script and privileged runtime-policy digests, AArch64 ELF identity, and all 541 device-data checksums. Its external archive SHA is likewise a dispatcher-approved compiled-asset trust root; the matching sensor producer commit is a recoverability/provenance label and does not by itself prove a bit-identical source rebuild. `VERIFIED-INPUTS.tsv` records one authoritative value for each URL/SHA/commit input even though the raw advanced config notes retain historical defaults followed by overrides.
+Leave `boot_config` empty. This preserves the tested template, EFI payload, `PARTLABEL=userdata`, and `drm_client_lib.active=none` handoff. Tagged releases accept only the producer commit/tree/tree digest committed in the release profile; changing those values requires a reviewed source-profile update rather than a dispatch-only trust change. Before any rootfs/GRUB work, the verifier recomputes the bundle ID, requires identical kernel/device metadata, verifies the complete SDK archive against the bound `KERNEL-SDK-MANIFEST.tsv`, verifies Image/DTB/config/modules, checks every kernel and haptics module vermagic, and requires the exact clean haptics producer commit. It rejects any missing, extra, duplicate, or reordered haptics v4 source-lock field; verifies the source lock's toolchain-manifest digest against the selected kernel bundle; verifies the fixed isolated build-environment policy; recomputes the digest over all 69 exact ordered build-tool records; recomputes all five fixed-path source snapshot hashes; and checks the exact firmware, module, and helper paths, modes, and final binary hashes inside the DEB. The module/helper binary digests are trusted dispatcher inputs copied independently from an authenticated producer run (or compared across two producer builds); they prevent archive-internal lock rewriting but are not a claim of bit-identical source-derived reproduction. The sensor verifier separately enforces the exact package set, control relationships, audited maintainer-script and privileged runtime-policy digests, AArch64 ELF identity, and all 541 device-data checksums. Its external archive SHA is likewise a dispatcher-approved compiled-asset trust root; the matching sensor producer commit is a recoverability/provenance label and does not by itself prove a bit-identical source rebuild. `VERIFIED-INPUTS.tsv` records the exact inputs consumed by the verifier. `BUILD-PARAMETERS.md` records the effective, sanitized configuration once per key. Defaults overridden for this run are not additional rows in the published notes.
 
 Passing these gates proves build and package consistency, not tablet behavior. Camera, audio, sensor SSR/resume, haptics cancellation/suspend, display, touch and boot still require the prerelease hardware checklist on TB321FU.
