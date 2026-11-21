@@ -74,9 +74,12 @@ def prepare(root):
             path.mkdir(mode=0o700 if rel == KEY.parent else 0o755)
             created.append(str(rel))
         check(realdir(path), "stock TLS guard parent must be a real directory")
+    # update-ca-certificates removes dangling public .pem links on a fresh
+    # install. Keep only its public target valid, never the private key: the
+    # stock generator skips --no-overwrite only when *both* files exist.
+    with (ram / CERT.name).open("xb") as public:
+        os.fchmod(public.fileno(), 0o644)
     for rel in FILES:
-        # A dangling target preserves upstream's "file exists" semantics,
-        # including a first-ever --no-overwrite call. Its umask is 0077.
         (root / rel).symlink_to("/" + str(RAM / rel.name))
     return {"dirs": created, "ram_dev": ram.stat().st_dev}
 

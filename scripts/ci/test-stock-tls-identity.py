@@ -28,6 +28,34 @@ class StockTLS(unittest.TestCase):
         if ram.is_mount():
             subprocess.run(["umount", "--", str(ram)], check=True)
 
+    def test_ca_refresh_keeps_public_link_but_first_generation_is_due(self):
+        root = self.root
+        receipt = P["prepare"](root)
+        ram = root / P["RAM"]
+        pem, key = (ram / P[k].name for k in ("CERT", "KEY"))
+        self.assertEqual((pem.stat().st_mode & 0o777, pem.stat().st_size), (0o644, 0))
+        self.assertEqual(pem.stat().st_dev, ram.stat().st_dev)
+        self.assertNotEqual(ram.stat().st_dev, root.stat().st_dev)
+        self.assertFalse(os.path.lexists(key))
+        # Resolve absolute output links inside the build root, as package
+        # scripts do. Reproduce only the updater's dangling-link decision.
+        child = os.fork()
+        if child == 0:
+            try:
+                os.chroot(root)
+                os.chdir("/")
+                cert, private = (Path("/") / P[k] for k in ("CERT", "KEY"))
+                if cert.is_symlink() and not cert.exists():
+                    cert.unlink()
+                ok = cert.is_symlink() and cert.is_file() and private.is_symlink() and not private.exists()
+                os._exit(0 if ok else 1)
+            except BaseException:
+                os._exit(2)
+        self.assertEqual(os.waitstatus_to_exitcode(os.waitpid(child, 0)[1]), 0)
+        P["intercept"](root, receipt)
+        P["seal"](root, receipt)
+        self.assertFalse(any(os.path.lexists(root / rel) for rel in (*P["FILES"], P["RAM"])))
+
     def test_minimal_without_ssl_cert(self):
         receipt = P["prepare"](self.root)
         P["intercept"](self.root, receipt)
