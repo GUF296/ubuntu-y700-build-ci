@@ -63,7 +63,10 @@ fi
 mkdir -p "$scratch/cleanup/.rootfs-build.target/child"
 cleanup_target=$(realpath -e "$scratch/cleanup/.rootfs-build.target")
 FAKE_MOUNTS=$cleanup_target
-findmnt() { printf '%s\n' "$FAKE_MOUNTS"; }
+findmnt() {
+  python3 -IB -c 'import json,sys; print(json.dumps({"filesystems":[{"target":p} for p in ("/",*sys.argv[1:]) if p]}))' \
+    "$FAKE_MOUNTS"
+}
 if ci_safe_rmtree "$cleanup_target" "$scratch/cleanup" .rootfs-build. >/dev/null 2>&1; then
   echo 'deleted a target that is itself a mount root' >&2
   exit 1
@@ -74,6 +77,10 @@ if ci_safe_rmtree "$cleanup_target" "$scratch/cleanup" .rootfs-build. >/dev/null
   echo 'deleted a target containing a descendant mount' >&2
   exit 1
 fi
+mkdir "$cleanup_target/space sample"
+FAKE_MOUNTS="$cleanup_target/space sample"
+[[ $(cd "$scratch/cleanup" && ci_mount_targets_below .rootfs-build.target) == "$FAKE_MOUNTS" ]] ||
+  { echo 'relative root or literal space in mount target was lost' >&2; exit 1; }
 FAKE_MOUNTS=
 ci_safe_rmtree "$cleanup_target" "$scratch/cleanup" .rootfs-build.
 test ! -e "$cleanup_target"

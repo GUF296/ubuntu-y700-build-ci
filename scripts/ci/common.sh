@@ -1134,9 +1134,34 @@ ci_e2fsck_repair() {
 ci_mount_targets_below() {
   local root=$1
   ci_require_cmd findmnt
-  findmnt -rn --raw -o TARGET | awk -v root="$root" \
-    '$0 == root || index($0, root "/") == 1 { print length($0) "\t" $0 }' |
-    sort -rn | cut -f2-
+  ci_require_cmd python3
+  # --raw hex-escapes ordinary spaces. Match the actual filesystem path and
+  # pass that same path, rather than an escaped display string, to umount.
+  findmnt --list --json --output TARGET | python3 -IB -c '
+import json, os, sys
+root = os.path.abspath(sys.argv[1])
+if root == "/" or os.path.realpath(sys.argv[1], strict=True) != root or not os.path.isdir(root):
+    sys.exit("unresolved or ambiguous mount inspection root")
+records = json.load(sys.stdin)["filesystems"]
+if not isinstance(records, list) or not records:
+    sys.exit("missing mount table")
+targets = []
+for row in records:
+    if not isinstance(row, dict) or set(row) != {"target"}:
+        sys.exit("invalid mount table record")
+    target = row["target"]
+    if not isinstance(target, str) or not target.startswith("/") or "\0" in target:
+        sys.exit("invalid mount target")
+    if target == root or target.startswith(root + "/"):
+        # ci_unmount_tree consumes one physical target per line.
+        if "\n" in target or "\r" in target:
+            sys.exit("unrepresentable mount target")
+        targets.append(os.fsencode(target))
+if not any(row["target"] == "/" for row in records):
+    sys.exit("incomplete mount table")
+for target in sorted(targets, key=len, reverse=True):
+    sys.stdout.buffer.write(target + b"\n")
+' "$root"
 }
 
 ci_unmount_tree() {

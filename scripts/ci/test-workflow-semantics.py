@@ -949,6 +949,20 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
         fail("no step-scoped secret expressions were found")
 
 
+SUDO_HASH_GUARD = 'ci_require_sudo_password_hash "$USER_SUDO_MODE" "$DEFAULT_USER_PASSWORD_HASH"'
+FIRST_IMAGE_WORK = 'work_dir=$(make_rootfs_work_dir "$OUTPUT_DIR")'
+
+
+def validate_password_before_image_work(text: str, context: str) -> None:
+    # Match the two top-level calls, not comments or the mkdir inside the helper.
+    lines = text.splitlines()
+    for call in (SUDO_HASH_GUARD, FIRST_IMAGE_WORK):
+        if lines.count(call) != 1:
+            fail(f"{context}: expected exactly one top-level call: {call}")
+    if lines.index(SUDO_HASH_GUARD) > lines.index(FIRST_IMAGE_WORK):
+        fail(f"{context}: password sudo hash validation runs after image work")
+
+
 def validate_rootfs_contract(rootfs: pathlib.Path) -> None:
     text = rootfs.read_text(encoding="utf-8")
     loader_block = chr(10).join((
@@ -1026,14 +1040,50 @@ def validate_rootfs_contract(rootfs: pathlib.Path) -> None:
     if text.find(metadata_probe) < 0 or text.find(metadata_probe) > text.find(temp_probe):
         fail(f"{rootfs}: locale metadata is not captured before temporary replacement")
 
-    password_sudo_guard = (
-        'ci_require_sudo_password_hash "$USER_SUDO_MODE" '
-        '"$DEFAULT_USER_PASSWORD_HASH"'
-    )
-    if password_sudo_guard not in text:
-        fail(f"{rootfs}: password sudo hash validation is missing")
-    if text.index(password_sudo_guard) > text.index('mkdir -p "$OUTPUT_DIR"'):
-        fail(f"{rootfs}: password sudo hash validation runs after image work")
+    validate_password_before_image_work(text, str(rootfs))
+
+
+def run_provision_env_fixture(rootfs: pathlib.Path) -> None:
+    """Exercise the actual clean-env handoff and pre-APT validators without a chroot."""
+    text = rootfs.read_text(encoding="utf-8")
+    # Replace only the root switch and script location. Keep env -i, all its
+    # original assignments and quoting, and the target's validation code.
+    def section(source: str, begin: str, end: str, name: str) -> str:
+        if source.count(begin) != 1 or source.count(end) != 1:
+            fail(f"{rootfs}: expected unique start and end markers for {name}")
+        region, found, _ = source.partition(begin)[2].partition(end)
+        if not found or not region.strip():
+            fail(f"{rootfs}: empty or misordered {name}")
+        return region
+
+    launcher = section(text, 'ci_log "provisioning rootfs"\n',
+                       '\n  bash /root/ci-provision.sh\n', "chroot provision launcher")
+    leading = 'chroot "$rootfs_dir" '
+    if not launcher.startswith(leading + "env -i "):
+        fail(f"{rootfs}: expected a clean environment in the provision launcher")
+    launcher = launcher[len(leading):] + '\n  bash -s -- "$1"'
+    body = section(text, "<<'PROVISION'\n", "\nPROVISION\n", "provision script")
+    validations = section(body, "\n. /root/ci-apt-common.sh\n", "\nci_bool_chroot()\n",
+                          "pre-APT provision validators")
+    probe = ('set -euo pipefail\n. "$1"\n' + validations +
+             '\n[[ ! -v OUTSIDE_PROVISION ]]\n' +
+             'printf "%s\\n" "$SDDM_AUTOLOGIN" "$SDDM_AUTOLOGIN_SESSION"\n')
+    env = dict.fromkeys(re.findall(r'="\$([a-zA-Z_][a-zA-Z_0-9]*)"', launcher), "")
+    env.update(PATH="/usr/bin:/bin", OUTSIDE_PROVISION="not forwarded", ROOT_PASSWORD_MODE="locked",
+               USER_SUDO_MODE="password", INSTALL_FCITX5_CHINESE="1", INSTALL_FIREFOX="1",
+               DISABLE_SNAPD="1", CLEAN_APT_CACHE="1", LOCALES="en_US.UTF-8 UTF-8", LANG_NAME="en_US.UTF-8")
+    for enabled, session, error in (("1", "plasma", ""), ("0", "custom.desktop", ""),
+                                    ("invalid", "plasma", "SDDM_AUTOLOGIN must"),
+                                    ("1", "invalid session", "SDDM_AUTOLOGIN_SESSION must")):
+        result = subprocess.run(["/bin/bash", "-eu", "-c", launcher, "fixture",
+                                 str(rootfs.with_name("common.sh").resolve())],
+                                env=dict(env, SDDM_AUTOLOGIN=enabled, SDDM_AUTOLOGIN_SESSION=session),
+                                input=probe, text=True, capture_output=True, timeout=15)
+        if error:
+            if result.returncode == 0 or error not in result.stderr:
+                fail(f"invalid SDDM provision input not rejected at its validator: {result.stderr}")
+        elif result.returncode or result.stdout.splitlines() != [enabled, session]:
+            fail(f"clean chroot did not preserve the selected SDDM settings: {result.stderr}")
 
 
 def run_builtin_config_fixtures(
@@ -1550,6 +1600,23 @@ def run_local_qcomramp_propagation_fixture(
 
 
 def self_test() -> None:
+    before, work = SUDO_HASH_GUARD, FIRST_IMAGE_WORK
+    helper = 'make_rootfs_work_dir() {\n  mkdir -p -- "$output"\n}'
+    validate_password_before_image_work("\n".join((helper, before, work)), "self-test")
+    for case, commands, diagnostic in (
+        ("missing guard", [work], "expected exactly one top-level call"),
+        ("missing work", [before, helper, "# " + work], "expected exactly one top-level call"),
+        ("duplicate guard", [before, before, work], "expected exactly one top-level call"),
+        ("duplicate work", [before, work, work], "expected exactly one top-level call"),
+        ("late guard", ["# " + before, work, before], "runs after image work"),
+    ):
+        try:
+            validate_password_before_image_work("\n".join(commands), case)
+        except SystemExit as exc:
+            if diagnostic not in str(exc):
+                raise
+        else:
+            fail(f"self-test accepted {case}")
     tools = "sudo apt-get install -y python3-yaml g++ git openssl shellcheck openssh-client gnupg rsync e2fsprogs dosfstools mtools"
     if not has_validation_tools(tools) or has_validation_tools(tools.replace(" mtools", " # mtools")):
         fail("self-test failed to distinguish an installed FAT reader from a comment")
@@ -1584,6 +1651,7 @@ def main() -> None:
     data = load_workflow(workflow)
     validate_structure(workflow, data)
     validate_rootfs_contract(rootfs)
+    run_provision_env_fixture(rootfs)
     run_builtin_config_fixtures(workflow, apply_config, data)
     run_hostile_config_fixtures(apply_config)
     run_local_qcomramp_propagation_fixture(workflow, apply_config)

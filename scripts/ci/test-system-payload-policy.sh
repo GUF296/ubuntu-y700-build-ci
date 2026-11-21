@@ -200,7 +200,8 @@ fi
 
 # A nested legacy archive and a separately supplied DEB must never permit
 # dpkg-deb --build to overwrite an input (including a dangling symlink).
-sed -n '/^prepare_tb321fu_compat_firmware_deb() {$/,/^}$/p' \
+sed -n -e '/^make_rootfs_work_dir() {$/,/^}$/p' \
+  -e '/^prepare_tb321fu_compat_firmware_deb() {$/,/^}$/p' \
   "$SCRIPT_DIR/build-rootfs-image.sh" > "$tmp/compat-helper.sh"
 # shellcheck disable=SC1090
 . "$tmp/compat-helper.sh"
@@ -225,6 +226,54 @@ for kind in regular symlink; do
     [ "$(readlink "$target")" = missing ] && [ ! -e "$collision/missing" ]
   fi
 done
+
+# The workflow passes a relative output prefix. Exercise the real conversion,
+# including its cd into the extracted archive, with small offline firmware data.
+# First pin the exact bytes of the former embedded four-line release lock.
+(
+  cd -P -- "$tmp"
+  OUTPUT_DIR=out/ci-rootfs
+  work_dir=$(make_rootfs_work_dir "$OUTPUT_DIR")
+  [[ $work_dir == "$PWD/$OUTPUT_DIR"/.rootfs-build.?????? && -d $work_dir ]]
+  [ "$(stat -c '%a' -- "$work_dir")" = 700 ]
+  real_lock="$SCRIPT_DIR/payloads/tb321fu-compat-firmware.sha256"
+  printf '%s  %s\n' 44f7c81fb165548de0c97195c4ce3d7eebde8db748d4e1611a9b531221b3282e "$real_lock" |
+    sha256sum -c - >/dev/null
+  SCRIPT_DIR="$PWD/fixture-compat-policy"
+  fw="$PWD/fixture-compat-tree"
+  mkdir -p "$SCRIPT_DIR/payloads" "$fw"
+  while read -r _ member; do
+    install -d "$(dirname "$fw/$member")"
+    printf 'offline fixture %s\n' "$member" > "$fw/$member"
+    chmod 0644 "$fw/$member"
+    (cd -- "$fw" && sha256sum "$member")
+  done < "$real_lock" > "$SCRIPT_DIR/payloads/tb321fu-compat-firmware.sha256"
+  export ARCH=arm64 TB321FU_COMPAT_PACKAGE_VERSION=1 TB321FU_COMPAT_ARCHIVE_NAME=fixture.tar.gz
+  export TB321FU_COMPAT_ARCHIVE_SHA256
+  for variant in good wrong-bytes; do
+    owned="$work_dir/$variant/var/tmp/ci-debs"
+    mkdir -p "$owned"
+    if [ "$variant" = wrong-bytes ]; then
+      printf 'changed\n' >> "$fw/usr/lib/firmware/qcom/gen70900_aqe.fw"
+    fi
+    tar -C "$fw" -czf "$owned/$TB321FU_COMPAT_ARCHIVE_NAME" .
+    TB321FU_COMPAT_ARCHIVE_SHA256=$(sha256sum "$owned/$TB321FU_COMPAT_ARCHIVE_NAME" | cut -d' ' -f1)
+    generated="$owned/tb321fu-compat-firmware_1_arm64.deb"
+    if [ "$variant" = good ]; then
+      prepare_tb321fu_compat_firmware_deb "$owned" >/dev/null
+      dpkg-deb -x "$generated" "$PWD/compat-readback"
+      (cd compat-readback && sha256sum -c usr/share/doc/tb321fu-compat-firmware/files.sha256 >/dev/null)
+      cmp "$SCRIPT_DIR/payloads/tb321fu-compat-firmware.sha256" \
+        compat-readback/usr/share/doc/tb321fu-compat-firmware/files.sha256
+    else
+      if (prepare_tb321fu_compat_firmware_deb "$owned") > "$tmp/compat-mode-error" 2>&1; then
+        echo 'incorrect compat firmware member bytes were accepted' >&2; exit 1
+      fi
+      grep -Fq './usr/lib/firmware/qcom/gen70900_aqe.fw: FAILED' "$tmp/compat-mode-error"
+      [ ! -e "$generated" ]
+    fi
+  done
+)
 
 # A symlink whose target happens to be a directory must still be treated as a
 # symlink. Otherwise another package can claim a child path below it and the

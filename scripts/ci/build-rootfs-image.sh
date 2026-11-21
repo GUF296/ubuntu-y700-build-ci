@@ -256,8 +256,16 @@ include_deb_archive() {
   [ "$copied" -gt 0 ] || ci_die "$label deb archive did not contain any .deb files: $src"
 }
 
-mkdir -p "$OUTPUT_DIR"
-work_dir=$(mktemp -d "$OUTPUT_DIR/.rootfs-build.XXXXXX")
+make_rootfs_work_dir() {
+  local output=$1 private
+  mkdir -p -- "$output" || return 1
+  private=$(mktemp -d -- "$output/.rootfs-build.XXXXXX") || return 1
+  # Mount cleanup consumes absolute paths. Keep public artifact names relative
+  # when the caller requested that; only anchor the private staging tree.
+  (cd -- "$private" && pwd -P)
+}
+
+work_dir=$(make_rootfs_work_dir "$OUTPUT_DIR")
 rootfs_dir="$work_dir/rootfs"
 rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
 build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
@@ -460,19 +468,15 @@ prepare_tb321fu_compat_firmware_deb() {
 
   rm -rf -- "$stage" "$package_root"
   ci_extract_archive "$archive" "$stage"
-  cat > "$expected" <<'COMPAT_SHA256'
-25237c161d727b8ea92b4beb837a31651b44ea78bfc34d95672af8f346a45825  ./usr/lib/firmware/qcom/gen70900_aqe.fw
-a739a1ef14e4418c5a1f1e1da444deb71aeeb4a31370ab41a4dddf378ab5683d  ./usr/lib/firmware/qcom/gen70900_sqe.fw
-9685f62c42543befcaee68d25355e16bf55cdb0d573bddcc9f6633f59eec3f72  ./usr/lib/firmware/qcom/gmu_gen70900.bin
-8166b1fde9725547bd07eba4add22f442dc938f17274fbf358dbdcfc88ec5f31  ./usr/lib/firmware/qcom/vpu/vpu33_p4.mbn
-COMPAT_SHA256
+  # Snapshot the repository-pinned lock in the private, absolute work tree.
+  install -m 0644 "$SCRIPT_DIR/payloads/tb321fu-compat-firmware.sha256" "$expected"
 
   leftover=$(find "$stage" -mindepth 1 ! -type d ! -type f -print -quit)
   [ -z "$leftover" ] || ci_die "unsupported special member in TB321FU compat overlay: $leftover"
   actual_files=$(cd "$stage" && find . -type f -print | LC_ALL=C sort)
   expected_files=$(awk '{print $2}' "$expected" | LC_ALL=C sort)
   [ "$actual_files" = "$expected_files" ] || ci_die "TB321FU compat overlay member list mismatch"
-  (cd "$stage" && sha256sum -c "$expected") || ci_die "TB321FU compat firmware content mismatch"
+  (cd -- "$stage" && sha256sum -c "$expected") || ci_die "TB321FU compat firmware content mismatch"
   while IFS= read -r member; do
     mode=$(stat -c '%a' "$stage/${member#./}")
     [ "$mode" = 644 ] || ci_die "unsafe TB321FU compat firmware mode $mode: $member"
@@ -706,7 +710,7 @@ GPU_SENSOR_BUILD
   apt_recorder_sha256=$(sha256sum "$root/root/ci-apt-transaction.sh" | awk '{print $1}')
   apt_common_sha256=$(sha256sum "$root/root/ci-apt-common.sh" | awk '{print $1}')
 
-  chroot "$root" env -i \
+  bash "$SCRIPT_DIR/chroot-gpu-build.sh" "$root" env -i \
     PATH=/usr/sbin:/usr/bin:/sbin:/bin \
     HOME=/root \
     LANG=C.UTF-8 \
@@ -751,7 +755,7 @@ GPU_SENSOR_BUILD
   # Install through the same attested apt wrapper as every other package
   # transaction so the locally built GPU DEB and its SHA-256 enter the final
   # provenance record.
-  chroot "$root" env -i \
+  bash "$SCRIPT_DIR/chroot-gpu-build.sh" "$root" env -i \
     PATH=/usr/sbin:/usr/bin:/sbin:/bin \
     HOME=/root \
     LANG=C.UTF-8 \
@@ -794,7 +798,7 @@ GPU_SENSOR_BUILD
     install -m 0644 "$SCRIPT_DIR/common.sh" "$root/root/ci-apt-common.sh"
     apt_recorder_sha256=$(sha256sum "$root/root/ci-apt-transaction.sh" | awk '{print $1}')
     apt_common_sha256=$(sha256sum "$root/root/ci-apt-common.sh" | awk '{print $1}')
-    chroot "$root" env -i \
+    bash "$SCRIPT_DIR/chroot-gpu-build.sh" "$root" env -i \
       PATH=/usr/sbin:/usr/bin:/sbin:/bin \
       HOME=/root \
       LANG=C.UTF-8 \
@@ -809,7 +813,7 @@ GPU_SENSOR_BUILD
       CI_APT_RECORDER_SHA256="$apt_recorder_sha256" \
       CI_APT_COMMON_SHA256="$apt_common_sha256" \
       /root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build mark-auto "${new_build_deps[@]}"
-    chroot "$root" env -i \
+    bash "$SCRIPT_DIR/chroot-gpu-build.sh" "$root" env -i \
       PATH=/usr/sbin:/usr/bin:/sbin:/bin \
       HOME=/root \
       LANG=C.UTF-8 \
@@ -825,7 +829,7 @@ GPU_SENSOR_BUILD
       CI_APT_COMMON_SHA256="$apt_common_sha256" \
       /root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build autoremove -y --purge
   fi
-  chroot "$root" apt-get clean
+  bash "$SCRIPT_DIR/chroot-gpu-build.sh" "$root" apt-get clean
   rm -rf "$root$rootfs_src" "$root$rootfs_build" "$root$package_stage"
   rm -f "$root$package_deb" "$root$runtime_deps_file" "$root$new_build_deps_file" \
     "$root/etc/apt/apt.conf.d/99ci-proxy"
@@ -1466,6 +1470,8 @@ chroot "$rootfs_dir" env -i \
   ROOT_PASSWORD_MODE="$ROOT_PASSWORD_MODE" \
   ROOT_PASSWORD_HASH="$ROOT_PASSWORD_HASH" \
   USER_SUDO_MODE="$USER_SUDO_MODE" \
+  SDDM_AUTOLOGIN="$SDDM_AUTOLOGIN" \
+  SDDM_AUTOLOGIN_SESSION="$SDDM_AUTOLOGIN_SESSION" \
   INSTALL_FIREFOX="$INSTALL_FIREFOX" \
   DISABLE_SNAPD="$DISABLE_SNAPD" \
   TZ_REGION="$TZ_REGION" \
