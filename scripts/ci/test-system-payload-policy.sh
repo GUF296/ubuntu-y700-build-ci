@@ -33,6 +33,66 @@ CONTROL
 daily_root="$tmp/daily-root"
 haptics_root="$tmp/haptics-root"
 payload="$tmp/payload"
+ucm_fixture() {
+  python3 -I -B - "$1" "$2" "$SCRIPT_DIR/test-fixtures/tested-tb321fu-ucm.json" <<'PY_UCM'
+import json
+from pathlib import Path
+import os
+import stat
+import sys
+
+mode, root, fixture = sys.argv[1:]
+ucm = Path(root) / "usr/share/alsa/ucm2"
+rows = json.loads(Path(fixture).read_text())
+old, new = "codecs/wcd939x/", "LenovoY700TB321/wcd939x/"
+if len(rows) != 13 or sum(name.startswith(old) for name in rows) != 11:
+    raise SystemExit("incomplete June UCM fixture")
+for name, value in rows.items():
+    data = value.encode("utf-8")
+    path = ucm / name
+    if mode == "seed":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    elif mode == "check":
+        if name.startswith(old):
+            if path.exists() or path.is_symlink():
+                raise SystemExit("daily still owns stock UCM path: " + name)
+            path = ucm / (new + name[len(old):])
+        else:
+            count = 6 if name == "LenovoY700TB321/HiFi.conf" else 1
+            if data.count(b'"/codecs/wcd939x/') != count:
+                raise SystemExit("unexpected number of original board include references")
+            data = data.replace(b'"/codecs/wcd939x/', b'"/LenovoY700TB321/wcd939x/')
+        if not path.is_file() or path.is_symlink() or stat.S_IMODE(path.stat().st_mode) != 0o644 or path.read_bytes() != data:
+            raise SystemExit("board sequence or unrelated UCM content changed: " + name)
+    else:
+        raise SystemExit("unknown UCM fixture mode")
+if mode == "check":
+    expected = {name[len(old):] for name in rows if name.startswith(old)}
+    if {p.name for p in (ucm / new).iterdir()} != expected:
+        raise SystemExit("unexpected member of the board-private WCD939x directory")
+links = {"conf.d/snd-sc8280xp": "snd_soc_sc8280xp"}
+for card in ("Lenovo-Y700-TB321FU", "LenovoY700TB321", "sm8650", "snd_soc_sc8280xp"):
+    for alias in ("HiFi", "Lenovo-QRD-2.0", "Lenovo-Y700-TB321FU", "LenovoY700TB321"):
+        target = "HiFi" if alias == "HiFi" else "LenovoY700TB321"
+        links[f"conf.d/{card}/{alias}.conf"] = f"../../LenovoY700TB321/{target}.conf"
+for name, target in links.items():
+    path = ucm / name
+    if mode == "seed":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(target)
+    elif not path.is_symlink() or os.readlink(path) != target or not path.exists():
+        raise SystemExit("original board UCM alias changed or no longer resolves: " + name)
+PY_UCM
+}
+ucm_fixture seed "$daily_root"
+ucm_fixture seed "$tmp/ucm-unknown"
+printf '\n' >> "$tmp/ucm-unknown/usr/share/alsa/ucm2/codecs/wcd939x/HeadphoneEnableSeq.conf"
+if ucm_error=$(ci_migrate_tb321fu_ucm_ownership "$tmp/ucm-unknown" 2>&1); then
+  echo 'unrecognized UCM bytes were accepted' >&2; exit 1
+fi
+grep -Fq 'unrecognized June TB321FU UCM profile' <<<"$ucm_error"
+[ ! -e "$tmp/ucm-unknown/usr/share/alsa/ucm2/LenovoY700TB321/wcd939x" ]
 install -d -m 0755 "$payload"
 make_control "$daily_root" y700-daily-rootfs-overlay
 install -d -m 0777 \
@@ -378,6 +438,9 @@ dpkg-deb -x "$payload/daily.deb" "$tmp/before"
 dpkg-deb -x "$payload/haptics.deb" "$tmp/before"
 dpkg-deb -x "$payload/camera.deb" "$tmp/before"
 (cd "$tmp/before" && find . -type f \
+  ! -path './usr/share/alsa/ucm2/codecs/wcd939x/*' \
+  ! -path './usr/share/alsa/ucm2/LenovoY700TB321/HiFi.conf' \
+  ! -path './usr/share/alsa/ucm2/LenovoY700TB321/LenovoY700TB321.conf' \
   ! -path './etc/systemd/system/y700-audio-card-guard.service' \
   ! -path './usr/local/sbin/y700-audio-card-guard.sh' \
   ! -path './etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf' \
@@ -689,6 +752,9 @@ cmp "$keyboard_root/etc/skel/.config/plasmakeyboardrc" \
   "$keyboard_root/home/fixture/.config/plasmakeyboardrc"
 
 (cd "$tmp/after" && find . -type f \
+  ! -path './usr/share/alsa/ucm2/LenovoY700TB321/wcd939x/*' \
+  ! -path './usr/share/alsa/ucm2/LenovoY700TB321/HiFi.conf' \
+  ! -path './usr/share/alsa/ucm2/LenovoY700TB321/LenovoY700TB321.conf' \
   ! -path './etc/systemd/system/y700-audio-card-guard.service' \
   ! -path './usr/local/sbin/y700-audio-card-guard.sh' \
   ! -path './etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf' \
@@ -708,6 +774,7 @@ cmp "$keyboard_root/etc/skel/.config/plasmakeyboardrc" \
   ! -path './usr/local/share/y700-sns/*' \
   -print0 | sort -z | xargs -0 sha256sum) > "$tmp/after.sha256"
 cmp "$tmp/before.sha256" "$tmp/after.sha256"
+ucm_fixture check "$tmp/after"
 cmp "$SCRIPT_DIR/test-fixtures/tested-audio-card-guard.service" "$tmp/before/etc/systemd/system/y700-audio-card-guard.service"
 cmp "$SCRIPT_DIR/test-fixtures/tested-audio-card-guard.sh" "$tmp/before/usr/local/sbin/y700-audio-card-guard.sh"
 ci_assert_tb321fu_audio_card_guard "$tmp/after"

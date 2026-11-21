@@ -782,6 +782,38 @@ ci_assert_tb321fu_audio_card_guard() {
     ci_die 'audio recovery helper differs from the reviewed nonblocking implementation'
 }
 
+# Public codecs/wcd939x is owned by Ubuntu's alsa-ucm-conf. Keep the
+# board-tested sequences private: in particular its headphone enable sequence
+# differs from stock. Never replace the distro's files or alter other cards.
+ci_migrate_tb321fu_ucm_ownership() {
+  local root=$1 ucm=usr/share/alsa/ucm2 board=LenovoY700TB321 path
+  local base="$root/$ucm" public="$root/$ucm/codecs/wcd939x"
+  local -a leaves=()
+
+  if [ ! -e "$public" ] && [ ! -L "$public" ] &&
+     [ ! -e "$base/$board" ] && [ ! -L "$base/$board" ]; then
+    return 0  # No TB321FU UCM in this payload.
+  fi
+  ci_assert_real_rootfs_payload_parent "$root" "$ucm/codecs/wcd939x/init.conf"
+  ci_assert_real_rootfs_payload_parent "$root" "$ucm/$board/HiFi.conf"
+  [ ! -e "$base/$board/wcd939x" ] && [ ! -L "$base/$board/wcd939x" ] ||
+    ci_die "TB321FU private WCD939x directory is already occupied"
+  mapfile -d '' -t leaves < <(find "$public" -mindepth 1 -maxdepth 1 -print0)
+  [ "${#leaves[@]}" -eq 11 ] || ci_die "unexpected June WCD939x member count"
+  for path in "${leaves[@]}" "$base/$board/HiFi.conf" "$base/$board/$board.conf"; do
+    [ -f "$path" ] && [ ! -L "$path" ] && [ "$(stat -c %h -- "$path")" = 1 ] ||
+      ci_die "unexpected June UCM file type: $path"
+  done
+  (cd -- "$base" && sha256sum --strict --status -c "$SCRIPT_DIR/payloads/TB321FU-JUNE-UCM.sha256") ||
+    ci_die "unrecognized June TB321FU UCM profile or WCD939x sequence"
+
+  mv -T -- "$public" "$base/$board/wcd939x"
+  # The two pinned profiles contain exactly six and one WCD references.
+  # All other UCM includes, sections, control names and board aliases stay put.
+  sed -i 's|"/codecs/wcd939x/|"/LenovoY700TB321/wcd939x/|g' \
+    "$base/$board/HiFi.conf" "$base/$board/$board.conf"
+}
+
 ci_migrate_tb321fu_audio_route_policy() {
   local package_root=$1
   local old_conf=etc/wireplumber/wireplumber.conf.d/52-y700-headset-cleanup.conf
@@ -942,6 +974,7 @@ ci_prepare_y700_daily_payload_deb() {
   ci_migrate_tb321fu_audio_card_guard "$daily_stage"
   ci_assert_tb321fu_audio_card_guard "$daily_stage"
   ci_migrate_tb321fu_audio_route_policy "$daily_stage"
+  ci_migrate_tb321fu_ucm_ownership "$daily_stage"
   if [ -n "$camera_deb" ]; then
     ci_migrate_tb321fu_camera_payload "$daily_stage" "$camera_stage" "$historical"
     ci_mark_tb321fu_camera_payload_migrated "$daily_stage"
