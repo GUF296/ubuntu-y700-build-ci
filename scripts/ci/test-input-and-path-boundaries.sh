@@ -434,6 +434,26 @@ fi
 valid_hash='$6$tb321fu$zJjB0r4FpYTJ.Vtx4o/xHvn.VWOIHRPQPK.XmV3VXaAkhjWoFVZ8sV5lunaP32xQWicW7vMaOBLlnq0bbQ.1g.'
 valid_key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f tb321fu-test'
 valid_sk_key='sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAAAAC3NzaDp0YjMyMWZ1 tb321fu-sk-test'
+# The target can have no Python crypt module (or no Python yet). An actual
+# libcrypt probe must still accept the fixture quietly in that environment.
+if ! (python3() { return 127; }; ci_validate_password_hash "$valid_hash") >"$scratch/crypt-output" 2>&1 ||
+   [ -s "$scratch/crypt-output" ]; then
+  echo 'bootstrapped crypt validation failed or emitted data' >&2
+  exit 1
+fi
+# This has a permitted yescrypt envelope but an invalid algorithm setting.
+# Insist on the backend failure, not just any nonzero status or syntax check.
+printf -v bad_setting '$y$.$fixture$%043d' 0
+if (ci_validate_password_hash "$bad_setting") >"$scratch/crypt-output" 2>&1 ||
+   [[ $(<"$scratch/crypt-output") != 'error: DEFAULT_USER_PASSWORD_HASH is not accepted by the host crypt(3) implementation' ]]; then
+  echo 'invalid crypt setting did not fail quietly at the libcrypt boundary' >&2
+  exit 1
+fi
+if (PATH="$scratch/no-command-directory" ci_validate_password_hash "$valid_hash") >"$scratch/crypt-output" 2>&1 ||
+   [[ $(<"$scratch/crypt-output") != 'error: could not run the crypt(3) validator; verify perl-base and libcrypt1 are installed' ]]; then
+  echo 'missing crypt interpreter was misreported as an invalid password hash' >&2
+  exit 1
+fi
 ci_require_sudo_password_hash password "$valid_hash"
 ci_validate_authorized_keys "$valid_key"
 ci_validate_authorized_keys "$valid_sk_key"

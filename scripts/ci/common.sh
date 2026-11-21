@@ -911,14 +911,22 @@ ci_validate_password_hash() {
     ci_die 'DEFAULT_USER_PASSWORD_HASH is not a supported crypt(3) hash'
   fi
 
-  # Ask the host libcrypt implementation to parse the selected format as a
-  # final compatibility check.  The hash is supplied on stdin and no derived
-  # value is printed; an unavailable/invalid implementation is fail-closed.
-  if ! printf '%s\n' "$value" | python3 -I -B -c \
-    'import crypt,sys; value=sys.stdin.read().rstrip("\n"); result=crypt.crypt("tb321fu-validation", value); raise SystemExit(0 if result and not result.startswith("*") else 1)' \
-    >/dev/null 2>&1; then
-    ci_die 'DEFAULT_USER_PASSWORD_HASH is not accepted by the host crypt(3) implementation'
-  fi
+  # perl-base is Essential in the target bootstrap; Python's crypt module
+  # is gone as of 3.13. Hash only the probe and keep the supplied encoding on
+  # stdin. Exit 42 is reserved for a setting the working libcrypt rejected.
+  local status=0
+  printf '%s\n' "$value" | command perl -T -e '
+    my $setting = <STDIN>;
+    defined $setting or exit 2;
+    chomp $setting;
+    my $result = CORE::crypt("tb321fu-validation", $setting);
+    exit(defined($result) && length($result) && substr($result, 0, 1) ne "*" ? 0 : 42);
+  ' >/dev/null 2>&1 || status=$?
+  case $status in
+    0) return 0 ;;
+    42) ci_die 'DEFAULT_USER_PASSWORD_HASH is not accepted by the host crypt(3) implementation' ;;
+    *) ci_die 'could not run the crypt(3) validator; verify perl-base and libcrypt1 are installed' ;;
+  esac
 }
 
 ci_require_sudo_password_hash() {

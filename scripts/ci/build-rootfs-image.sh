@@ -884,6 +884,11 @@ debootstrap_args=(--arch="$ARCH")
 if [ -n "$DEBOOTSTRAP_VARIANT" ]; then
   debootstrap_args+=(--variant="$DEBOOTSTRAP_VARIANT")
 fi
+# The target validates supplied SSH keys before its first APT transaction.
+# A minimal bootstrap does not otherwise supply the Python standard library.
+if [ -n "$DEFAULT_USER_AUTHORIZED_KEYS" ]; then
+  debootstrap_args+=(--include=python3)
+fi
 debootstrap "${debootstrap_args[@]}" "$DISTRO" "$rootfs_dir" "$MIRROR"
 
 # Record the seed rootfs before replacing its APT sources or installing the

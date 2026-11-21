@@ -1056,6 +1056,23 @@ def run_provision_env_fixture(rootfs: pathlib.Path) -> None:
             fail(f"{rootfs}: empty or misordered {name}")
         return region
 
+    # Capture only the real bootstrap argv in a shell with no external tools.
+    # A supplied key selects a package, never a key value in process arguments.
+    begin = 'debootstrap_args=(--arch="$ARCH")\n'
+    end = '\ndebootstrap "${debootstrap_args[@]}" "$DISTRO" "$rootfs_dir" "$MIRROR"\n'
+    bootstrap = begin + section(text, begin, end, "bootstrap argv") + end
+    for variant in ("", "minbase"):
+        for keys in ("", "fixture-key-not-for-bootstrap-argv"):
+            argv = subprocess.run(["/bin/bash", "-euc", 'debootstrap() { printf "%s\\0" "$@"; }\n' + bootstrap],
+                                  env=dict(PATH="/nonexistent", ARCH="arm64", DISTRO="resolute", rootfs_dir="/target",
+                                           MIRROR="https://example.invalid", DEBOOTSTRAP_VARIANT=variant,
+                                           DEFAULT_USER_AUTHORIZED_KEYS=keys),
+                                  capture_output=True, timeout=5)
+            expected = (["--arch=arm64"] + (["--variant=minbase"] if variant else []) +
+                        (["--include=python3"] if keys else []) + ["resolute", "/target", "https://example.invalid"])
+            if argv.returncode or argv.stderr or argv.stdout.split(b"\0") != [v.encode() for v in expected] + [b""]:
+                fail(f"{rootfs}: incorrect public-key bootstrap arguments")
+
     launcher = section(text, 'ci_log "provisioning rootfs"\n',
                        '\n  bash /root/ci-provision.sh\n', "chroot provision launcher")
     leading = 'chroot "$rootfs_dir" '
@@ -1067,23 +1084,36 @@ def run_provision_env_fixture(rootfs: pathlib.Path) -> None:
                           "pre-APT provision validators")
     probe = ('set -euo pipefail\n. "$1"\n' + validations +
              '\n[[ ! -v OUTSIDE_PROVISION ]]\n' +
-             'printf "%s\\n" "$SDDM_AUTOLOGIN" "$SDDM_AUTOLOGIN_SESSION"\n')
+             'printf "%s\\n" "$SDDM_AUTOLOGIN" "$SDDM_AUTOLOGIN_SESSION"\n'
+             'case "$DEFAULT_USER_PASSWORD_HASH" in "") echo empty;; "!") echo locked;; *) echo present;; esac\n')
     env = dict.fromkeys(re.findall(r'="\$([a-zA-Z_][a-zA-Z_0-9]*)"', launcher), "")
     env.update(PATH="/usr/bin:/bin", OUTSIDE_PROVISION="not forwarded", ROOT_PASSWORD_MODE="locked",
                USER_SUDO_MODE="password", INSTALL_FCITX5_CHINESE="1", INSTALL_FIREFOX="1",
                DISABLE_SNAPD="1", CLEAN_APT_CACHE="1", LOCALES="en_US.UTF-8 UTF-8", LANG_NAME="en_US.UTF-8")
-    for enabled, session, error in (("1", "plasma", ""), ("0", "custom.desktop", ""),
-                                    ("invalid", "plasma", "SDDM_AUTOLOGIN must"),
-                                    ("1", "invalid session", "SDDM_AUTOLOGIN_SESSION must")):
+    # Synthetic only. The real release uses password sudo: an empty value
+    # skips the entire target crypt validator and falsely exercises neither
+    # the setting nor its implementation. Never log any probe value/stderr.
+    encoded = subprocess.run(["/usr/bin/openssl", "passwd", "-6", "-salt", "fixture", "-stdin"],
+                             input="disposable-workflow-fixture\n", text=True, capture_output=True, timeout=5)
+    if encoded.returncode or not re.fullmatch(r"\$6\$fixture\$[./0-9A-Za-z]{86}\n", encoded.stdout):
+        fail("could not generate a synthetic provision input")
+    for enabled, session, sudo, setting, error in (
+            ("1", "plasma", "password", encoded.stdout.rstrip("\n"), ""),
+            ("0", "custom.desktop", "none", "!", ""), ("0", "custom.desktop", "none", "", ""),
+            ("1", "plasma", "password", "invalid-fixture", "not a supported crypt(3) hash"),
+            ("invalid", "plasma", "none", "", "SDDM_AUTOLOGIN must"),
+            ("1", "invalid session", "none", "", "SDDM_AUTOLOGIN_SESSION must")):
         result = subprocess.run(["/bin/bash", "-eu", "-c", launcher, "fixture",
                                  str(rootfs.with_name("common.sh").resolve())],
-                                env=dict(env, SDDM_AUTOLOGIN=enabled, SDDM_AUTOLOGIN_SESSION=session),
+                                env=dict(env, SDDM_AUTOLOGIN=enabled, SDDM_AUTOLOGIN_SESSION=session,
+                                         USER_SUDO_MODE=sudo, DEFAULT_USER_PASSWORD_HASH=setting),
                                 input=probe, text=True, capture_output=True, timeout=15)
         if error:
             if result.returncode == 0 or error not in result.stderr:
-                fail(f"invalid SDDM provision input not rejected at its validator: {result.stderr}")
-        elif result.returncode or result.stdout.splitlines() != [enabled, session]:
-            fail(f"clean chroot did not preserve the selected SDDM settings: {result.stderr}")
+                fail("invalid provision input not rejected at its validator")
+        elif (result.returncode or result.stdout.splitlines() !=
+              [enabled, session, {"": "empty", "!": "locked"}.get(setting, "present")]):
+            fail("clean provision environment or pre-APT target validation failed")
 
 
 def run_builtin_config_fixtures(
