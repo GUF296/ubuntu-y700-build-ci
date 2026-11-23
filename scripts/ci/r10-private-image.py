@@ -64,42 +64,64 @@ def sanitized(status,ext,packages):
         marks.append('\n'.join(k+': '+d[k] for k in ('Package','Architecture','Auto-Installed') if k in d)+'\n')
     return ('\n'.join(ans)+'\n').encode(),('\n'.join(marks)+'\n').encode(),len(seen),len(marks)
 
-def fetch(a,sink):
-    size,digest=a['size'],a['digest'];out=hashlib.sha256();n=0
-    proc=sp.Popen(['timeout','-k','3','650','gh','api','--hostname','github.com','--method','GET','-H','Accept: application/octet-stream',API+'/releases/assets/'+str(a['id'])],
-                  stdin=sp.DEVNULL,stdout=sp.PIPE,stderr=sp.DEVNULL)
-    try:
-        for buf in iter(lambda:proc.stdout.read(1<<20),b''):
-            n+=len(buf);need(n<=size,'asset limit');out.update(buf);sink(buf)
-        need(proc.wait(timeout=10)==0 and n==size and 'sha256:'+out.hexdigest()==digest,'asset bytes mismatch')
-    finally:
-        if proc.poll() is None:proc.kill();proc.wait()
+"""Stage transport only. Sizes/digests are compared with the previously verified private release IDs."""
+def stage():
+    id=14731227846;wanted='release-staging-44962218886-1'
+    page=get(f'actions/runs/{RUN}/artifacts?per_page=100')
+    need(page['total_count']==len(page['artifacts'])<=8,'incomplete original artifact listing')
+    one=[a for a in page['artifacts'] if a['name']==wanted]
+    need(len(one)==1,'no unique original stage')
+    for a in [one[0],get(f'actions/artifacts/{id}')]:
+        w=a['workflow_run']
+        need((a['id'],a['name'],a['size_in_bytes'],a['digest'],a['expired'],w['id'],w['head_sha'],w['repository_id'],w['head_repository_id'])==
+             (id,wanted,3290876337,'sha256:91db68ff761004d4c9d0dadb3563613cee384167a52aec2f66f3e2ddc9a7998d',False,
+              RUN,H,1279887367,1279887367),'unexpected stage registration')
+    return one[0]
 
-def assets():
-    r=get(f'releases/{RID}')
-    need(r['draft'] is True and r['prerelease'] is True and (r['id'],r['tag_name'],r['target_commitish'])==
-        (RID,'tb321fu-kubuntu2604-remediation-20261120.1',H),'not original R10 private draft')
-    a={x['name']:x for x in r['assets']}
-    need(len(r['assets'])==len(a)==25 and {n:[v['id'],v['size'],v['digest']] for n,v in a.items()}==EXPECTED_ASSETS and
-         all(x['state']=='uploaded' for x in a.values()),'one or more original asset IDs/bytes changed')
-    return a
+def stage_input(d,path):
+    import zipfile
+    a=stage();tmp=Path(d)/'staging.zip'
+    with tmp.open('xb') as f:
+        n=0;h=hashlib.sha256()
+        with sp.Popen(['timeout','-k','3','900','gh','api','--hostname','github.com','--method','GET',API+f"/actions/artifacts/{a['id']}/zip"],
+                stdin=sp.DEVNULL,stdout=sp.PIPE,stderr=sp.DEVNULL) as proc:
+            try:
+                for b in iter(lambda:proc.stdout.read(1<<20),b''):
+                    n+=len(b);need(n<=a['size_in_bytes'],'staging file too large');f.write(b);h.update(b)
+                need(proc.wait(timeout=15)==0 and n==a['size_in_bytes'] and 'sha256:'+h.hexdigest()==a['digest'],'staged ZIP transfer failed or hash differs')
+            finally:
+                if proc.poll() is None:proc.kill();proc.wait()
+    with zipfile.ZipFile(tmp) as z:
+        members={r.filename.removeprefix('assets/'):r for r in z.infolist() if not r.is_dir()}
+        need(len([r for r in z.infolist() if not r.is_dir()])==len(members)==25 and members.keys()==EXPECTED_ASSETS.keys() and
+             all(r.filename=='assets/'+n and r.file_size==EXPECTED_ASSETS[n][1] and r.compress_type in (0,8) and not r.flag_bits&1 for n,r in members.items()),'unexpected staged membership')
+        def read(name,out):
+            r=members[name]; h=hashlib.sha256();total=0
+            with z.open(r) as f:
+                for b in iter(lambda:f.read(1<<20),b''):
+                    total+=len(b);need(total<=r.file_size,'staged payload too large');h.update(b);out(b)
+            need(total==r.file_size and 'sha256:'+h.hexdigest()==EXPECTED_ASSETS[name][2],'selected staged content differs from private release: '+name)
+        notes=bytearray();pkg=bytearray()
+        read('BUILD-PARAMETERS.md',notes.extend);read('ROOTFS-PACKAGES.tsv',pkg.extend)
+        zsha=hashlib.sha256()
+        with path.open('xb') as f:
+            def update(b):f.write(b);zsha.update(b)
+            for n in TAIL:read(n,update)
+    tmp.unlink()  # owned temporary runner file, after verified selected data closed; not a raw image
+    print('Verified complete original stage ZIP, both R10 rootfs volumes and two metadata assets',flush=True)
+    return notes,pkg,zsha
 
 def main():
     need(os.environ.get('GITHUB_REPOSITORY')==REPO and os.environ.get('GITHUB_REF')=='refs/heads/'+BR and
          os.environ.get('GITHUB_RUN_ATTEMPT')=='1' and os.environ.get('GITHUB_EVENT_NAME')=='workflow_dispatch' and
          re.fullmatch(r'[a-f0-9]{40}',os.environ.get('GITHUB_SHA','')),'incorrect read-only invocation')
-    a=assets();notes=bytearray();pkg=bytearray()
-    fetch(a['BUILD-PARAMETERS.md'],notes.extend);fetch(a['ROOTFS-PACKAGES.tsv'],pkg.extend)
-    marker=re.findall(rb'^## SSH host identity evidence\n```json\n([^\n]+)\n```$',notes,re.M)
-    need(len(marker)==1,'no unique typed build descriptor')
-    ctx=json.loads(marker[0]);need(ctx['schema']=='tb321fu.ssh-image/v1','wrong evidence schema')
-    names=('archive_sha256','raw_sha256')
-    need(all(re.fullmatch('[a-f0-9]{64}',ctx[n]) for n in names),'invalid image digests')
     with tempfile.TemporaryDirectory(dir=os.environ['RUNNER_TEMP']) as d:
-        path=Path(d)/'rootfs.7z';zsha=hashlib.sha256()
-        with path.open('xb') as f:
-            def update(b):f.write(b);zsha.update(b)
-            for n in TAIL:fetch(a[n],update)
+        path=Path(d)/'rootfs.7z'
+        notes,pkg,zsha=stage_input(d,path)
+        marker=re.findall(rb'^## SSH host identity evidence\n```json\n([^\n]+)\n```$',notes,re.M)
+        need(len(marker)==1,'no unique typed build descriptor')
+        ctx=json.loads(marker[0]);need(ctx['schema']=='tb321fu.ssh-image/v1','wrong evidence schema')
+        need(all(re.fullmatch('[a-f0-9]{64}',ctx[n]) for n in ('archive_sha256','raw_sha256')),'invalid image digests')
         need(zsha.hexdigest()==ctx['archive_sha256'],'joined image differs')
         proof=_verify_raw(path,ctx['raw_sha256'],RAW_SIZE);proof.update(archive_sha256=zsha.hexdigest(),archive_size=path.stat().st_size)
         print('All rootfs volumes, combined archive and complete 20 GiB raw SHA-256 verified',flush=True)
@@ -127,7 +149,9 @@ def main():
                 # A separately labelled supplementary mismatch cannot erase the verified solver state.
                 report['board_supplement']='INCOMPLETE';print('Board supplemental read incomplete; not a pass',flush=True)
             report['board_public_files']=matches
-    assets()
+    stage()
+    report['transport']='Original Actions staging ZIP, all bytes hashed in runner; selected asset SHA/size match recovered private release. No private release download claim.'
+    report['stage_id']=14731227846
     out=Path('sanitized-r10');out.mkdir(mode=0o700)
     for n,data in [('solver-status',st),('extended_states',es),('receipt.json',(json.dumps(report,sort_keys=True,indent=2)+'\n').encode())]:
         with (out/n).open('xb') as fp:fp.write(data)
