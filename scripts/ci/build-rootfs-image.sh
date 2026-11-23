@@ -188,7 +188,9 @@ TB321FU_COMPAT_PACKAGE_VERSION=${TB321FU_COMPAT_PACKAGE_VERSION:-20260624.1}
 default_packages="systemd systemd-sysv dbus sudo locales tzdata ca-certificates gnupg curl wget network-manager openssh-server python3 nano vim rsync kmod initramfs-tools"
 PACKAGE_LIST=${PACKAGE_LIST:-$default_packages}
 if [ -n "${DESKTOP_ENV:-}" ]; then
-  PACKAGE_LIST="$PACKAGE_LIST $DESKTOP_ENV"
+  # The tested desktop shipped the distro's AppArmor policy loader. Installing
+  # the desktop with --no-install-recommends is not a durable way to select it.
+  PACKAGE_LIST="$PACKAGE_LIST $DESKTOP_ENV apparmor"
 fi
 if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
   PACKAGE_LIST="$PACKAGE_LIST gnome-snapshot"
@@ -1652,6 +1654,10 @@ LC_ALL=C chroot "$rootfs_dir" dpkg-query -W \
   LC_ALL=C awk -F '\t' '$1 == "ii " { print $2 "\t" $3 "\t" $4 }' |
   LC_ALL=C sort > "$package_inventory"
 [ -s "$package_inventory" ] || ci_die "installed-package inventory is empty"
+if [ -n "${DESKTOP_ENV:-}" ]; then
+  # No LSM probing, profile loading or service activation on the build host.
+  bash "$SCRIPT_DIR/verify-desktop-apparmor.sh" "$package_inventory" "$ARCH" "$rootfs_dir"
+fi
 # A successful device-DEB transaction can remove previously installed apps.
 # Test the selected camera app after that transaction and autoremove. Inspect
 # its launch paths within the target; do not start a GUI or open any camera.

@@ -850,6 +850,7 @@ jobs:
             echo "- Generated: \`$(date -u -Iseconds)\`"
             echo
             echo 'Password hashes are supplied only through step-scoped secrets and are never serialized into build configuration or release notes.'
+            echo 'If using a shared test account, keep first boot offline or on an isolated network and change its password locally with passwd before joining a trusted LAN.'
             # Markdown code spans are literal characters in the generated notes.
             # shellcheck disable=SC2016
             printf 'Release image streams: `%s` and `%s`; large streams may have contiguous `.NNN` parts.\n' "$rootfs_stream_name" "$grub_stream_name"

@@ -911,4 +911,5 @@ grep -Fq '401942f9c24ed71e4fe71b76c7d638f66d8633575c4016efd2977ce7c28317d0' "$ac
 grep -Fq '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757' "$actionlint_script"
 bash -n "$actionlint_script"
 
+bash "$SCRIPT_DIR/test-desktop-apparmor.sh"
 echo 'PASS input, access and filesystem path boundaries'

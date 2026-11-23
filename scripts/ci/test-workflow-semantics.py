@@ -884,6 +884,14 @@ def validate_structure(workflow: pathlib.Path, data: dict) -> None:
             fail("rootfs provenance evidence is staged after release checksums")
     if release_run.index(release_notes) > release_run.index(release_checksums):
         fail("release notes are staged after release checksums")
+    first_boot_notice = (
+        "echo 'If using a shared test account, keep first boot offline or on an isolated network "
+        "and change its password locally with passwd before joining a trusted LAN.'"
+    )
+    notes_output = '} > "$notes"'
+    if (release_run.count(first_boot_notice) != 1 or release_run.count(notes_output) != 1
+            or not release_run.index(release_notes) < release_run.index(first_boot_notice) < release_run.index(notes_output)):
+        fail("the staged release notes must contain the first-boot test-account notice")
     if release_run.count(release_staging_validator) != 2:
         fail("release staging must be validated before and after manifest generation")
 
