@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import runpy
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -9,6 +10,40 @@ from unittest.mock import patch
 G=runpy.run_path(str(Path(__file__).with_name('gpu-build-package-cleanup.py')))
 
 class GPUPlan(unittest.TestCase):
+    def test_kubuntu_desktop_roots(self):
+        ci=Path(__file__).parent
+        text=(ci/'build-rootfs-image.sh').read_text()
+        begin=text.index('default_packages="')
+        end=text.index('PACKAGE_LIST=$(ci_normalize_package_list "$PACKAGE_LIST")',begin)
+        script='source "$1"; '+text[begin:end]+'ci_normalize_package_list "$PACKAGE_LIST"'
+        roots={'binutils','bzip2','qt6-qmltooling-plugins'}
+        for desktop,arch in [('kubuntu-desktop','arm64'),('kubuntu-desktop','amd64'),('plasma-desktop','arm64'),('','arm64')]:
+            env=dict(os.environ,ARCH=arch,DESKTOP_ENV=desktop,PACKAGE_LIST='sudo',INSTALL_GNOME_SNAPSHOT='0',
+                     INSTALL_FIREFOX='0',INSTALL_FCITX5_CHINESE='0')
+            packages=set(subprocess.check_output(['bash','-eu','-c',script,'sh',str(ci/'common.sh')],
+                                                  env=env,text=True).splitlines())
+            self.assertTrue(({'sudo'}|({desktop} if desktop else set()))<=packages)
+            self.assertEqual(packages&roots,roots if (desktop,arch)==('kubuntu-desktop','arm64') else set())
+
+    def test_kubuntu_final_inventory(self):
+        source=Path(__file__).with_name('build-rootfs-image.sh').read_text()
+        block=source.split('# Check the real post-cleanup target,',1)[1].split('\n',1)[1].split('\nfi\n',1)[0]+'\nfi'
+        names='binutils binutils-aarch64-linux-gnu binutils-common bzip2 libbinutils libctf-nobfd0 libctf0 libgprofng0 libsframe3 qt6-qmltooling-plugins'.split()
+        with tempfile.TemporaryDirectory() as tmp:
+            f=Path(tmp)/'inventory'
+            def result(lines,desktop='kubuntu-desktop'):
+                f.write_text(''.join(lines))
+                return subprocess.run(['bash','-eu','-c','ci_die() { exit 77; }; '+block],
+                                      env=dict(os.environ,ARCH='arm64',DESKTOP_ENV=desktop,package_inventory=str(f)),
+                                      capture_output=True).returncode
+            rows=[n+(':arm64' if i%2 else '')+'\t1\tarm64\n' for i,n in enumerate(names)]
+            self.assertEqual(result(rows),0)
+            for i in range(len(rows)):
+                self.assertEqual(result(rows[:i]+rows[i+1:]),77)
+            self.assertEqual(result(rows+[rows[0]]),77)
+            self.assertEqual(result([rows[0].replace('arm64','amd64')]+rows[1:]),77)
+            self.assertEqual(result([],'plasma-desktop'),0)
+
     def test_mixed_arch_and_hold(self):
         target='ii \tcompiler:arm64\t1\tarm64\t\t\nhi \tconsole\t2\tarm64\t\t\nii \tcommon\t1\tall\tyes\t\nrc \told\t1\tarm64\t\t\n'
         with patch('subprocess.check_output',side_effect=[target,'compiler\ncommon\n']):

@@ -192,6 +192,12 @@ if [ -n "${DESKTOP_ENV:-}" ]; then
   # the desktop with --no-install-recommends is not a durable way to select it.
   PACKAGE_LIST="$PACKAGE_LIST $DESKTOP_ENV apparmor"
 fi
+# These user-visible tools/plugins existed in the tested June Kubuntu image.
+# Install them as desktop roots: their libraries must not be attributed to the
+# later transient GPU compiler transaction.
+if [ "$ARCH" = arm64 ] && [ "${DESKTOP_ENV:-}" = kubuntu-desktop ]; then
+  PACKAGE_LIST="$PACKAGE_LIST binutils bzip2 qt6-qmltooling-plugins"
+fi
 if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
   PACKAGE_LIST="$PACKAGE_LIST gnome-snapshot"
 fi
@@ -1666,6 +1672,20 @@ LC_ALL=C chroot "$rootfs_dir" dpkg-query -W \
 if [ -n "${DESKTOP_ENV:-}" ]; then
   # No LSM probing, profile loading or service activation on the build host.
   bash "$SCRIPT_DIR/verify-desktop-apparmor.sh" "$package_inventory" "$ARCH" "$rootfs_dir"
+fi
+# Check the real post-cleanup target, not just the three requested desktop roots.
+if [ "$ARCH" = arm64 ] && [ "${DESKTOP_ENV:-}" = kubuntu-desktop ]; then
+  LC_ALL=C awk -F '\t' '
+    BEGIN {
+      count = split("binutils binutils-aarch64-linux-gnu binutils-common bzip2 libbinutils libctf-nobfd0 libctf0 libgprofng0 libsframe3 qt6-qmltooling-plugins", names, " ")
+      for (i = 1; i <= count; i++) need[names[i]] = 1
+    }
+    NF == 3 && $2 != "" && $3 == "arm64" {
+      pkg = $1; sub(/:arm64$/, "", pkg)
+      if (pkg in need) found[pkg]++
+    }
+    END { for (pkg in need) if (found[pkg] != 1) { print "missing or duplicate June package: " pkg > "/dev/stderr"; exit 1 } }
+  ' "$package_inventory" || ci_die "June Kubuntu desktop tool/plugin inventory changed"
 fi
 # A successful device-DEB transaction can remove previously installed apps.
 # Test the selected camera app after that transaction and autoremove. Inspect
