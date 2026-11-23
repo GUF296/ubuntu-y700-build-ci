@@ -378,7 +378,7 @@ for asset in "${assets[@]}"; do
     --header '@-' \
     --header 'X-GitHub-Api-Version: 2022-11-28' \
     --header 'Content-Type: application/octet-stream' \
-    --data-binary "@$asset" \
+    --upload-file "$asset" \
     "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$asset_name" \
     >/dev/null
 done

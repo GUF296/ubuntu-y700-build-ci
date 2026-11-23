@@ -230,6 +230,48 @@ PATH="$fake_bin:$PATH" \
   FAKE_APT_AUTO="$state/auto-packages" \
   SOURCE_DATE_EPOCH=123456789 \
   bash "$WRITER" finalize "$root" "$bootstrap" "$provenance" "$sources"
+# A successful writer may leave only its declared outputs. The build uploads
+# this directory recursively, so intermediates must not become artifact data.
+if [ -n "$(find "$scratch" -maxdepth 1 -name 'APT-*.*.*' -print -quit)" ]; then
+  printf 'successful APT evidence writer left sidecars\n' >&2
+  exit 1
+fi
+(
+  export PATH="$fake_bin:$PATH" FAKE_DPKG_PACKAGES="$state/packages" FAKE_APT_AUTO="$state/auto-packages" SOURCE_DATE_EPOCH=123456789
+  fixtures=$scratch/writer-cleanup
+  mkdir -p "$fixtures/bin" "$fixtures/prov" "$fixtures/src" "$fixtures/boot"
+  for output in "$fixtures/prov/result" "$fixtures/src/result" "$fixtures/boot/result"; do
+    printf 'existing report\n' > "$output"
+  done
+  : > "$fixtures/empty-packages"
+  if FAKE_DPKG_PACKAGES="$fixtures/empty-packages" bash "$WRITER" capture-bootstrap \
+      "$root" "$fixtures/boot/result" 1.0 "$debootstrap_sha256" resolute arm64 minbase \
+      https://ports.ubuntu.com/ubuntu-ports > "$fixtures/bootstrap.log" 2>&1; then
+    printf 'writer accepted empty bootstrap package inventory\n' >&2; exit 1
+  fi
+  grep -Fq 'bootstrap package inventory is empty' "$fixtures/bootstrap.log"
+  # Inject failure only after the first same-filesystem stage has been made.
+  cat > "$fixtures/bin/mktemp" <<'MKTEMP'
+#!/usr/bin/env bash
+set -eu
+case ${!#} in
+  "$STAGE_FIXTURE"/src/result.*)
+    [ -n "$(find "$STAGE_FIXTURE/prov" -mindepth 1 ! -name result -print -quit)" ] || exit 74
+    exit 73 ;;
+esac
+exec /usr/bin/mktemp "$@"
+MKTEMP
+  chmod 0755 "$fixtures/bin/mktemp"
+  rc=0
+  STAGE_FIXTURE="$fixtures" PATH="$fixtures/bin:$PATH" bash "$WRITER" finalize \
+    "$root" "$bootstrap" "$fixtures/prov/result" "$fixtures/src/result" || rc=$?
+  [ "$rc" -eq 73 ]
+  for dir in "$fixtures/boot" "$fixtures/prov" "$fixtures/src"; do
+    [ -z "$(find "$dir" -mindepth 1 ! -name result -print -quit)" ]
+    grep -Fxq 'existing report' "$dir/result"
+  done
+)
+printf 'PASS APT evidence writer cleans successful and partially allocated stages\n'
 grep -Fx $'schema\ttb321fu.apt-provenance/v3' "$provenance" >/dev/null
 grep -Fx $'bootstrap-provenance-sha256\t'"$(sha256sum "$bootstrap" | awk '{print $1}')" "$provenance" >/dev/null
 grep -Fx $'transaction-count\t8' "$provenance" >/dev/null

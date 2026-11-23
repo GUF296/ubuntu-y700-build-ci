@@ -433,21 +433,34 @@ validate_bootstrap_metadata() {
   ci_validate_https_apt_uri "$bootstrap_mirror"
 }
 
+# Keep every intermediate under a private directory beside its destination.
+# The two final reports may be on different filesystems; each rename must
+# remain on its own filesystem. Set the trap before even the first allocation.
+stage_one=
+stage_two=
+cleanup_stages() {
+  if [ -n "$stage_one" ]; then rm -rf -- "$stage_one"; fi
+  if [ -n "$stage_two" ]; then rm -rf -- "$stage_two"; fi
+}
+trap cleanup_stages EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 write_bootstrap_file() {
-  local temp_dir output_tmp sources_tmp keyrings_tmp configs_tmp preferences_tmp
+  local output_tmp sources_tmp keyrings_tmp configs_tmp preferences_tmp
   local indexes_tmp packages_tmp
 
   validate_bootstrap_metadata
   mkdir -p "$(dirname -- "$bootstrap_output")"
-  temp_dir=$(mktemp -d "${bootstrap_output}.stage.XXXXXX")
-  output_tmp="$temp_dir/bootstrap.tsv"
-  sources_tmp="$temp_dir/sources.tsv"
-  keyrings_tmp="$temp_dir/keyrings.tsv"
-  configs_tmp="$temp_dir/configs.tsv"
-  preferences_tmp="$temp_dir/preferences.tsv"
-  indexes_tmp="$temp_dir/indexes.tsv"
-  packages_tmp="$temp_dir/packages.tsv"
-  trap 'rm -rf -- "$temp_dir"' RETURN
+  stage_one=$(mktemp -d -- "${bootstrap_output}.stage.XXXXXX")
+  output_tmp="$stage_one/bootstrap.tsv"
+  sources_tmp="$stage_one/sources.tsv"
+  keyrings_tmp="$stage_one/keyrings.tsv"
+  configs_tmp="$stage_one/configs.tsv"
+  preferences_tmp="$stage_one/preferences.tsv"
+  indexes_tmp="$stage_one/indexes.tsv"
+  packages_tmp="$stage_one/packages.tsv"
 
   collect_final_sources "$sources_tmp"
   sed -i 's/^/bootstrap-/' "$sources_tmp"
@@ -487,8 +500,6 @@ write_bootstrap_file() {
   chmod 0600 "$output_tmp"
   touch -d "@$SOURCE_DATE_EPOCH" "$output_tmp"
   mv -f -- "$output_tmp" "$bootstrap_output"
-  trap - RETURN
-  rm -rf -- "$temp_dir"
 }
 
 validate_bootstrap_file() {
@@ -1091,20 +1102,16 @@ for record in "${records[@]}"; do
 done
 
 mkdir -p "$(dirname -- "$provenance_output")" "$(dirname -- "$sources_output")"
-provenance_tmp=$(mktemp "${provenance_output}.tmp.XXXXXX")
-sources_tmp=$(mktemp "${sources_output}.tmp.XXXXXX")
-current_sources_tmp=$(mktemp "${sources_output}.current.XXXXXX")
-final_keyrings_tmp=$(mktemp "${sources_output}.keyrings.XXXXXX")
-final_configs_tmp=$(mktemp "${sources_output}.configs.XXXXXX")
-final_preferences_tmp=$(mktemp "${sources_output}.preferences.XXXXXX")
-final_auto_packages_tmp=$(mktemp "${sources_output}.auto-packages.XXXXXX")
-final_extended_states_tmp=$(mktemp "${sources_output}.extended-states.XXXXXX")
-cleanup() {
-  rm -f -- "$provenance_tmp" "$sources_tmp" \
-    "$current_sources_tmp" "$final_keyrings_tmp" "$final_configs_tmp" \
-    "$final_preferences_tmp" "$final_auto_packages_tmp" "$final_extended_states_tmp"
-}
-trap cleanup EXIT INT TERM
+stage_one=$(mktemp -d -- "${provenance_output}.stage.XXXXXX")
+stage_two=$(mktemp -d -- "${sources_output}.stage.XXXXXX")
+provenance_tmp=$stage_one/provenance.tsv
+sources_tmp=$stage_two/sources.tsv
+current_sources_tmp=$stage_two/current.tsv
+final_keyrings_tmp=$stage_two/keyrings.tsv
+final_configs_tmp=$stage_two/configs.tsv
+final_preferences_tmp=$stage_two/preferences.tsv
+final_auto_packages_tmp=$stage_two/auto-packages.tsv
+final_extended_states_tmp=$stage_two/extended-states.tsv
 
 collect_final_sources "$current_sources_tmp"
 validate_final_keyring_and_config_layout
@@ -1145,4 +1152,3 @@ chmod 0644 "$provenance_tmp" "$sources_tmp"
 touch -d "@$SOURCE_DATE_EPOCH" "$provenance_tmp" "$sources_tmp"
 mv -f -- "$provenance_tmp" "$provenance_output"
 mv -f -- "$sources_tmp" "$sources_output"
-trap - EXIT INT TERM

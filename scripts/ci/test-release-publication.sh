@@ -89,7 +89,7 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2
       ;;
-    --data-binary) data=$2; shift 2 ;;
+    --upload-file) [ -z "$data" ]; data=$2; shift 2 ;;
     https://*) [ -z "$url" ]; url=$1; shift ;;
     *) printf 'unexpected curl argument: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -108,8 +108,8 @@ case $url in
   *) printf 'unexpected upload URL: %s\n' "$url" >&2; exit 2 ;;
 esac
 [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
-[[ $data == @* ]]
-file=${data#@}
+[[ $data = /* && ${data##*/} = "$name" ]]
+file=$data
 [ -f "$file" ]
 printf 'upload-start %s\n' "$name" >> "$GH_STATE/events.log"
 [ "${GH_FAIL_UPLOAD:-0}" != 1 ] || exit 73
