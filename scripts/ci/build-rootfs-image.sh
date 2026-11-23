@@ -587,6 +587,7 @@ apply_tb321fu_gpu_sensor() {
   rm -f "$root$package_deb" "$root$runtime_deps_file" "$root$new_build_deps_file"
   install -d -m 0755 "$root$rootfs_src"
   rsync -a --delete "$source_dir"/ "$root$rootfs_src"/
+  install -m 0644 "$SCRIPT_DIR/gpu-build-package-cleanup.py" "$root/root/ci-gpu-build-package-cleanup.py"
 
 cat > "$root/root/ci-build-tb321fu-gpu-sensor.sh" <<'GPU_SENSOR_BUILD'
 #!/usr/bin/env bash
@@ -653,7 +654,7 @@ build_deps="cmake extra-cmake-modules g++ make dpkg-dev libksysguard-dev libkf6c
 
 new_build_deps=""
 for pkg in $build_deps; do
-  if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+  if dpkg-query -W -f='${db:Status-Status}\n' "$pkg" 2>/dev/null | grep -Fxq installed; then
     :
   else
     new_build_deps="$new_build_deps $pkg"
@@ -661,7 +662,14 @@ for pkg in $build_deps; do
 done
 
 apt_secure update
-apt_secure install -y --no-install-recommends $build_deps
+python3 -IB /root/ci-gpu-build-package-cleanup.py before
+# Re-requesting a pre-existing automatic package makes it manual. Only
+# explicitly request missing compiler roots, then remember their actual closure.
+if [ -n "$new_build_deps" ]; then
+  read -r -a missing_build_deps <<< "$new_build_deps"
+  apt_secure install -y --no-install-recommends "${missing_build_deps[@]}"
+fi
+python3 -IB /root/ci-gpu-build-package-cleanup.py after-install
 
 cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build "$build" -j"${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}"
@@ -816,7 +824,8 @@ GPU_SENSOR_BUILD
       CI_APT_RECORDER_SHA256="$apt_recorder_sha256" \
       CI_APT_COMMON_SHA256="$apt_common_sha256" \
       /root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build mark-auto "${new_build_deps[@]}"
-    bash "$SCRIPT_DIR/chroot-gpu-build.sh" "$root" env -i \
+  fi
+  bash "$SCRIPT_DIR/chroot-gpu-build.sh" "$root" env -i \
       PATH=/usr/sbin:/usr/bin:/sbin:/bin \
       HOME=/root \
       LANG=C.UTF-8 \
@@ -830,8 +839,7 @@ GPU_SENSOR_BUILD
       CI_APT_COMMON_SH=/root/ci-apt-common.sh \
       CI_APT_RECORDER_SHA256="$apt_recorder_sha256" \
       CI_APT_COMMON_SHA256="$apt_common_sha256" \
-      /root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build autoremove -y --purge
-  fi
+      python3 -IB /root/ci-gpu-build-package-cleanup.py cleanup
   bash "$SCRIPT_DIR/chroot-gpu-build.sh" "$root" apt-get clean
   rm -rf "$root$rootfs_src" "$root$rootfs_build" "$root$package_stage"
   rm -f "$root$package_deb" "$root$runtime_deps_file" "$root$new_build_deps_file" \
@@ -847,6 +855,7 @@ GPU_SENSOR_BUILD
   fi
 
   rm -f "$root/root/ci-build-tb321fu-gpu-sensor.sh"
+  rm -f "$root/root/ci-gpu-build-package-cleanup.py"
   [ -f "$root/$plugin_rel" ] || ci_die "TB321FU GPU sensor plugin missing after build: /$plugin_rel"
   [ ! -e "$root/$stock_plugin_rel" ] || ci_die "stock KSystemStats GPU plugin still enabled: /$stock_plugin_rel"
   [ -f "$root/$disabled_stock_plugin_rel" ] || ci_die "disabled stock KSystemStats GPU plugin missing: /$disabled_stock_plugin_rel"

@@ -10,6 +10,8 @@ ci_die() {
 
 . "$SCRIPT_DIR/tb321fu-gpu-deb-package.sh"
 
+python3 -IB "$SCRIPT_DIR/test-gpu-build-package-cleanup.py"
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/root"

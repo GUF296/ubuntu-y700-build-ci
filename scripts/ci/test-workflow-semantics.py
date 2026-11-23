@@ -1034,7 +1034,9 @@ def validate_rootfs_contract(rootfs: pathlib.Path) -> None:
         'APT_PROVENANCE_PHASE=rootfs-provision',
         'APT_PROVENANCE_PHASE=gpu-build',
         '/root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build install -y -- "$package_deb"',
-        '/root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build autoremove -y --purge',
+        'python3 -IB /root/ci-gpu-build-package-cleanup.py before',
+        'python3 -IB /root/ci-gpu-build-package-cleanup.py after-install',
+        'python3 -IB /root/ci-gpu-build-package-cleanup.py cleanup',
         'bash "$SCRIPT_DIR/write-apt-provenance.sh"',
         'ci_e2fsck_repair "$rootfs_img" 0',
     )

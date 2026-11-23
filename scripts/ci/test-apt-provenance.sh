@@ -518,7 +518,8 @@ assert 'APT_PROVENANCE_PHASE=gpu-build' in text
 assert 'chroot "$root" dpkg --install "$package_deb"' not in text
 assert '/root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build install -y -- "$package_deb"' in text
 assert '/root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build mark-auto "${new_build_deps[@]}"' in text
-assert '/root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build autoremove -y --purge' in text
+assert '/root/ci-apt-transaction.sh "$apt_transaction_dir" gpu-build autoremove' not in text
+assert 'python3 -IB /root/ci-gpu-build-package-cleanup.py cleanup' in text
 assert 'capture-bootstrap' in text
 assert 'write-apt-provenance.sh" finalize' in text
 assert 'rootfs.apt-bootstrap.tsv' in text
