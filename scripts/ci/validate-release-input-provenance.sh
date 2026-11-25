@@ -16,9 +16,9 @@ readonly APPROVED_DEVICE_DEB_ARCHIVE_SHA256=16f905295d9c5644f3621e7c864da0e4653d
 readonly APPROVED_SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-remediation-20260829.1/tb321fu-sensor-debs_20260829.1_arm64.tar.gz
 readonly APPROVED_SENSOR_DEB_ARCHIVE_SHA256=3829d252d3e15e359cdcbe47fa99e7aa2975b29a98f132c5e04c5dfd936cc5bf
 readonly APPROVED_SENSOR_PRODUCER_COMMIT=7c93f418a2e828fc156e99ac605a9b70bdcbb477
-readonly APPROVED_HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20261120.1/tb321fu-haptics-debs_20261120.1_arm64.tar.gz
-readonly APPROVED_HAPTICS_DEB_ARCHIVE_SHA256=86f9529ca06b7cee6f803c1eded3d8f2f64f749f5db825d3ab5b563a8f219210
-readonly APPROVED_HAPTICS_PRODUCER_COMMIT=79ac73d521064fd5192d68e5b0cd778ce385cbe1
+readonly APPROVED_HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20261125.1/tb321fu-haptics-debs_20261125.1_arm64.tar.gz
+readonly APPROVED_HAPTICS_DEB_ARCHIVE_SHA256=5f0f71fd5dc0670b9d07fa4cf9fcceec93346a57ff956ff47f85afe14d778c5c
+readonly APPROVED_HAPTICS_PRODUCER_COMMIT=7655a55e1f104c8fd4baeb40f770f7dcd490ba65
 APPROVED_CAMERA_STACK_DEB_VERSION=$(python3 -I -B "$SCRIPT_DIR/camera-package-policy.py" version)
 readonly APPROVED_CAMERA_STACK_DEB_VERSION
 
