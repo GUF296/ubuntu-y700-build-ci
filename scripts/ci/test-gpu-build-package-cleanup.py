@@ -16,7 +16,7 @@ class GPUPlan(unittest.TestCase):
         begin=text.index('default_packages="')
         end=text.index('PACKAGE_LIST=$(ci_normalize_package_list "$PACKAGE_LIST")',begin)
         script='source "$1"; '+text[begin:end]+'ci_normalize_package_list "$PACKAGE_LIST"'
-        roots={'binutils','bzip2','qt6-qmltooling-plugins'}
+        roots={'binutils','bzip2','qt6-qmltooling-plugins','perl-base'}
         for desktop,arch in [('kubuntu-desktop','arm64'),('kubuntu-desktop','amd64'),('plasma-desktop','arm64'),('','arm64')]:
             env=dict(os.environ,ARCH=arch,DESKTOP_ENV=desktop,PACKAGE_LIST='sudo',INSTALL_GNOME_SNAPSHOT='0',
                      INSTALL_FIREFOX='0',INSTALL_FCITX5_CHINESE='0')

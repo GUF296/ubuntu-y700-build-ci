@@ -197,6 +197,10 @@ fi
 # later transient GPU compiler transaction.
 if [ "$ARCH" = arm64 ] && [ "${DESKTOP_ENV:-}" = kubuntu-desktop ]; then
   PACKAGE_LIST="$PACKAGE_LIST binutils bzip2 qt6-qmltooling-plugins"
+  # minbase can ship the release-pocket perl-base. dpkg-dev pulls perl with
+  # an exact perl-base dependency; select the signed distro candidate in the
+  # desktop transaction, not as a side effect of installing build tools.
+  PACKAGE_LIST="$PACKAGE_LIST perl-base"
 fi
 if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
   PACKAGE_LIST="$PACKAGE_LIST gnome-snapshot"
