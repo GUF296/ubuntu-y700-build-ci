@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import resource
@@ -158,7 +159,7 @@ def expected_control_members() -> dict[str, tuple[str, int]]:
     }
 
 
-def expected_data_members(kernel_release: str) -> dict[str, tuple[str, int]]:
+def expected_data_members(kernel_release: str, legacy: bool = False) -> dict[str, tuple[str, int]]:
     directories = {
         "",
         "etc",
@@ -190,6 +191,8 @@ def expected_data_members(kernel_release: str) -> dict[str, tuple[str, int]]:
         "usr/lib/udev/rules.d/90-tb321fu-haptics.rules": 0o644,
         "usr/libexec/tb321fu-haptics/bind-aw86937": 0o755,
     }
+    if not legacy:
+        files["usr/lib/udev/rules.d/72-tb321fu-haptics-uaccess.rules"] = 0o644
     result = {name: ("dir", 0o755) for name in directories}
     result.update({name: ("file", mode) for name, mode in files.items()})
     return result
@@ -336,6 +339,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kernel-release", required=True)
     parser.add_argument("--source-date-epoch", required=True, type=int)
     parser.add_argument("--extract-only", action="store_true")
+    parser.add_argument("--immutable-nov20-layout", action="store_true")
     return parser.parse_args()
 
 
@@ -367,6 +371,11 @@ def main() -> int:
     run_dpkg_tar(args.deb, "--fsys-tarfile", args.data_tar)
     if args.extract_only:
         return 0
+    if args.immutable_nov20_layout:
+        with args.deb.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if digest != "c626a225124d9e2f2443cb57f49e3a711a7abbbf68db1cfa469eb774e29f938a":
+            raise ValueError("legacy haptics layout requires the exact immutable November 20 DEB")
     verify_tar(
         args.control_tar,
         "haptics control",
@@ -376,7 +385,7 @@ def main() -> int:
     verify_tar(
         args.data_tar,
         "haptics data",
-        expected_data_members(args.kernel_release),
+        expected_data_members(args.kernel_release, legacy=args.immutable_nov20_layout),
         args.source_date_epoch,
     )
     verify_helper_elf(args.data_tar)

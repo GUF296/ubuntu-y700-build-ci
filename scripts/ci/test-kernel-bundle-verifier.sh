@@ -241,6 +241,9 @@ setup_haptics_producer() {
   git -C "$producer_root" config user.name 'TB321FU fixture'
   git -C "$producer_root" config user.email 'fixture@example.invalid'
   mkdir -p "$driver_dir" "$firmware_dir" "$helper_dir" "$builder_dir" "$template_dir"
+  printf '%s\n' 'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="aw86937-haptics-left|aw86937-haptics-right", TAG+="uaccess"' \
+    > "$builder_dir/72-tb321fu-haptics-uaccess.rules"
+  chmod 0644 "$builder_dir/72-tb321fu-haptics-uaccess.rules"
   cat > "$driver_dir/aw86937-y700.c" <<'EOF_DRIVER'
 /* Lenovo Y700 AW86937 input force-feedback haptics driver */
 static struct i2c_driver fixture = {
@@ -879,6 +882,8 @@ EOF
     sed -i "s/@KERNEL_RELEASE@/$release/g" "$root/usr/libexec/tb321fu-haptics/bind-aw86937"
     extract_fixture_heredoc EOF_SERVICE "$root/usr/lib/systemd/system/tb321fu-haptics.service"
     extract_fixture_heredoc EOF_UDEV "$root/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
+    install -m 0644 "$producer_root/scripts/ci/72-tb321fu-haptics-uaccess.rules" \
+      "$root/usr/lib/udev/rules.d/72-tb321fu-haptics-uaccess.rules"
     install -d -m 0755 "$root/etc/modprobe.d"
     extract_fixture_heredoc EOF_MODPROBE "$root/etc/modprobe.d/tb321fu-haptics.conf"
     chmod 0644 "$root/etc/modprobe.d/tb321fu-haptics.conf"
@@ -1109,6 +1114,11 @@ tamper_haptics_udev() {
 tamper_haptics_config() {
   printf '[General]\nvibrationEnabled=false\n' > \
     "$1/etc/skel/.config/plasmakeyboardrc"
+}
+
+tamper_haptics_uaccess() {
+  printf 'SUBSYSTEM=="input", MODE="0666"\n' > \
+    "$1/usr/lib/udev/rules.d/72-tb321fu-haptics-uaccess.rules"
 }
 
 add_haptics_extra_file() {
@@ -2515,6 +2525,12 @@ mutate_haptics_deb tamper_haptics_udev
 pack_archives
 require_failure tampered-haptics-udev \
   'haptics DEB payload differs from committed template: EOF_UDEV'
+write_baseline_haptics_deb
+
+mutate_haptics_deb tamper_haptics_uaccess
+pack_archives
+require_failure tampered-haptics-uaccess \
+  'haptics early uaccess rule differs from committed producer blob'
 write_baseline_haptics_deb
 
 mutate_haptics_deb tamper_haptics_config

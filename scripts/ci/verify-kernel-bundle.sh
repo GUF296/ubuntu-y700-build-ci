@@ -1378,6 +1378,24 @@ Description: AW86937 haptics support for Lenovo Legion Y700 TB321FU
 EOF_HAPTICS_CONTROL
 cmp -s "$haptics_expected_control" "$haptics_control/control" ||
   ci_die "haptics DEB control metadata differs from the producer contract"
+haptics_layout_args=()
+if [ "$EXPECTED_HAPTICS_PRODUCER_COMMIT" = 79ac73d521064fd5192d68e5b0cd778ce385cbe1 ]; then
+  # Only replay the original R12 producer: the structural verifier independently
+  # requires its exact immutable DEB, including for local directory inputs.
+  if [ -n "$HAPTICS_DEB_ARCHIVE_SHA256" ] &&
+     [ "${HAPTICS_DEB_ARCHIVE_SHA256,,}" != 86f9529ca06b7cee6f803c1eded3d8f2f64f749f5db825d3ab5b563a8f219210 ]; then
+    ci_die "legacy haptics producer requires its immutable November 20 archive"
+  fi
+  haptics_layout_args=(--immutable-nov20-layout)
+else
+  haptics_uaccess_relative=scripts/ci/72-tb321fu-haptics-uaccess.rules
+  haptics_uaccess_installed="$haptics_data/usr/lib/udev/rules.d/72-tb321fu-haptics-uaccess.rules"
+  extract_haptics_git_blob "$haptics_bundle_repo" "$EXPECTED_HAPTICS_PRODUCER_COMMIT" \
+    "$haptics_uaccess_relative" "$haptics_committed/uaccess.rules" 100644
+  require_regular_mode "$haptics_uaccess_installed" 644 'haptics early uaccess rule'
+  cmp -s "$haptics_committed/uaccess.rules" "$haptics_uaccess_installed" ||
+    ci_die "haptics early uaccess rule differs from committed producer blob"
+fi
 for haptics_template in postinst prerm postrm; do
   render_haptics_maintainer_template \
     "$haptics_committed/$haptics_template.in" \
@@ -1442,7 +1460,7 @@ python3 "$SCRIPT_DIR/verify-haptics-deb-structure.py" \
   --control-tar "$haptics_control_tar" \
   --data-tar "$haptics_data_tar" \
   --kernel-release "${kernel_meta[kernel-release]}" \
-  --source-date-epoch "${kernel_meta[source-date-epoch]}" ||
+  --source-date-epoch "${kernel_meta[source-date-epoch]}" "${haptics_layout_args[@]}" ||
   ci_die "haptics DEB structure verification failed"
 stage="$work/stage"
 mkdir -p "$stage"
